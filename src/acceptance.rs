@@ -550,6 +550,26 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
     }
     let projects = backend::dispatch(shared.clone(), json!({"op":"db_projects"}), false).await?;
     assert_eq!(projects["projects"].as_array().unwrap().len(), 2);
+    let db_path = remote_home.join(".local/state/ccbridge/databases.json");
+    let before = std::fs::read(&db_path)?;
+    backend::dispatch(
+        shared.clone(),
+        json!({"op":"project_save","workspace":project_b,"name":"项目B"}),
+        true,
+    )
+    .await?;
+    let independent =
+        backend::dispatch(shared.clone(), json!({"op":"project_list"}), false).await?;
+    assert_eq!(independent["projects"].as_array().unwrap().len(), 2);
+    assert!(
+        independent["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["databases"].is_array())
+    );
+    assert_eq!(std::fs::read(&db_path)?, before);
+
     {
         shared
             .connection

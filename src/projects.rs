@@ -3,22 +3,20 @@ use crate::common::*;
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-fn registry() -> Result<BTreeMap<String, String>> {
+// Read-only compatibility adapter: retain the existing redacted `databases` field.
+// No database probe, credential mutation or connection is performed here.
+fn registry(legacy: &Value) -> Result<BTreeMap<String, String>> {
+    let mut names: BTreeMap<String, String> = legacy["projects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|p| Some((p["path"].as_str()?.into(), p["name"].as_str()?.into())))
+        .collect();
     let file = runner_dir()?.join("projects.json");
     if file.exists() {
-        return read_json(&file);
+        names.extend(read_json::<BTreeMap<String, String>>(&file)?);
     }
-    let old = runner_dir()?.join("databases.json");
-    if old.exists() {
-        let v: Value = read_json(&old)?;
-        return Ok(v["projects"]
-            .as_object()
-            .into_iter()
-            .flatten()
-            .filter_map(|(k, v)| v.as_str().map(|name| (k.clone(), name.into())))
-            .collect());
-    }
-    Ok(BTreeMap::new())
+    Ok(names)
 }
 fn canonical(s: &str) -> Result<String> {
     let p = std::fs::canonicalize(s)?;
@@ -28,10 +26,11 @@ fn canonical(s: &str) -> Result<String> {
     Ok(p.to_string_lossy().into())
 }
 pub fn rpc(v: &Value) -> Result<Value> {
-    let mut projects = registry()?;
+    let legacy = crate::databases::rpc(&json!({"op":"db_projects"}))?;
+    let mut projects = registry(&legacy)?;
     match field(v, "op")? {
         "project_list" => Ok(
-            json!({"projects":projects.iter().map(|(path,name)|json!({"path":path,"name":name})).collect::<Vec<_>>()}),
+            json!({"projects":projects.iter().map(|(path,name)|json!({"path":path,"name":name,"databases":legacy["projects"].as_array().and_then(|ps|ps.iter().find(|p|p["path"]==*path)).map(|p|p["databases"].clone()).unwrap_or_else(||json!([]))})).collect::<Vec<_>>()}),
         ),
         "project_save" => {
             let path = canonical(field(v, "workspace")?)?;
