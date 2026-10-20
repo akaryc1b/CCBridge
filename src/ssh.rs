@@ -155,7 +155,7 @@ impl Connection {
         }
     }
     pub fn info(&self) -> Value {
-        json!({"connected":!self.handle.is_closed(),"profile":self.profile,"probe":self.probe,"environment":self.environment,"resolved_paths":{"runner":self.runner_path,"claude":self.claude_path,"state":format!("{}/.local/state/ccbridge",self.environment.home)}})
+        json!({"app_version":env!("CARGO_PKG_VERSION"),"bridge_protocol":1,"bridge_capabilities":["client_activity_lease","update_drain","models_v1"],"connected":!self.handle.is_closed(),"profile":self.profile,"probe":self.probe,"environment":self.environment,"resolved_paths":{"runner":self.runner_path,"claude":self.claude_path,"state":format!("{}/.local/state/ccbridge",self.environment.home)}})
     }
     pub fn permits_workspace(&self, path: &str) -> bool {
         (!self.profile.workspace.is_empty() && path == self.profile.workspace)
@@ -432,6 +432,21 @@ GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false git -c credential.interactive=f
             };
             if parse(remote) > parse(env!("CARGO_PKG_VERSION")) {
                 bail!("远端 Runner 版本较新，不能自动降级；请更新 App")
+            }
+        }
+        if self.probe["runner_version"].is_string() {
+            let tasks = self
+                .rpc(json!({"op":"list"}))
+                .await
+                .context("无法确认远端任务状态，暂不更新 Runner")?;
+            let tasks = tasks["tasks"]
+                .as_array()
+                .context("远端任务状态无效，暂不更新 Runner")?;
+            if tasks.iter().any(|t| {
+                ["queued", "running", "waiting_approval"]
+                    .contains(&t["state"].as_str().unwrap_or(""))
+            }) {
+                bail!("远端仍有任务运行或等待审批，请完成后再更新 Runner")
             }
         }
         let (out, err, code) = self.execute("uname -sm".into(), &[]).await?;

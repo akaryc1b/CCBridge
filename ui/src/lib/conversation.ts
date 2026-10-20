@@ -39,3 +39,31 @@ export function displayModel(task: RecordValue) {
     actual: task.model_resolved || "实际模型尚未上报",
   };
 }
+
+export function eventText(event: RecordValue): string {
+  if (event.type !== "assistant" || event.parent_tool_use_id) return "";
+  return (event.message?.content || [])
+    .filter((c: RecordValue) => c.type === "text")
+    .map((c: RecordValue) => c.text || "")
+    .join("\n\n");
+}
+export function eventLabel(event: RecordValue): string {
+  const tools = (event.message?.content || []).filter(
+    (c: RecordValue) => c.type === "tool_use",
+  );
+  const names: Record<string, string> = {
+    Read: "读取文件",
+    Bash: "运行命令",
+    Edit: "编辑文件",
+    Write: "写入文件",
+    Grep: "搜索内容",
+    Glob: "查找文件",
+  };
+  if (tools.length)
+    return tools.map((t: RecordValue) => names[t.name] || t.name).join("、");
+  if (event.type === "user") return "工具返回";
+  if (event.type === "assistant") return "Claude 消息";
+  if (event.type === "system")
+    return event.subtype === "init" ? "会话初始化" : "运行状态";
+  return event.type === "result" ? "本轮结果" : "运行事件";
+}

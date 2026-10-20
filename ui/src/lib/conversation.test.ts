@@ -4,6 +4,8 @@ import {
   conversationTurns,
   latestSessions,
   displayModel,
+  eventText,
+  eventLabel,
 } from "./conversation";
 describe("conversation state", () => {
   it("keeps legacy list IDs and titles usable", () => {
@@ -48,5 +50,34 @@ describe("conversation state", () => {
         { task_id: "c", created_at: 3 },
       ]).map((t) => t.task_id),
     ).toEqual(["c", "b"]);
+  });
+});
+
+describe("readable events", () => {
+  it("shows main assistant text, not tool inputs or child text", () => {
+    expect(
+      eventText({
+        type: "assistant",
+        message: {
+          content: [
+            { type: "text", text: "正在检查" },
+            { type: "tool_use", name: "Read" },
+          ],
+        },
+      }),
+    ).toBe("正在检查");
+    expect(
+      eventText({
+        type: "assistant",
+        parent_tool_use_id: "child",
+        message: { content: [{ type: "text", text: "child" }] },
+      }),
+    ).toBe("");
+    expect(
+      eventLabel({
+        type: "assistant",
+        message: { content: [{ type: "tool_use", name: "Read" }] },
+      }),
+    ).toBe("读取文件");
   });
 });

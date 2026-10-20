@@ -3,6 +3,8 @@ import {
   conversationTurns,
   latestSessions,
   displayModel,
+  eventText,
+  eventLabel,
 } from "@/lib/conversation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -263,12 +265,21 @@ export default function App() {
       seen.add(currentId);
       const r = await request(
         "task_status",
-        { task_id: currentId, cursor: 0 },
+        {
+          task_id: currentId,
+          cursor: detailsRef.current[currentId]?.next_cursor || 0,
+        },
         true,
       );
       if (!r) break;
       const key = currentId;
-      setDetails((d) => ({ ...d, [key]: r }));
+      setDetails((d) => ({
+        ...d,
+        [key]: {
+          ...r,
+          events: [...(d[key]?.events || []), ...(r.events || [])],
+        },
+      }));
       currentId =
         r.reply_to && !detailsRef.current[r.reply_to] ? r.reply_to : undefined;
     }
@@ -1087,6 +1098,17 @@ export default function App() {
                                     : turn.result?.result || "本轮没有文本结果"
                                 }
                               />
+                            ) : (turn.events || []).some((e: Data) =>
+                                eventText(e),
+                              ) ? (
+                              <>
+                                {(turn.events || []).map(
+                                  (e: Data, i: number) =>
+                                    eventText(e) && (
+                                      <Markdown key={i} text={eventText(e)} />
+                                    ),
+                                )}
+                              </>
                             ) : (
                               <p className="muted">
                                 {active(task)
@@ -1104,9 +1126,7 @@ export default function App() {
                                 </summary>
                                 {turn.events.map((e: Data, i: number) => (
                                   <details key={i}>
-                                    <summary>
-                                      {e.type || e.event || "运行事件"}
-                                    </summary>
+                                    <summary>{eventLabel(e)}</summary>
                                     <pre>{JSON.stringify(e, null, 2)}</pre>
                                   </details>
                                 ))}
