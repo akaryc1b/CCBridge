@@ -1158,7 +1158,17 @@ export default function App() {
                               </p>
                             )}
                             {turn.error && (
-                              <div className="inline-error">{turn.error}</div>
+                              <div className="inline-error">
+                                <p>
+                                  {/^[\u4e00-\u9fff]/.test(turn.error)
+                                    ? turn.error.split("\n")[0]
+                                    : "本轮执行失败，请展开诊断查看原因。"}
+                                </p>
+                                <details>
+                                  <summary>诊断详情</summary>
+                                  <pre>{turn.error}</pre>
+                                </details>
+                              </div>
                             )}
                             {(turn.events || []).length > 0 && (
                               <details>
