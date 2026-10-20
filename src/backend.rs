@@ -572,8 +572,12 @@ pub fn start_backend() -> (
                     .write(true)
                     .open(dir.join("app.lock"))?;
                 use std::os::fd::AsRawFd;
-                if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-                    bail!("CCBridge 已在运行，请使用原窗口")
+                // LaunchServices may start the updater's new process just before the old
+                // process exits. Wait for its OS-owned lock; never release it early.
+                for attempt in 0..50 {
+                    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {break;}
+                    if attempt==49 {bail!("CCBridge 已在运行，请使用原窗口")}
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
                 let path = dir.join("bridge.sock");
                 if path.exists() {
