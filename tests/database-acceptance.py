@@ -50,8 +50,14 @@ try:
  for label,db in [('business','postgres'),('workflow','ccbridge_second')]:
   d={'id':str(uuid.uuid4()),'name':label,'kind':ENGINE,'host':'127.0.0.1','port':port,'user':'postgres' if ENGINE=='postgres' else 'root','password':password,'database':db,'enabled':True,'node':str(pathlib.Path(sh('which','node')).resolve()),'package_root':os.environ.get('UDB_PACKAGE_ROOT',str(pathlib.Path(sh('which','universal-db-mcp')).resolve().parent.parent))}
   r=rpc({'op':'db_save','connection':d});assert 'password'not in r and password not in json.dumps(r);ids.append(d['id'])
+  assert rpc({'op':'db_protocol_test','id':d['id']})['mcp_connected']
   assert rpc({'op':'db_test','id':d['id']})['connected']
  assert rpc({'op':'db_list','workspace':str(project)})['connections'][0]['password_saved']
+ # Password blank edits preserve credentials; protocol handshake must not contact the DB.
+ saved={**d,'password':'','host':'unreachable.invalid'}
+ rpc({'op':'db_save','connection':saved})
+ assert rpc({'op':'db_protocol_test','id':d['id']})['database_connected'] is False
+ rpc({'op':'db_save','connection':{**d,'password':''}})
  assert (ROOT/'state/databases.json').stat().st_mode&0o777==0o600
  bindings=[{'alias':a,'connection_id':i} for a,i in zip(['business_dev','workflow_dev'],ids)]
  rpc({'op':'db_bind','workspace':str(project),'bindings':bindings})
@@ -79,7 +85,9 @@ try:
   r=call(p,'tools/call',{'name':'execute_query','arguments':{'query':'CREATE TABLE should_not_exist (id int)'}});assert r['result']['isError'],r
   p.stdin.close();p.wait(timeout=8)
  # Project mapping changes affect new conversations, not an existing continuation snapshot.
+ assert len(rpc({'op':'status','task_id':t['task_id']})['database_snapshot']['mappings'])==2
  rpc({'op':'db_bind','workspace':str(project),'bindings':[]})
+ assert rpc({'op':'status','task_id':t['task_id']})['database_snapshot']['changed']
  r=start(t['task_id']);assert r['session_id']==t['session_id'];assert (ROOT/'state'/r['task_id']/'databases.json').read_text()==(ROOT/'state'/t['task_id']/'databases.json').read_text()
  isolated={**ENV,'CCBRIDGE_RUNNER_HOME':str(ROOT/'other-user-state')};assert not rpc({'op':'db_list'},isolated)['connections']
  assert rpc({'op':'db_list','workspace':str(project_b)})['bindings']==bindings_b

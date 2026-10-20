@@ -60,9 +60,29 @@ fn load() -> Result<Store> {
         Ok(Store::default())
     }
 }
+fn private_json(p: &Path, value: &impl Serialize) -> Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let tmp = p.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let result = (|| -> Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&tmp)?;
+        f.write_all(&serde_json::to_vec_pretty(value)?)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, p)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(tmp);
+    }
+    result
+}
 fn save(s: &Store) -> Result<()> {
     private_dir(&runner_dir()?)?;
-    write_json(&path()?, s)?;
+    private_json(&path()?, s)?;
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path()?, std::fs::Permissions::from_mode(0o600))?;
     Ok(())
@@ -137,7 +157,7 @@ pub fn rpc(v: &Value) -> Result<Value> {
         "db_list" => {
             let w = v["workspace"].as_str().unwrap_or("");
             Ok(
-                json!({"projects":project_list(&s),"connections":s.connections.iter().map(redacted).collect::<Vec<_>>(),"bindings":s.bindings.get(w).cloned().unwrap_or_default(),"workspace":w,"storage":"当前 SSH 账号 HOME，私有权限 600；不修改 /etc 共享配置"}),
+                json!({"projects":project_list(&s),"connections":s.connections.iter().map(|d| { let mut r=redacted(d); r["used_by"]=json!(s.bindings.iter().filter(|(_,bs)|bs.iter().any(|b|b.connection_id==d.id)).map(|(w,_)|w).collect::<Vec<_>>()); r }).collect::<Vec<_>>(),"bindings":s.bindings.get(w).cloned().unwrap_or_default(),"workspace":w,"storage":"当前 SSH 账号 HOME，私有权限 600；不修改 /etc 共享配置"}),
             )
         }
         "db_save" => {
@@ -186,13 +206,13 @@ pub fn rpc(v: &Value) -> Result<Value> {
             Ok(json!({"removed":true}))
         }
         "db_detect" => detect(),
-        "db_test" => {
+        "db_test" | "db_protocol_test" => {
             let d = s
                 .connections
                 .iter()
                 .find(|d| Some(d.id.as_str()) == v["id"].as_str())
                 .context("请先保存连接")?;
-            test_connection(d)
+            test_connection(d, v["op"] == "db_protocol_test")
         }
         _ => bail!("未知数据库操作"),
     }
@@ -225,7 +245,7 @@ pub fn snapshot(workspace: &str, parent: Option<&str>) -> Result<Vec<(String, Da
 }
 pub fn save_snapshot(dir: &Path, connections: &[(String, Database)]) -> Result<()> {
     if !connections.is_empty() {
-        write_json(&dir.join("databases.json"), &connections)?;
+        private_json(&dir.join("databases.json"), &connections)?;
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(
             dir.join("databases.json"),
@@ -254,12 +274,140 @@ fn find_path(name: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
         .and_then(|p| p.canonicalize().ok())
 }
+fn package_candidate(root: &Path, source: &str) -> Option<Value> {
+    let root = root.canonicalize().ok()?;
+    let meta: Value = read_json(&root.join("package.json")).ok()?;
+    if meta["name"] != "universal-db-mcp" {
+        return None;
+    }
+    let compatible = meta["version"] == "2.14.0"
+        && root.join("dist/mcp/mcp-server.js").is_file()
+        && root.join("dist/utils/adapter-factory.js").is_file();
+    Some(
+        json!({"package_root":root,"version":meta["version"],"compatible":compatible,"source":source}),
+    )
+}
+fn wrapper_candidates(file: &Path, roots: &mut Vec<(PathBuf, String)>) {
+    // Inspect literals only; never execute a registered wrapper or return its configuration.
+    if std::fs::metadata(file)
+        .map(|m| m.len() > 128 * 1024)
+        .unwrap_or(true)
+    {
+        return;
+    }
+    if let Ok(text) = std::fs::read_to_string(file) {
+        for token in text.split(['\'', '"', '`', '\n', ' ']) {
+            if let Some((root, _)) = token.split_once("/node_modules/universal-db-mcp/") {
+                if root.starts_with('/') {
+                    roots.push((
+                        PathBuf::from(format!("{root}/node_modules/universal-db-mcp")),
+                        "Claude MCP 包装器".into(),
+                    ));
+                }
+            }
+        }
+    }
+}
 fn detect() -> Result<Value> {
     let node = find_path("node");
-    let root =
-        find_path("universal-db-mcp").and_then(|p| p.parent()?.parent().map(Path::to_path_buf));
+    let h = home()?;
+    let mut roots: Vec<(PathBuf, String)> = vec![];
+    let mut registered = vec![];
+    let mut configs = vec![h.join(".claude.json"), h.join(".claude/.claude.json")];
+    if let Some(p) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+        configs.insert(0, PathBuf::from(p).join(".claude.json"));
+    }
+    for cfg in configs {
+        let Ok(value) = read_json::<Value>(&cfg) else {
+            continue;
+        };
+        if let Some(servers) = value["mcpServers"].as_object() {
+            for (name, server) in servers {
+                let Some(cmd) = server["command"].as_str() else {
+                    continue;
+                };
+                if !name.to_lowercase().contains("db") && !cmd.contains("database") {
+                    continue;
+                }
+                let path = if Path::new(cmd).is_absolute() {
+                    Some(PathBuf::from(cmd))
+                } else {
+                    find_path(cmd)
+                };
+                // Args/env are deliberately neither returned nor copied into tasks.
+                registered.push(json!({"name":name,"command":path,"source":cfg,"inherited":false}));
+                if let Some(p) = path {
+                    wrapper_candidates(&p, &mut roots);
+                }
+            }
+        }
+    }
+    if let Some(p) = find_path("claude-database-mcp") {
+        wrapper_candidates(&p, &mut roots);
+    }
+    if let Some(p) =
+        find_path("universal-db-mcp").and_then(|p| p.parent()?.parent().map(Path::to_path_buf))
+    {
+        roots.push((p, "PATH".into()));
+    }
+    for p in [
+        "/opt/claude-mcp/universal-db-mcp/node_modules/universal-db-mcp",
+        "/usr/local/lib/node_modules/universal-db-mcp",
+        "/usr/lib/node_modules/universal-db-mcp",
+        "/opt/homebrew/lib/node_modules/universal-db-mcp",
+    ] {
+        roots.push((PathBuf::from(p), "标准安装位置".into()));
+    }
+    for p in [
+        h.join(".local/lib/node_modules/universal-db-mcp"),
+        h.join(".npm-global/lib/node_modules/universal-db-mcp"),
+    ] {
+        roots.push((p, "账号安装位置".into()));
+    }
+    if let Ok(versions) = std::fs::read_dir(h.join(".nvm/versions/node")) {
+        for p in versions.flatten().take(32) {
+            roots.push((
+                p.path().join("lib/node_modules/universal-db-mcp"),
+                "nvm".into(),
+            ));
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let candidates: Vec<_> = roots
+        .iter()
+        .filter_map(|(p, source)| package_candidate(p, source))
+        .filter(|c| seen.insert(c["package_root"].to_string()))
+        .collect();
+    let selected = candidates.iter().find(|c| c["compatible"] == true);
     Ok(
-        json!({"node":node,"package_root":root,"notice":"仅探测当前 SSH 账号 PATH；未找到时填写服务器实际安装路径，不自动安装或连接数据库"}),
+        json!({"node":node,"package_root":selected.map(|c|&c["package_root"]),"candidates":candidates,"registered":registered,"notice":"已检查 Claude 注册、包装器、标准目录和当前账号安装位置；只查找软件，不读取共享数据库凭据，不连接数据库。已有全局 MCP 不会自动挂入项目。"}),
+    )
+}
+
+pub fn task_summary(dir: &Path, workspace: &str) -> Result<Value> {
+    let file = dir.join("databases.json");
+    let snapshot: Vec<(String, Database)> = if file.exists() {
+        read_json(&file)?
+    } else {
+        vec![]
+    };
+    let store = load()?;
+    let current: Vec<(String, Database)> = store
+        .bindings
+        .get(workspace)
+        .into_iter()
+        .flatten()
+        .filter_map(|b| {
+            store
+                .connections
+                .iter()
+                .find(|d| d.id == b.connection_id && d.enabled)
+                .map(|d| (b.alias.clone(), d.clone()))
+        })
+        .collect();
+    let changed = serde_json::to_value(&snapshot)? != serde_json::to_value(&current)?;
+    Ok(
+        json!({"mappings":snapshot.iter().map(|(alias,d)|json!({"alias":alias,"name":d.name,"connection_id":d.id,"database":d.database,"permission_mode":"safe"})).collect::<Vec<_>>(),"changed":changed}),
     )
 }
 pub fn mcp_servers(dir: &Path, exe: &Path) -> Result<serde_json::Map<String, Value>> {
@@ -300,6 +448,52 @@ pub fn serve(task: &str, id: &str) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn detects_wrapper_package_without_executing_or_returning_secrets() {
+        let root = std::env::temp_dir().join(format!("ccbridge-runtime-{}", uuid::Uuid::new_v4()));
+        let package = root.join("node_modules/universal-db-mcp");
+        std::fs::create_dir_all(package.join("dist/mcp")).unwrap();
+        std::fs::create_dir_all(package.join("dist/utils")).unwrap();
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"universal-db-mcp","version":"2.14.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(package.join("dist/mcp/mcp-server.js"), "").unwrap();
+        std::fs::write(package.join("dist/utils/adapter-factory.js"), "").unwrap();
+        let wrapper = root.join("wrapper");
+        std::fs::write(
+            &wrapper,
+            format!(
+                "const password='must-not-return'; const entry='{}';",
+                package.join("dist/index.js").display()
+            ),
+        )
+        .unwrap();
+        let mut roots = vec![];
+        wrapper_candidates(&wrapper, &mut roots);
+        assert_eq!(roots.len(), 1);
+        let c = package_candidate(&roots[0].0, &roots[0].1).unwrap();
+        assert_eq!(c["compatible"], true);
+        assert!(!c.to_string().contains("must-not-return"));
+        std::fs::write(
+            package.join("package.json"),
+            r#"{"name":"universal-db-mcp","version":"3.0.0"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            package_candidate(&package, "test").unwrap()["compatible"],
+            false
+        );
+        let secret = root.join("secret.json");
+        private_json(&secret, &json!({"password":"fixture-secret"})).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(secret).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn aliases_and_redaction() {
         assert!(valid_alias("business_dev"));
         assert!(!valid_alias("../../x"));
@@ -315,7 +509,7 @@ mod tests {
     }
 }
 
-fn test_connection(d: &Database) -> Result<Value> {
+fn test_connection(d: &Database, protocol_only: bool) -> Result<Value> {
     verify_package(d)?;
     let dir = runner_dir()?
         .join("database-tests")
@@ -331,7 +525,11 @@ fn test_connection(d: &Database) -> Result<Value> {
             .arg(script)
             .arg(dir.join("databases.json"))
             .arg(&d.id)
-            .arg("--test")
+            .arg(if protocol_only {
+                "--protocol-test"
+            } else {
+                "--test"
+            })
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -342,13 +540,17 @@ fn test_connection(d: &Database) -> Result<Value> {
         loop {
             if let Some(status) = child.try_wait()? {
                 if status.success() {
-                    return Ok(
-                        json!({"connected":true,"permission_mode":"safe","notice":"数据库认证与连接成功；未读取业务表，不代表所有表均有访问权限"}),
-                    );
+                    return Ok(if protocol_only {
+                        json!({"mcp_connected":true,"database_connected":false,"notice":"MCP 握手与只读工具枚举成功；未连接数据库"})
+                    } else {
+                        json!({"connected":true,"permission_mode":"safe","notice":"数据库认证与连接成功；未读取业务表，不代表所有表均有访问权限"})
+                    });
                 } else {
-                    bail!(
-                        "数据库连接失败，请检查地址、认证、网络、MCP安装目录及数据库权限；凭据不返回客户端"
-                    )
+                    bail!(if protocol_only {
+                        "MCP 握手失败，请检查 Node、安装目录与适配版本；未连接数据库"
+                    } else {
+                        "数据库连接失败，请检查地址、认证、网络和数据库权限；凭据不返回客户端"
+                    })
                 }
             };
             if std::time::Instant::now() > end {

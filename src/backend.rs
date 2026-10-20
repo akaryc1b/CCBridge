@@ -124,7 +124,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
     } else {
         None
     };
-    let _activity = if writing {
+    let _activity = if writing || ["db_test", "db_protocol_test"].contains(&op) {
         state.gate.lock().unwrap().begin()?;
         Some(Activity(state.clone()))
     } else {
@@ -348,6 +348,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         "db_bind",
         "db_remove",
         "db_detect",
+        "db_protocol_test",
         "db_test",
         "db_project_save",
         "project_save",

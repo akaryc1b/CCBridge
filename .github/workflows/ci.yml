@@ -46,6 +46,28 @@ jobs:
           path: dist/ccbridge-linux-x86_64
           retention-days: 14
 
+  databases:
+    needs: linux
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    strategy:
+      matrix:
+        engine: [mysql, postgres]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: linux-runner
+          path: dist
+      - name: Install tested database MCP into temporary test directory
+        run: node -e 'if(Number(process.versions.node.split(".")[0])<20)process.exit(1)' && npm install --prefix "$RUNNER_TEMP/udb" --ignore-scripts universal-db-mcp@2.14.0
+      - name: Multi-project database acceptance
+        env:
+          ENGINE: ${{ matrix.engine }}
+          CCBRIDGE_TEST_BIN: ${{ github.workspace }}/dist/ccbridge-linux-x86_64
+          UDB_PACKAGE_ROOT: ${{ runner.temp }}/udb/node_modules/universal-db-mcp
+        run: chmod 700 "$CCBRIDGE_TEST_BIN" && python3 tests/database-acceptance.py "$ENGINE"
+
   macos:
     needs: linux
     runs-on: macos-15
@@ -96,7 +118,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, macos]
+    needs: [linux, macos, databases]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     permissions:

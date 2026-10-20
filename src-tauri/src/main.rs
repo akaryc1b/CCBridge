@@ -41,6 +41,9 @@ commands! {
  clone_repository=>"clone_into_directory", select_workspace=>"select_remote_workspace",
  project_list=>"project_list", project_save=>"project_save", task_list=>"list", task_status=>"status",
  task_start=>"start", task_reply=>"reply", task_cancel=>"cancel", task_approve=>"approve",
+ database_list=>"db_list", database_save=>"db_save", database_bind=>"db_bind",
+ database_remove=>"db_remove", database_detect=>"db_detect", database_test=>"db_test",
+ database_protocol_test=>"db_protocol_test",
  update_safety=>"safe_update_state"
 }
 #[tauri::command]
@@ -186,6 +189,13 @@ fn main() {
             task_reply,
             task_cancel,
             task_approve,
+            database_list,
+            database_save,
+            database_bind,
+            database_remove,
+            database_detect,
+            database_test,
+            database_protocol_test,
             update_safety,
             configure_codex,
             check_update,

@@ -57,7 +57,9 @@ pub fn dispatch(v: Value) -> Result<Value> {
     match field(&v, "op")? {
         "project_list" | "project_save" | "project_resolve" => crate::projects::rpc(&v),
         "db_list" | "db_save" | "db_bind" | "db_remove" | "db_detect" | "db_test"
-        | "db_project_save" | "db_projects" | "db_resolve" => crate::databases::rpc(&v),
+        | "db_protocol_test" | "db_project_save" | "db_projects" | "db_resolve" => {
+            crate::databases::rpc(&v)
+        }
         "repository_inspect" => {
             let path = std::fs::canonicalize(field(&v, "path")?)?;
             if !path.starts_with(home()?.canonicalize()?) {
@@ -574,6 +576,6 @@ pub fn snapshot(id: &str, cursor: u64) -> Result<Value> {
         &t.state
     };
     Ok(
-        json!({"model":t.model,"model_requested":t.model_requested,"model_source":t.model_source,"model_resolved":t.model_resolved,"model_status":t.model_status,"observed_session_id":t.observed_session_id,"task_id":t.id,"session_id":t.session_id,"prompt":t.prompt,"created_at":t.created_at,"resume":t.resume,"reply_to":t.reply_to,"has_more":events.len()>=80 || next.saturating_sub(cursor)>=512*1024,"state":display_state,"mode":t.mode,"workspace":t.workspace,"result":t.result,"error":t.error,"events":events,"next_cursor":next,"approvals":approvals,"updated_at":t.updated_at}),
+        json!({"database_snapshot":crate::databases::task_summary(&dir, &t.workspace)?,"model":t.model,"model_requested":t.model_requested,"model_source":t.model_source,"model_resolved":t.model_resolved,"model_status":t.model_status,"observed_session_id":t.observed_session_id,"task_id":t.id,"session_id":t.session_id,"prompt":t.prompt,"created_at":t.created_at,"resume":t.resume,"reply_to":t.reply_to,"has_more":events.len()>=80 || next.saturating_sub(cursor)>=512*1024,"state":display_state,"mode":t.mode,"workspace":t.workspace,"result":t.result,"error":t.error,"events":events,"next_cursor":next,"approvals":approvals,"updated_at":t.updated_at}),
     )
 }

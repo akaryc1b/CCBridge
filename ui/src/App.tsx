@@ -1,3 +1,4 @@
+import { Databases } from "@/components/Databases";
 import {
   normalizeTask,
   conversationTurns,
@@ -24,6 +25,7 @@ import {
   FolderGit2,
   MessagesSquare,
   Cable,
+  Database,
   Download,
   Settings,
   ArrowUp,
@@ -78,6 +80,7 @@ const pages = [
   ["servers", "服务器", Server],
   ["projects", "项目与文件", FolderGit2],
   ["chat", "任务与对话", MessagesSquare],
+  ["databases", "数据库", Database],
   ["codex", "Codex 接入", Cable],
   ["updates", "应用更新", Download],
   ["settings", "设置", Settings],
@@ -546,6 +549,7 @@ export default function App() {
                     servers: "保存你的 SSH 账号，在当前用户目录内独立运行。",
                     projects: "选择远端项目，浏览文件，或克隆已有仓库。",
                     chat: "以会话阅读结果，按轮次控制模型与执行权限。",
+                    databases: "为每个项目配置多个只读数据库用途。",
                     codex: "一次配置，在其他 Codex 会话中直接派发和续聊。",
                     updates: "从 GitHub 获取签名更新，无需重新下载安装包。",
                     settings: "本地偏好与兼容信息。",
@@ -1098,6 +1102,22 @@ export default function App() {
                     </Badge>
                   )}
                 </div>
+                {task?.database_snapshot?.mappings?.length > 0 && (
+                  <div className="px-5 py-2 text-sm text-muted-foreground">
+                    本会话数据库：
+                    {task.database_snapshot.mappings
+                      .map(
+                        (d: Data) => `${d.alias} → ${d.name} / ${d.database}`,
+                      )
+                      .join(" · ")}
+                    （只读）
+                  </div>
+                )}
+                {task?.database_snapshot?.changed && (
+                  <div className="notice">
+                    项目连接已变更；续聊仍使用原快照。要使用新映射或新凭据，请新建对话。
+                  </div>
+                )}
                 <div
                   className="messages"
                   ref={messagesRef}
@@ -1339,6 +1359,15 @@ export default function App() {
                 </div>
               </section>
             </div>
+          )}
+          {page === "databases" && (
+            <Databases
+              connected={connected}
+              projects={projects}
+              currentProject={currentProject}
+              request={request}
+              refreshProjects={refreshProjects}
+            />
           )}
           {page === "codex" && (
             <>
