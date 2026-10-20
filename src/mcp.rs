@@ -20,6 +20,10 @@ struct Start {
     prompt: String,
     /// approval (default) or automatic. Automatic requires the human to enable it in the App.
     mode: Option<String>,
+    /// Optional Claude model alias or full model ID.
+    model: Option<String>,
+    /// inherit (start: server default; reply: previous turn), remote_default, explicit.
+    model_policy: Option<String>,
     /// Optional UUID for idempotent creation after an uncertain connection response.
     task_id: Option<String>,
     /// Absolute LOCAL Git 仓库 path from the user task. Matched to an existing remote repository by Git remote identity. Omit to use the remote directory explicitly selected in the App; if none, retain legacy local selection behavior.
@@ -40,6 +44,8 @@ struct ResultWait {
     task_id: String,
     /// Wait for completion up to 900 seconds; returns early for human approval. Set MCP client tool timeout above this value.
     wait_seconds: Option<u64>,
+    /// false omits large raw event arrays. Defaults to true for compatibility.
+    include_events: Option<bool>,
 }
 #[derive(Deserialize, JsonSchema)]
 struct Status {
@@ -51,6 +57,9 @@ struct Status {
 }
 #[derive(Deserialize, JsonSchema)]
 struct Reply {
+    /// Optional model override for this turn; omitted means previous turn selection.
+    model: Option<String>,
+    model_policy: Option<String>,
     task_id: String,
     prompt: String,
     /// Optional UUID for this new turn, for idempotent retries.
@@ -81,7 +90,7 @@ impl Bridge {
         description = "List registered remote projects and their named database mappings without credentials. Use the exact project path as cc_start.remote_project to avoid cross-project routing when multiple Codex sessions run."
     )]
     async fn project_list(&self) -> std::result::Result<CallToolResult, rmcp::ErrorData> {
-        output(local_call(json!({"op":"db_projects"})).await)
+        output(local_call(json!({"op":"project_list"})).await)
     }
     #[tool(
         description = "Read the local Git 仓库 identity and find matching existing repositories under the authenticated remote user's HOME. Strips URL credentials. Never matches by folder name or clones/uploads files. Multiple candidates, incomplete scans or no matches require user selection in the App."
@@ -105,7 +114,7 @@ impl Bridge {
         let id = p
             .task_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        output(local_call(json!({"op":"start","prompt":p.prompt,"mode":p.mode.unwrap_or("approval".into()),"task_id":id,"local_repository":p.local_repository,"remote_project":p.remote_project})).await)
+        output(local_call(json!({"op":"start","prompt":p.prompt,"mode":p.mode.unwrap_or("approval".into()),"task_id":id,"local_repository":p.local_repository,"remote_project":p.remote_project,"model":p.model,"model_policy":p.model_policy})).await)
     }
     #[tool(
         description = "Get task state, incremental events, final result, permission requests and next_cursor. Can wait up to 30s. Human approval is only available in the App; do not approve through shell or request CLI."
@@ -146,7 +155,7 @@ impl Bridge {
         &self,
         Parameters(p): Parameters<Reply>,
     ) -> std::result::Result<CallToolResult, rmcp::ErrorData> {
-        output(local_call(json!({"op":"reply","reply_to":p.task_id,"prompt":p.prompt,"task_id":p.new_task_id.unwrap_or_else(||uuid::Uuid::new_v4().to_string())})).await)
+        output(local_call(json!({"op":"reply","reply_to":p.task_id,"prompt":p.prompt,"model":p.model,"model_policy":p.model_policy,"task_id":p.new_task_id.unwrap_or_else(||uuid::Uuid::new_v4().to_string())})).await)
     }
     #[tool(
         description = "Request cancellation of a running remote task. Query status until cancelled; cancellation does not roll back file edits."
@@ -164,20 +173,40 @@ impl Bridge {
         &self,
         Parameters(p): Parameters<ResultWait>,
     ) -> std::result::Result<CallToolResult, rmcp::ErrorData> {
+        let lease = uuid::Uuid::new_v4().to_string();
+        if let Err(e) = local_call(json!({"op":"client_activity_begin","lease_id":lease})).await {
+            return output(Err(e));
+        }
         let end = tokio::time::Instant::now()
             + std::time::Duration::from_secs(p.wait_seconds.unwrap_or(0).min(900));
-        loop {
+        let mut renewed = tokio::time::Instant::now();
+        let result = loop {
+            if renewed.elapsed() > std::time::Duration::from_secs(30) {
+                if let Err(e) =
+                    local_call(json!({"op":"client_activity_renew","lease_id":lease})).await
+                {
+                    break Err(e);
+                }
+                renewed = tokio::time::Instant::now();
+            }
             let r = local_call(json!({"op":"result","task_id":p.task_id})).await;
-            match &r {
+            match r {
                 Ok(v)
                     if ["queued", "running"].contains(&v["state"].as_str().unwrap_or(""))
                         && tokio::time::Instant::now() < end =>
                 {
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await
                 }
-                _ => return output(r),
+                other => break other,
             }
-        }
+        };
+        let _ = local_call(json!({"op":"client_activity_end","lease_id":lease})).await;
+        output(result.map(|mut v| {
+            if p.include_events == Some(false) {
+                v.as_object_mut().unwrap().remove("events");
+            }
+            v
+        }))
     }
 }
 #[tool_handler]

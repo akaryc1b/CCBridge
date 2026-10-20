@@ -244,9 +244,14 @@ impl App {
                 if e.contains("SSH 已断开") {
                     self.connected = false;
                 }
-                self.diagnostic = e.into();
-                self.message = error_summary(e);
+                if v["background"] != true {
+                    self.diagnostic = e.into();
+                    self.message = error_summary(e);
+                }
                 continue;
+            }
+            if v["background"] != true {
+                self.diagnostic.clear();
             }
             let d = r["data"].clone();
             match v["op"].as_str().unwrap_or("") {

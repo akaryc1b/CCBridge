@@ -1,6 +1,6 @@
 [package]
 name = "ccbridge"
-version = "0.4.2"
+version = "0.5.1"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/akaryc1b/CCBridge"
@@ -8,7 +8,8 @@ description = "macOS SSH bridge from Codex MCP to remote Claude Code"
 
 [features]
 default = ["desktop"]
-desktop = ["dep:eframe", "dep:shadcn-egui", "dep:rfd", "dep:egui_commonmark"]
+bridge = []
+desktop = ["bridge", "dep:eframe", "dep:shadcn-egui", "dep:rfd", "dep:egui_commonmark"]
 
 [dependencies]
 anyhow = "1"

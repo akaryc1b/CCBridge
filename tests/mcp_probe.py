@@ -21,10 +21,12 @@ tools=call(2,'tools/list',{})
 assert len(tools['tools'])==9
 assert tool(3,'connection_status')['connected']
 assert tool(30,'repository_match',{'local_repository':sys.argv[2]})['state']=='matched'
-t=tool(4,'cc_start',{'prompt':'Read README.md','mode':'approval','local_repository':sys.argv[2]})
+t=tool(4,'cc_start',{'prompt':'Read README.md','mode':'approval','local_repository':sys.argv[2],'model':'fixture-model-one'})
 assert t['workspace'].endswith('/projects/completely-different-name'),t
 finished=tool(40,'cc_result',{'task_id':t['task_id'],'wait_seconds':5})
 assert finished['state']=='completed',finished
+assert finished['model_resolved']=='fixture-model-one',finished
+assert finished['model_requested']=='fixture-model-one',finished
 page=tool(41,'cc_status',{'task_id':t['task_id'],'cursor':finished['next_cursor']})
 assert page['events']==[],page
 for i in range(5,100):
@@ -41,9 +43,12 @@ for i in range(102,160):
     if s['state']=='completed':break
     time.sleep(.1)
 assert 'resume=True' in s['result']['result'],s
+assert s['model_requested']=='fixture-model-one',s
 assert tool(161,'cc_result',{'task_id':next_turn['task_id']})['state']=='completed'
 assert len(tool(162,'cc_list')['tasks'])>=2
-auto=tool(163,'cc_start',{'prompt':'WRITE','mode':'automatic'})
-assert tool(164,'cc_result',{'task_id':auto['task_id'],'wait_seconds':5})['state']=='completed'
+auto=tool(163,'cc_start',{'prompt':'WRITE','mode':'automatic','model':'fixture-model-two'})
+final=tool(164,'cc_result',{'task_id':auto['task_id'],'wait_seconds':5,'include_events':False})
+assert final['state']=='completed' and 'events' not in final,final
+assert final['model_resolved']=='fixture-model-two',final
 p.stdin.close();p.wait(timeout=5)
 print('PASS MCP initialize/list/start/status/result/reply/list; remote file read and exact session resume')

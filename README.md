@@ -1,6 +1,6 @@
 # CCBridge
 
-通过自己的 SSH 账号，把 Mac 上的 Codex MCP 接到服务器上的 Claude Code。使用 Rust 构建，界面采用公共 shadcn-egui 和 egui_commonmark，不依赖 Electron。
+通过自己的 SSH 账号，把 Mac 上的 Codex MCP 接到服务器上的 Claude Code。Rust 核心 + Tauri 2 原生宿主，界面采用 React 与公共 shadcn/ui、Radix 控件，不依赖 Electron。
 
 ## 下载与安装
 
@@ -13,10 +13,10 @@
 
 ## 连上服务器并打开项目
 
-1. 在“连接与权限”输入实际主机、端口、用户名和密码。22 只是 SSH 标准默认值，可改成实际端口。首次连接请向管理员独立核对服务器指纹。
+1. 在“服务器”输入实际主机、端口、用户名和密码。22 只是 SSH 标准默认值，可改成实际端口。首次连接请向管理员独立核对服务器指纹。
 2. 可选择把 SSH 密码保存在 macOS 钥匙串。其他配置按服务器、端口、账号独立保存；程序从远端获取真实 HOME。
 3. 首次使用点击“安装当前账号 Runner”。程序只上传到当前账号 HOME，不使用 sudo。已安装时显示版本；同版本禁用重复安装，后台也跳过上传。版本不同才提供更新入口，旧程序备份为 `.previous`。
-4. 在“远端工作区”浏览目录、创建项目文件夹、克隆 HTTPS 仓库，或打开已有项目。将所选目录设为 CC 工作目录。
+4. 在“项目与文件”浏览目录、创建项目文件夹、克隆 HTTPS 仓库，或打开已有项目。将所选目录设为 CC 工作目录。
 
 一个项目可以包含多个独立仓库，无需给父目录再初始化 Git：
 
@@ -37,9 +37,21 @@
 
 “任务与对话”按会话展示 Markdown 消息；工具过程和原始事件折叠显示。追问保持同一 Claude 会话和远端目录，切换 App 工作区不会改变旧会话目录。⌘ Enter 发送，Enter 换行。
 
-默认审批模式。用户可在 App 开启“允许选择全自动模式”，再为下一轮选择全自动。MCP 新任务必须显式传入对应模式；MCP 追问沿用上一轮模式，不允许静默提升权限。运行中的一轮权限固定。
+MCP 新任务默认审批模式；App 输入框会明确显示下一轮模式。用户可在 App 开启“允许选择全自动模式”，再为下一轮选择全自动。MCP 新任务必须显式传入对应模式；MCP 追问沿用上一轮模式，不允许静默提升权限。运行中的一轮权限固定。
 
 **全自动会跳过 Claude 工具审批，可以使用该 SSH 账号的文件、命令和网络权限。工作目录不是 OS 沙箱。** 请用独立、低权限的 SSH 账号；关闭开关不会追溯降低已运行任务的权限，必要时取消任务。
+
+## 每轮选择模型
+
+在“服务器”设置默认模型；留空沿用远端 Claude 配置。在对话输入框可选择：
+
+- **服务器默认 / 沿用上轮**：新对话使用服务器默认，续聊使用上一轮实际选择，不受之后修改服务器默认值影响。
+- **远端默认**：不传 `--model`，由远端 Claude 决定。
+- **指定模型**：输入别名（如 `sonnet`、`opus`）或远端服务支持的完整模型 ID。
+
+每轮分别保存请求模型与 Claude 主会话 init 事件上报的实际模型。未上报时显示未知，不用请求别名或子任务用量推断实际模型。上报结果不等于独立验证模型供应商。
+
+MCP `cc_start` / `cc_reply` 支持可选 `model` 和 `model_policy`（`inherit`、`remote_default`、`explicit`）。省略保持兼容；传 `model` 默认按明确指定处理。同一任务 UUID 不允许换模型重放。
 
 ## 接入 Codex
 
@@ -63,7 +75,7 @@ tool_timeout_sec = 960
 | `repository_match` | 可选：按 Git remote 身份匹配明确指定的本地仓库 |
 | `cc_start` | 新任务；支持 UUID 幂等请求与显式 `remote_project` |
 | `cc_status` | 状态、审批、分页增量事件 |
-| `cc_result` | 等待最终结果，单次最多 900 秒 |
+| `cc_result` | 等待最终结果，单次最多 900 秒；`include_events=false` 返回紧凑结果 |
 | `cc_reply` | 原会话续聊，保持项目、会话和模式 |
 | `cc_list` | 最近任务 |
 | `cc_cancel` | 取消指定任务 |
@@ -80,16 +92,19 @@ tool_timeout_sec = 960
 
 ## 本地构建与测试
 
-需要 Rust 1.93.0、Git、Python 3；Mac GUI 需 macOS SDK。
+需要 Rust 1.93.0、Node.js 22、pnpm 10、Git、Python 3；Mac 需 Xcode 命令行工具与 macOS SDK。
 
 ```sh
+pnpm --dir ui install --frozen-lockfile
+pnpm --dir ui test
+pnpm --dir ui build
 cargo build --locked --release
 CCBRIDGE_TEST_BIN="$PWD/target/release/ccbridge" cargo test --locked
 cargo fmt --all -- --check
-./scripts/package-macos.sh --no-build
+cargo check --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-打包 Mac App 前，将配套 Linux Runner 放在 `dist/ccbridge-linux-x86_64`，否则 Linux 服务器不能从 App 自动安装。CI 自动完成该依赖。
+默认 Cargo GUI 保留旧 egui 开发回退；正式 App 使用 `src-tauri` 宿主，与 CLI / MCP / Runner 共用 Rust 库。正式打包前将 Linux Runner 放入 `dist/ccbridge-linux-x86_64`，设置独立的更新签名密钥后运行 `scripts/package-tauri.sh`。签名密钥不进入源码。
 
 服务器只构建 headless Runner：
 
@@ -101,15 +116,23 @@ sh tests/linux-smoke.sh "$PWD/target/release/ccbridge"
 
 默认测试使用临时 SSH/Git/Claude fixture，不需要真实账号、模型或数据库。可选数据库集成脚本需要 Docker、Node、universal-db-mcp 2.14.0，只用于隔离测试；不在默认 CI 中连接外部数据库。
 
-## CI / CD
+## GitHub 应用内更新与 CI / CD
 
-推送和 PR 自动执行格式检查、Linux Runner 测试/烟测、macOS 完整 SSH/MCP 集成测试与 App 打包。构建产物保存在 Actions。推送与 Cargo 版本一致的 `vX.Y.Z` 标签后，只有上述任务全部成功，才自动发布 GitHub Release 和两个产物：
+首次从旧版迁移到 Tauri 需要替换一次 App；后续在“应用更新”检查、下载、验证签名后安装并重启。账号数据仍在 `~/Library/Application Support/CCBridge`，MCP 路径仍是 `/Applications/CCBridge.app/Contents/MacOS/ccbridge`。
 
-- `CCBridge-macos-arm64.zip`（含配套 Linux Runner）
-- `ccbridge-linux-x86_64`
+更新前会排空本地写入、检查远端任务，并等待 MCP 长调用租约结束。执行中的任务和审批不会被强制中断。旧版 MCP 没有租约协议，旧等待调用会保守地阻止更新至其最大等待窗口结束；重新加载 MCP 后的新调用使用租约。无法确认远端状态时不安装。
 
-CI 不保存 SSH/数据库密码，不连接开发或生产服务器，不自动部署或重启用户的 App/Runner。发布使用 GitHub 自带临时令牌，不需要个人令牌 Secret。维护说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+推送和 PR 执行 Rust 格式、Linux Runner 测试/烟测、Mac SSH/MCP 集成测试、前端测试与 Tauri 编译。标签 `vX.Y.Z` 与版本一致且所有检查通过后，发布：
+
+- `CCBridge-macos-arm64.zip`：首次安装或应急恢复
+- `CCBridge.app.tar.gz` 与 `.sig`：签名更新包
+- `latest.json`：GitHub 更新清单
+- `ccbridge-linux-x86_64`：配套 Runner
+
+使用 Tauri 独立更新签名与 ad-hoc App 签名，**不需要 Developer ID 或 Apple 公证**。GitHub Secrets 中保存 `TAURI_SIGNING_PRIVATE_KEY` 与可选密码。公钥随 App 发布；下载、网络或签名验证失败不替换当前 App。新 App 完全无法启动时，从上一版本 ZIP 应急恢复，而不是依赖失效 App 自己回滚。
+
+CI 不保存 SSH/数据库密码，不连接开发或生产服务器，不自动部署用户 Runner。GUI 登录与真实服务器验收在授权环境完成。维护说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 许可证与安全
 
-项目代码采用 [MIT](LICENSE)。第三方许可证保留在 `SHADCN-EGUI-LICENSE` 与 `licenses/` 中。安全报告与凭据边界见 [SECURITY.md](SECURITY.md)。
+项目代码采用 [MIT](LICENSE)。第三方许可证保留在 `SHADCN-EGUI-LICENSE` 与 `licenses/` 中；shadcn/ui 组件来源及许可证见 `ui/THIRD-PARTY.md`。安全报告与凭据边界见 [SECURITY.md](SECURITY.md)。

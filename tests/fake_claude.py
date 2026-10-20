@@ -7,7 +7,7 @@ if '--version' in args:
 prompt=sys.stdin.read()
 get=lambda flag:args[args.index(flag)+1] if flag in args else None
 session=get('--resume') or get('--session-id')
-print(json.dumps({'type':'system','subtype':'init','session_id':session}),flush=True)
+print(json.dumps({'type':'system','subtype':'init','session_id':('00000000-0000-4000-8000-000000000999' if 'SESSION_MISMATCH' in prompt else session),'model':get('--model') or 'fixture-default'}),flush=True)
 if 'SLOW' in prompt:
     time.sleep(30)
 if 'FAIL' in prompt:

@@ -30,8 +30,9 @@ pub struct RemoteEnvironment {
     pub claude: String,
     pub platform: String,
 }
+#[derive(Clone)]
 pub struct Connection {
-    pub handle: client::Handle<HostCheck>,
+    pub handle: Arc<client::Handle<HostCheck>>,
     pub profile: Profile,
     pub probe: Value,
     pub environment: RemoteEnvironment,
@@ -84,7 +85,7 @@ pub async fn connect(p: Profile, password: String) -> Result<Connection> {
         )
     }
     let mut conn = Connection {
-        handle,
+        handle: Arc::new(handle),
         profile: p,
         probe: Value::Null,
         environment: RemoteEnvironment {
@@ -422,6 +423,16 @@ GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false git -c credential.interactive=f
             return Ok(
                 json!({"installed":false,"already_current":true,"path":self.runner_path,"probe":self.probe}),
             );
+        }
+        if let Some(remote) = self.probe["runner_version"].as_str() {
+            let parse = |s: &str| {
+                s.split('.')
+                    .map(|x| x.parse::<u64>().unwrap_or(0))
+                    .collect::<Vec<_>>()
+            };
+            if parse(remote) > parse(env!("CARGO_PKG_VERSION")) {
+                bail!("远端 Runner 版本较新，不能自动降级；请更新 App")
+            }
         }
         let (out, err, code) = self.execute("uname -sm".into(), &[]).await?;
         if code != Some(0) {

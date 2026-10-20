@@ -97,6 +97,9 @@ impl server::Handler for TestServer {
                 h.close(id).await.unwrap();
                 return;
             }
+            if command.contains("slow-directory") {
+                tokio::time::sleep(Duration::from_millis(800)).await;
+            }
             let mut cmd = if command.starts_with("# ccbridge:filesystem\n") {
                 let mut c = Command::new("sh");
                 c.arg("-c").arg(&command);
@@ -326,6 +329,19 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
     poll(&c, id, "running").await?;
     c.rpc(json!({"op":"cancel","task_id":id})).await?;
     poll(&c, id, "cancelled").await?;
+    // Main model comes from init, not requested alias or aggregated child usage.
+    let mut model_request = start("MODEL", "automatic");
+    model_request["model"] = json!("fixture-model-one");
+    let model_turn = c.rpc(model_request.clone()).await?;
+    let model_done = poll(&c, field(&model_turn, "task_id")?, "completed").await?;
+    assert_eq!(model_done["model_requested"], "fixture-model-one");
+    assert_eq!(model_done["model_resolved"], "fixture-model-one");
+    model_request["model"] = json!("fixture-model-two");
+    assert!(c.rpc(model_request).await.is_err());
+    let mismatch = c.rpc(start("SESSION_MISMATCH", "automatic")).await?;
+    let mismatch = poll(&c, field(&mismatch, "task_id")?, "failed").await?;
+    assert!(mismatch["observed_session_id"].is_string());
+    assert_ne!(mismatch["session_id"], mismatch["observed_session_id"]);
     // Broker enforces human-only approvals and automatic-mode grant.
 
     // Find repositories by Git remote identity, not the folder name; exclude other HOME/symlinks.
@@ -400,7 +416,27 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
     assert_eq!(unchanged["installed"], false);
     let repeated = c.install().await?;
     assert_eq!(repeated["already_current"], true);
-    let shared = Arc::new(tokio::sync::Mutex::new(Some(c)));
+    let shared = Arc::new(backend::BackendState::new(Some(c)));
+    let slow_path = remote_home.join("slow-directory");
+    private_dir(&slow_path)?;
+    let slow_state = shared.clone();
+    let slow = tokio::spawn(async move {
+        backend::dispatch(
+            slow_state,
+            json!({"op":"directory_list","path":slow_path}),
+            true,
+        )
+        .await
+    });
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let status = tokio::time::timeout(
+        Duration::from_millis(250),
+        backend::dispatch(shared.clone(), json!({"op":"connection_status"}), false),
+    )
+    .await??;
+    assert_eq!(status["connected"], true);
+    slow.await??;
+
     let match_request = json!({"op":"repository_match","local_repository":local_repo});
     assert_eq!(
         backend::dispatch(shared.clone(), match_request, false).await?["state"],
@@ -484,7 +520,7 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
         remote_repo.to_string_lossy().to_string()
     );
     {
-        let mut guard = shared.lock().await;
+        let mut guard = shared.connection.lock().await;
         let conn = guard.as_mut().unwrap();
         poll(conn, field(&opened, "task_id")?, "completed").await?;
         conn.profile.active_remote_workspace = String::new();
@@ -516,6 +552,7 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
     assert_eq!(projects["projects"].as_array().unwrap().len(), 2);
     {
         shared
+            .connection
             .lock()
             .await
             .as_mut()
@@ -526,7 +563,7 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
     let routed=backend::dispatch(shared.clone(),json!({"op":"start","task_id":uuid::Uuid::new_v4().to_string(),"remote_project":"项目B","prompt":"Read README.md","mode":"approval"}),false).await?;
     assert_eq!(routed["workspace"], project_b.to_string_lossy().to_string());
     {
-        let mut guard = shared.lock().await;
+        let mut guard = shared.connection.lock().await;
         let c = guard.as_mut().unwrap();
         poll(c, field(&routed, "task_id")?, "completed").await?;
         assert_eq!(
@@ -638,16 +675,51 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
         String::from_utf8_lossy(&out.stderr)
     );
     println!("{}", String::from_utf8_lossy(&out.stdout));
+    let lease = uuid::Uuid::new_v4().to_string();
+    backend::dispatch(
+        shared.clone(),
+        json!({"op":"client_activity_begin","lease_id":lease,"client_protocol":1}),
+        false,
+    )
+    .await?;
+    assert!(
+        backend::dispatch(shared.clone(), json!({"op":"prepare_update"}), true)
+            .await
+            .is_err()
+    );
+    backend::dispatch(
+        shared.clone(),
+        json!({"op":"client_activity_end","lease_id":lease,"client_protocol":1}),
+        false,
+    )
+    .await?;
+    assert!(
+        backend::dispatch(shared.clone(), json!({"op":"prepare_update"}), false)
+            .await
+            .is_err()
+    );
+    backend::dispatch(shared.clone(), json!({"op":"prepare_update"}), true).await?;
+    assert!(
+        backend::dispatch(shared.clone(), start("blocked by drain", "automatic"), true)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        backend::dispatch(shared.clone(), json!({"op":"connection_status"}), false).await?["connected"],
+        true
+    );
+    backend::dispatch(shared.clone(), json!({"op":"cancel_update"}), true).await?;
+    println!("PASS update lease / drain / no new writes / status remains available");
     broker.abort();
     // Disconnect/reconnect and recover persisted task list without replay.
-    shared.lock().await.take();
+    shared.connection.lock().await.take();
     let c = ssh::connect(p, "test-only-password".into()).await?;
     assert!(
         c.rpc(json!({"op":"list"})).await?["tasks"]
             .as_array()
             .unwrap()
             .len()
-            == 10
+            == 12
     );
     println!(
         "PASS host pin / wrong password / encrypted SSH / remote code / approve / deny / automatic / cancellation / failure / workspace lock / reconnect / human-only policy"

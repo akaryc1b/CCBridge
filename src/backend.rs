@@ -5,13 +5,133 @@ use std::sync::{Arc, mpsc};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
-pub(crate) type Shared = Arc<Mutex<Option<ssh::Connection>>>;
-pub(crate) struct Job {
+pub struct BackendState {
+    pub connection: Mutex<Option<ssh::Connection>>,
+    pub gate: std::sync::Mutex<crate::update_gate::UpdateGate>,
+    pub writes: Mutex<()>,
+}
+impl BackendState {
+    pub fn new(connection: Option<ssh::Connection>) -> Self {
+        Self {
+            connection: Mutex::new(connection),
+            gate: Default::default(),
+            writes: Mutex::new(()),
+        }
+    }
+}
+pub type Shared = Arc<BackendState>;
+struct Activity(Shared);
+impl Drop for Activity {
+    fn drop(&mut self) {
+        self.0.gate.lock().unwrap().active -= 1;
+    }
+}
+pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
+    let op = field(&v, "op")?;
+    if !human && v["client_protocol"] != 1 && ["status", "result"].contains(&op) {
+        let mut gate = state.gate.lock().unwrap();
+        if gate.draining {
+            bail!("App 正在准备更新，请更新完成后查询原任务")
+        }
+        // Old clients cannot announce a long call. Retain their maximum wait + transport timeout.
+        gate.legacy_until = gate
+            .legacy_until
+            .max(now() + if op == "result" { 990 } else { 120 });
+    }
+
+    if [
+        "client_activity_begin",
+        "client_activity_renew",
+        "client_activity_end",
+    ]
+    .contains(&op)
+    {
+        return state.gate.lock().unwrap().lease(op, field(&v, "lease_id")?);
+    }
+    if ["safe_update_state", "prepare_update", "cancel_update"].contains(&op) {
+        if !human {
+            bail!("更新安装只能在 App 操作")
+        }
+        if op == "cancel_update" {
+            state.gate.lock().unwrap().draining = false;
+            return Ok(json!({"draining":false}));
+        }
+        if op == "prepare_update" {
+            state.gate.lock().unwrap().prepare()?;
+            let checked =
+                async {
+                    let c =
+                        state.connection.lock().await.clone().ok_or_else(|| {
+                            anyhow::anyhow!("尚未连接服务器，无法确认远端任务空闲")
+                        })?;
+                    let tasks = c.rpc(json!({"op":"list"})).await?;
+                    if tasks["tasks"].as_array().is_none() {
+                        bail!("远端状态不确定，不能安装更新")
+                    }
+                    if tasks["tasks"].as_array().unwrap().iter().any(|t| {
+                        ["queued", "running", "waiting_approval"]
+                            .contains(&t["state"].as_str().unwrap_or(""))
+                    }) {
+                        bail!("远端仍有任务执行或等待审批，请完成后再更新")
+                    }
+                    Ok(())
+                }
+                .await;
+            if let Err(e) = checked {
+                state.gate.lock().unwrap().draining = false;
+                return Err(e);
+            }
+        }
+        return Ok(state.gate.lock().unwrap().snapshot());
+    }
+    let writing = (human && op == "repository_match")
+        || [
+            "cc_diagnostic",
+            "db_save",
+            "db_bind",
+            "db_remove",
+            "db_project_save",
+            "connect",
+            "disconnect",
+            "save_profile",
+            "load_profile",
+            "forget_password",
+            "start",
+            "reply",
+            "clone_into_directory",
+            "prepare_repositories",
+            "install_runner",
+            "refresh_runner",
+            "select_remote_workspace",
+            "create_directory",
+            "project_save",
+            "set_auto",
+            "bind_repository",
+            "clear_binding",
+        ]
+        .contains(&op);
+    let _write = if writing {
+        Some(state.writes.try_lock().map_err(|_| {
+            anyhow::anyhow!("另一项写入操作仍在执行，请等待完成；状态查询与审批不受影响")
+        })?)
+    } else {
+        None
+    };
+    let _activity = if writing {
+        state.gate.lock().unwrap().begin()?;
+        Some(Activity(state.clone()))
+    } else {
+        None
+    };
+    dispatch_inner(state.clone(), v, human).await
+}
+
+pub struct Job {
     pub value: Value,
     pub reply: mpsc::Sender<Value>,
     pub background: bool,
 }
-pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
+async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     let op = field(&v, "op")?.to_owned();
     if ["save_profile", "load_password", "forget_password"].contains(&op.as_str()) {
         if !human {
@@ -40,6 +160,13 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
             }
         }
         p.save()?;
+        if let Some(c) = state.connection.lock().await.as_mut() {
+            if c.profile.account_key() == p.account_key() {
+                c.profile.name = p.name;
+                c.profile.model = p.model;
+                c.profile.remember_password = p.remember_password;
+            }
+        }
         return Ok(json!({"saved":true}));
     }
     if op == "inspect_local" {
@@ -65,7 +192,7 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
         }
         let p: Profile = serde_json::from_value(v["profile"].clone())?;
         p.validate()?;
-        let old = { state.lock().await.take() };
+        let old = { state.connection.lock().await.take() };
         if let Some(old) = old {
             let _ = old
                 .handle
@@ -116,15 +243,17 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
                 "SSH 已连接，但密码未保存。请检查 macOS 钥匙串授权；下次可手动输入 SSH 密码。"
             );
         }
-        *state.lock().await = Some(conn);
+        *state.connection.lock().await = Some(conn);
         return Ok(r);
     }
-    let mut guard = state.lock().await;
+    let mut guard = state.connection.lock().await;
     if op == "disconnect" {
         if !human {
             bail!("只能在 App 断开连接")
         }
-        if let Some(conn) = guard.take() {
+        let disconnected = guard.take();
+        drop(guard);
+        if let Some(conn) = disconnected {
             let _ = conn
                 .handle
                 .disconnect(russh::Disconnect::ByApplication, "User disconnected", "en")
@@ -144,9 +273,11 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
             }
         });
     }
-    let c = guard
-        .as_mut()
+    let mut c = guard
+        .as_ref()
+        .cloned()
         .ok_or_else(|| anyhow::anyhow!("尚未连接 SSH，请在 App 登录"))?;
+    drop(guard);
     if c.handle.is_closed() {
         bail!("SSH 已断开，请在 App 重新连接；不要自动重放任务")
     }
@@ -183,6 +314,7 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
                 let path = listing["path"].as_str().unwrap();
                 c.profile.active_remote_workspace = path.into();
                 c.profile.save()?;
+                *state.connection.lock().await = Some(c.clone());
                 let repo = c
                     .rpc(json!({"op":"repository_inspect","path":path}))
                     .await
@@ -192,7 +324,7 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
             _ => unreachable!(),
         }
     }
-    if op == "db_projects" {
+    if op == "db_projects" || op == "project_list" {
         return c.rpc(v.clone()).await;
     }
     if [
@@ -203,6 +335,7 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
         "db_detect",
         "db_test",
         "db_project_save",
+        "project_save",
     ]
     .contains(&op.as_str())
     {
@@ -233,13 +366,16 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
             bail!("只能在 App 重新检测 Runner")
         }
         c.refresh().await;
+        *state.connection.lock().await = Some(c.clone());
         return Ok(c.info());
     }
     if op == "install_runner" {
         if !human {
             bail!("只能由用户在 App 安装 Runner")
         }
-        return c.install().await;
+        let r = c.install().await;
+        *state.connection.lock().await = Some(c);
+        return r;
     }
     if op == "set_auto" {
         if !human {
@@ -247,6 +383,7 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
         }
         c.profile.allow_auto = v["allow"] == true;
         c.profile.save()?;
+        *state.connection.lock().await = Some(c.clone());
         return Ok(json!({"allow_auto":c.profile.allow_auto}));
     }
     if op == "clear_binding" {
@@ -260,6 +397,7 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
             .bindings
             .retain(|b| !(b.account == account && b.local_path == local.path));
         c.profile.save()?;
+        *state.connection.lock().await = Some(c.clone());
         return Ok(json!({"cleared":true,"profile":c.profile}));
     }
     if op == "repository_match" {
@@ -272,6 +410,7 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
         if human {
             c.profile.local_repository = matched["local"]["path"].as_str().unwrap_or("").into();
             c.profile.save()?;
+            *state.connection.lock().await = Some(c.clone());
         }
         return Ok(matched);
     }
@@ -306,6 +445,7 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
         });
         c.profile.local_repository = local.path;
         c.profile.save()?;
+        *state.connection.lock().await = Some(c.clone());
         return Ok(json!({"bound":true,"profile":c.profile,"selected_path":path}));
     }
     if !c.probe["probe_error"].is_null() {
@@ -313,6 +453,9 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
             "SSH 已连接，但 Runner/工作区/CC 未就绪：{}",
             c.probe["probe_error"]
         )
+    }
+    if ["start", "reply"].contains(&op.as_str()) && c.probe["protocol_version"] != 1 {
+        bail!("Runner 协议不兼容，请在服务器页更新当前账号 Runner；已有任务仍可查询")
     }
     let mut request = v.clone();
     match op.as_str() {
@@ -329,7 +472,9 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
                 bail!("remote_project 与 local_repository 不能同时指定")
             }
             let workspace = if let Some(project) = remote_project {
-                let resolved = c.rpc(json!({"op":"db_resolve","project":project})).await?;
+                let resolved = c
+                    .rpc(json!({"op":"project_resolve","project":project}))
+                    .await?;
                 resolved["workspace"]
                     .as_str()
                     .context("项目目录无效")?
@@ -350,7 +495,12 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
             }
             request["workspace"] = json!(workspace);
             request["claude"] = json!(c.claude_path);
-            request["model"] = json!(c.profile.model);
+            for (key, value) in crate::models::selection(&v, &c.profile.model, None)?
+                .as_object()
+                .unwrap()
+            {
+                request[key] = value.clone();
+            }
         }
         "reply" => {
             let old = c
@@ -369,7 +519,12 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
             request["mode"] = json!(mode);
             request["workspace"] = old["workspace"].clone();
             request["claude"] = json!(c.claude_path);
-            request["model"] = json!(c.profile.model);
+            for (key, value) in crate::models::selection(&v, &c.profile.model, Some(&old))?
+                .as_object()
+                .unwrap()
+            {
+                request[key] = value.clone();
+            }
         }
         "status" | "result" | "cancel" | "approve" => {
             if op == "approve" && !human {
@@ -398,7 +553,7 @@ pub(crate) async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Val
     }
     c.rpc(request).await
 }
-pub(crate) fn start_backend() -> (
+pub fn start_backend() -> (
     tokio::sync::mpsc::UnboundedSender<Job>,
     mpsc::Receiver<Value>,
 ) {
@@ -408,7 +563,7 @@ pub(crate) fn start_backend() -> (
         let result: Result<()> = tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(async move {
-                let state: Shared = Arc::new(Mutex::new(None));
+                let state: Shared = Arc::new(BackendState::new(None));
                 let dir = app_dir()?;
                 // flock prevents a second App from unlinking the first App's socket.
                 let lock = std::fs::OpenOptions::new()

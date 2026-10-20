@@ -129,7 +129,10 @@ pub fn error_summary(raw: &str) -> String {
 pub fn envelope(r: Result<Value>) -> Value {
     match r {
         Ok(v) => json!({"ok":true,"data":v}),
-        Err(e) => json!({"ok":false,"error":format!("{e:#}")}),
+        Err(e) => {
+            let raw = format!("{e:#}");
+            json!({"ok":false,"error":raw,"error_detail":{"code":"operation_failed","message_zh":error_summary(&raw),"diagnostic":raw,"retryable":false}})
+        }
     }
 }
 pub fn unwrap(v: Value) -> Result<Value> {
@@ -151,6 +154,7 @@ pub struct RepositoryBinding {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Profile {
+    pub name: String,
     pub host: String,
     pub port: u16,
     pub user: String,
@@ -169,6 +173,7 @@ pub struct Profile {
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            name: String::new(),
             host: String::new(),
             port: 22,
             user: String::new(),
@@ -228,7 +233,8 @@ impl Profile {
         Ok(())
     }
 }
-pub async fn local_call(v: Value) -> Result<Value> {
+pub async fn local_call(mut v: Value) -> Result<Value> {
+    v["client_protocol"] = json!(1);
     let path = app_dir()?.join("bridge.sock");
     let mut stream = tokio::net::UnixStream::connect(path)
         .await

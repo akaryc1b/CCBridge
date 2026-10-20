@@ -62,18 +62,36 @@ jobs:
         with:
           name: linux-runner
           path: dist
-      - name: Build App
+      - name: Node and pnpm
+        run: |
+          brew install node@22
+          echo "$(brew --prefix node@22)/bin" >> "$GITHUB_PATH"
+          npm install -g pnpm@10.28.2
+      - name: Build compatibility CLI and integration fixture
         run: cargo build --locked --release
       - name: Full SSH and MCP integration tests
         env:
           CCBRIDGE_TEST_BIN: ${{ github.workspace }}/target/release/ccbridge
         run: cargo test --locked
-      - name: Package App with Runner
-        run: chmod 700 dist/ccbridge-linux-x86_64 && sh scripts/package-macos.sh --no-build && codesign --verify --deep --strict dist/CCBridge.app
+      - name: Frontend typecheck and production build
+        run: pnpm --dir ui install --frozen-lockfile && pnpm --dir ui test && pnpm --dir ui build
+      - name: Tauri compile
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Package signed updater
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: chmod 700 dist/ccbridge-linux-x86_64 && sh scripts/package-tauri.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-app
-          path: dist/CCBridge-macos-arm64.zip
+          path: |
+            dist-tauri/CCBridge-macos-arm64.zip
+            dist-tauri/CCBridge.app.tar.gz
+            dist-tauri/CCBridge.app.tar.gz.sig
+            dist-tauri/latest.json
+          if-no-files-found: ignore
           retention-days: 14
 
   release:
@@ -95,4 +113,4 @@ jobs:
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$TAG" --repo "$REPO" --verify-tag --title "CCBridge $TAG" --generate-notes release/CCBridge-macos-arm64.zip release/ccbridge-linux-x86_64
+          gh release create "$TAG" --repo "$REPO" --verify-tag --title "CCBridge $TAG" --generate-notes release/CCBridge-macos-arm64.zip release/CCBridge.app.tar.gz release/CCBridge.app.tar.gz.sig release/latest.json release/ccbridge-linux-x86_64

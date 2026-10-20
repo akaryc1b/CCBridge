@@ -19,6 +19,16 @@ pub struct Task {
     pub claude: String,
     #[serde(default)]
     pub model: String,
+    #[serde(default)]
+    pub model_requested: String,
+    #[serde(default)]
+    pub model_source: String,
+    #[serde(default)]
+    pub model_resolved: Option<String>,
+    #[serde(default)]
+    pub model_status: String,
+    #[serde(default)]
+    pub observed_session_id: Option<String>,
     pub mode: String,
     pub prompt: String,
     pub resume: bool,
@@ -45,6 +55,7 @@ pub fn rpc_stdio() -> Result<()> {
 }
 pub fn dispatch(v: Value) -> Result<Value> {
     match field(&v, "op")? {
+        "project_list" | "project_save" | "project_resolve" => crate::projects::rpc(&v),
         "db_list" | "db_save" | "db_bind" | "db_remove" | "db_detect" | "db_test"
         | "db_project_save" | "db_projects" | "db_resolve" => crate::databases::rpc(&v),
         "repository_inspect" => {
@@ -80,7 +91,7 @@ pub fn dispatch(v: Value) -> Result<Value> {
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
             Ok(
-                json!({"runner_version":env!("CARGO_PKG_VERSION"),"workspace":work,"claude_version":version,"claude_error":if version.is_none(){Some("当前账号未找到可运行的 Claude，请在高级设置填写绝对路径，或在远端安装并登录")}else{None},"account_home":home()?,"state_directory":runner_dir()?,"code_access":"remote_directory","warning":"工作目录不是 OS 沙箱；全自动模式拥有该 SSH 账号的文件与命令权限"}),
+                json!({"runner_version":env!("CARGO_PKG_VERSION"),"protocol_version":1,"capabilities":["models_v1","projects_v1","session_identity_v1"],"workspace":work,"claude_version":version,"claude_error":if version.is_none(){Some("当前账号未找到可运行的 Claude，请在高级设置填写绝对路径，或在远端安装并登录")}else{None},"account_home":home()?,"state_directory":runner_dir()?,"code_access":"remote_directory","warning":"工作目录不是 OS 沙箱；全自动模式拥有该 SSH 账号的文件与命令权限"}),
             )
         }
         "start" => start(v),
@@ -92,7 +103,8 @@ pub fn dispatch(v: Value) -> Result<Value> {
                 let entry = entry?;
                 if let Some(id) = entry.file_name().to_str() {
                     if valid_id(id).is_ok() {
-                        if let Ok(t) = read_json::<Task>(&entry.path().join("task.json")) {
+                        if let Ok(mut t) = read_json::<Task>(&entry.path().join("task.json")) {
+                            reconcile(&mut t)?;
                             if workspace.is_none_or(|w| w == t.workspace) {
                                 tasks.push(t);
                             }
@@ -143,11 +155,14 @@ fn start(v: Value) -> Result<Value> {
     let _guard = registry_guard()?;
     let id = field(&v, "task_id")?.to_owned();
     valid_id(&id)?;
+    crate::models::validate(v["model"].as_str().unwrap_or(""))?;
     let dir = task_dir(&id)?;
     // Caller-generated UUID makes an uncertain SSH response safely recoverable.
     if dir.exists() {
         let t: Task = read_json(&dir.join("task.json"))?;
-        if t.prompt != field(&v, "prompt")?
+        if t.model != v["model"].as_str().unwrap_or("")
+            || t.reply_to.as_deref() != v["reply_to"].as_str()
+            || t.prompt != field(&v, "prompt")?
             || t.mode != field(&v, "mode")?
             || t.workspace != std::fs::canonicalize(field(&v, "workspace")?)?.to_string_lossy()
         {
@@ -213,6 +228,11 @@ fn start(v: Value) -> Result<Value> {
         workspace,
         claude: field(&v, "claude")?.to_owned(),
         model: v["model"].as_str().unwrap_or("").into(),
+        model_requested: v["model"].as_str().unwrap_or("").into(),
+        model_source: v["model_source"].as_str().unwrap_or("legacy").into(),
+        model_resolved: None,
+        model_status: "pending".into(),
+        observed_session_id: None,
         mode,
         prompt,
         resume,
@@ -421,12 +441,28 @@ fn run_cc(t: &mut Task, dir: &Path) -> Result<()> {
     if let Ok(file) = File::open(dir.join("events.jsonl")) {
         for line in BufReader::new(file).lines() {
             if let Ok(v) = serde_json::from_str::<Value>(&line?) {
-                if let Some(s) = v["session_id"].as_str() {
-                    if valid_id(s).is_ok() {
-                        t.session_id = s.into();
+                if v["type"] == "system"
+                    && v["subtype"] == "init"
+                    && v["parent_tool_use_id"].is_null()
+                {
+                    if let Some(model) = v["model"].as_str() {
+                        t.model_resolved = Some(model.into());
+                        t.model_status = "reported".into();
+                    }
+                    if let Some(session) = v["session_id"].as_str() {
+                        if session != t.session_id {
+                            t.observed_session_id = Some(session.into());
+                            t.error = Some("远端返回了不同的会话 ID，续聊一致性校验失败".into());
+                        }
                     }
                 }
-                if v["type"] == "result" {
+                if v["type"] == "result" && v["parent_tool_use_id"].is_null() {
+                    if let Some(session) = v["session_id"].as_str() {
+                        if session != t.session_id {
+                            t.observed_session_id = Some(session.into());
+                            t.error = Some("最终结果的会话 ID 不匹配".into());
+                        }
+                    }
                     t.result = Some(v);
                 }
             }
@@ -434,28 +470,29 @@ fn run_cc(t: &mut Task, dir: &Path) -> Result<()> {
     }
     if cancelled {
         t.state = "cancelled".into();
-    } else if !status.success()
+    } else if t.observed_session_id.is_some()
+        || !status.success()
         || t.result.as_ref().is_none_or(|v| {
             v["is_error"] == true || v["subtype"].as_str().is_some_and(|s| s != "success")
         })
     {
         t.state = "failed".into();
-        t.error = Some(format!(
-            "CC exit={status}; {}",
-            std::fs::read_to_string(dir.join("stderr.log"))
-                .unwrap_or_default()
-                .chars()
-                .take(4000)
-                .collect::<String>()
-        ));
+        if t.error.is_none() {
+            t.error = Some(format!(
+                "CC exit={status}; {}",
+                std::fs::read_to_string(dir.join("stderr.log"))
+                    .unwrap_or_default()
+                    .chars()
+                    .take(4000)
+                    .collect::<String>()
+            ));
+        }
     } else {
         t.state = "completed".into();
     }
     Ok(())
 }
-pub fn snapshot(id: &str, cursor: u64) -> Result<Value> {
-    let dir = task_dir(id)?;
-    let mut t: Task = read_json(&dir.join("task.json"))?;
+fn reconcile(t: &mut Task) -> Result<()> {
     if (t.state == "running" && !alive(t.worker_pid))
         || (t.state == "queued" && now().saturating_sub(t.created_at) > 15)
     {
@@ -464,6 +501,35 @@ pub fn snapshot(id: &str, cursor: u64) -> Result<Value> {
         t.save()?;
         unlock(&t);
     }
+
+    if t.model_resolved.is_none() {
+        if let Ok(file) = File::open(task_dir(&t.id)?.join("events.jsonl")) {
+            for line in BufReader::new(file).lines().take(80) {
+                let line = line?;
+                if line.len() > 512 * 1024 {
+                    break;
+                }
+                if let Ok(v) = serde_json::from_str::<Value>(&line) {
+                    if v["type"] == "system"
+                        && v["subtype"] == "init"
+                        && v["parent_tool_use_id"].is_null()
+                    {
+                        if let Some(model) = v["model"].as_str() {
+                            t.model_resolved = Some(model.into());
+                            t.model_status = "reported".into();
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+pub fn snapshot(id: &str, cursor: u64) -> Result<Value> {
+    let dir = task_dir(id)?;
+    let mut t: Task = read_json(&dir.join("task.json"))?;
+    reconcile(&mut t)?;
     let mut approvals = vec![];
     for e in std::fs::read_dir(&dir)? {
         let e = e?;
@@ -508,6 +574,6 @@ pub fn snapshot(id: &str, cursor: u64) -> Result<Value> {
         &t.state
     };
     Ok(
-        json!({"task_id":t.id,"session_id":t.session_id,"prompt":t.prompt,"created_at":t.created_at,"resume":t.resume,"reply_to":t.reply_to,"has_more":events.len()>=80 || next.saturating_sub(cursor)>=512*1024,"state":display_state,"mode":t.mode,"workspace":t.workspace,"result":t.result,"error":t.error,"events":events,"next_cursor":next,"approvals":approvals,"updated_at":t.updated_at}),
+        json!({"model":t.model,"model_requested":t.model_requested,"model_source":t.model_source,"model_resolved":t.model_resolved,"model_status":t.model_status,"observed_session_id":t.observed_session_id,"task_id":t.id,"session_id":t.session_id,"prompt":t.prompt,"created_at":t.created_at,"resume":t.resume,"reply_to":t.reply_to,"has_more":events.len()>=80 || next.saturating_sub(cursor)>=512*1024,"state":display_state,"mode":t.mode,"workspace":t.workspace,"result":t.result,"error":t.error,"events":events,"next_cursor":next,"approvals":approvals,"updated_at":t.updated_at}),
     )
 }
