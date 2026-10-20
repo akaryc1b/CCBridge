@@ -48,7 +48,7 @@ try:
  else:sh('docker','exec',name,'mysql','-uroot','-p'+password,'-e','CREATE DATABASE postgres; CREATE DATABASE ccbridge_second;')
  ids=[]
  for label,db in [('business','postgres'),('workflow','ccbridge_second')]:
-  d={'id':str(uuid.uuid4()),'name':label,'kind':ENGINE,'host':'127.0.0.1','port':port,'user':'postgres' if ENGINE=='postgres' else 'root','password':password,'database':db,'enabled':True,'node':str(pathlib.Path(sh('which','node')).resolve()),'package_root':os.environ.get('UDB_PACKAGE_ROOT',str(pathlib.Path(sh('which','universal-db-mcp')).resolve().parent.parent))}
+  d={'id':str(uuid.uuid4()),'name':label,'kind':ENGINE,'host':'127.0.0.1','port':port,'user':'postgres' if ENGINE=='postgres' else 'root','password':password,'database':db,'enabled':True,'node':str(pathlib.Path(sh('which','node')).resolve()),'package_root':(os.environ.get('UDB_PACKAGE_ROOT') or str(pathlib.Path(sh('which','universal-db-mcp')).resolve().parent.parent))}
   r=rpc({'op':'db_save','connection':d});assert 'password'not in r and password not in json.dumps(r);ids.append(d['id'])
   assert rpc({'op':'db_protocol_test','id':d['id']})['mcp_connected']
   assert rpc({'op':'db_test','id':d['id']})['connected']
