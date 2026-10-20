@@ -40,12 +40,13 @@ def initialize(p):
 try:
  sh('docker','run','-d','--name',name,'-e',('POSTGRES_PASSWORD=' if ENGINE=='postgres' else 'MYSQL_ROOT_PASSWORD=')+password,'-p','127.0.0.1::'+('5432' if ENGINE=='postgres' else '3306'),'postgres:16-alpine' if ENGINE=='postgres' else 'mysql:8')
  port=int(sh('docker','port',name,('5432' if ENGINE=='postgres' else '3306')+'/tcp').split(':')[-1])
- for _ in range(150):
-  cmd=['docker','exec',name,'pg_isready','-U','postgres'] if ENGINE=='postgres' else ['docker','exec',name,'mysql','-uroot','-p'+password,'-e','SELECT 1']
+ for _ in range(300):
+  cmd=['docker','exec',name,'pg_isready','-h','127.0.0.1','-U','postgres'] if ENGINE=='postgres' else ['docker','exec',name,'mysql','-h127.0.0.1','-uroot','-p'+password,'-e','SELECT 1']
   if subprocess.run(cmd,capture_output=True).returncode==0:break
   time.sleep(.3)
- if ENGINE=='postgres':sh('docker','exec',name,'psql','-U','postgres','-c','CREATE DATABASE ccbridge_second;')
- else:sh('docker','exec',name,'mysql','-uroot','-p'+password,'-e','CREATE DATABASE postgres; CREATE DATABASE ccbridge_second;')
+ else:raise AssertionError('disposable database TCP startup timed out')
+ if ENGINE=='postgres':sh('docker','exec','-e','PGPASSWORD='+password,name,'psql','-h','127.0.0.1','-U','postgres','-c','CREATE DATABASE ccbridge_second;')
+ else:sh('docker','exec',name,'mysql','-h127.0.0.1','-uroot','-p'+password,'-e','CREATE DATABASE postgres; CREATE DATABASE ccbridge_second;')
  ids=[]
  for label,db in [('business','postgres'),('workflow','ccbridge_second')]:
   d={'id':str(uuid.uuid4()),'name':label,'kind':ENGINE,'host':'127.0.0.1','port':port,'user':'postgres' if ENGINE=='postgres' else 'root','password':password,'database':db,'enabled':True,'node':str(pathlib.Path(sh('which','node')).resolve()),'package_root':(os.environ.get('UDB_PACKAGE_ROOT') or str(pathlib.Path(sh('which','universal-db-mcp')).resolve().parent.parent))}
