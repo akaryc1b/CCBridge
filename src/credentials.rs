@@ -38,10 +38,16 @@ mod tests {
     #[tokio::test]
     async fn bounded_without_duplicate_prompts() {
         let gate = Arc::new(tokio::sync::Semaphore::new(1));
-        let err = call_with(gate.clone(), std::time::Duration::from_millis(5), || {
-            std::thread::sleep(std::time::Duration::from_millis(80));
-            Ok(1)
-        })
+        let (release, wait) = std::sync::mpsc::channel();
+        let err = call_with(
+            gate.clone(),
+            std::time::Duration::from_millis(5),
+            move || {
+                wait.recv()
+                    .expect("test releases the blocked credential operation");
+                Ok(1)
+            },
+        )
         .await
         .unwrap_err();
         assert!(err.to_string().contains("钥匙串授权尚未完成"));
@@ -53,7 +59,13 @@ mod tests {
                 .to_string()
                 .contains("已有钥匙串授权")
         );
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        release.send(()).unwrap();
+        // Wait for the actual permit release, not a guess about thread scheduling.
+        let released = tokio::time::timeout(std::time::Duration::from_secs(5), gate.acquire())
+            .await
+            .expect("credential operation should finish after release")
+            .unwrap();
+        drop(released);
         assert_eq!(
             call_with(gate, std::time::Duration::from_secs(1), || Ok(3))
                 .await
