@@ -57,13 +57,13 @@ fn initial_state() -> Result<Value, String> {
     Ok(json!({"profile":profile,"profiles":profiles,"version":env!("CARGO_PKG_VERSION")}))
 }
 #[tauri::command]
-async fn configure_codex() -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        ccbridge::integration::configure().map_err(|e| format!("{e:#}"))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+async fn configure_codex(bridge: State<'_, Bridge>) -> Result<String, String> {
+    let r = call(&bridge, "configure_codex", json!({}))
+        .await
+        .map_err(|e| e["message"].as_str().unwrap_or("配置失败").to_string())?;
+    Ok(r["message"].as_str().unwrap_or("已配置").into())
 }
+
 #[tauri::command]
 async fn check_update(
     app: tauri::AppHandle,

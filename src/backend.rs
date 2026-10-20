@@ -57,6 +57,11 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             return Ok(json!({"draining":false}));
         }
         if op == "prepare_update" {
+            #[cfg(target_os = "macos")]
+            if crate::credentials::pending() {
+                bail!("钥匙串授权尚未结束，请先处理系统弹窗再更新")
+            }
+
             state.gate.lock().unwrap().prepare()?;
             let checked =
                 async {
@@ -96,6 +101,8 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "save_profile",
             "load_profile",
             "forget_password",
+            "load_password",
+            "configure_codex",
             "start",
             "reply",
             "clone_into_directory",
@@ -133,6 +140,14 @@ pub struct Job {
 }
 async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     let op = field(&v, "op")?.to_owned();
+    if op == "configure_codex" {
+        if !human {
+            bail!("只能由人在 App 配置 Codex")
+        }
+        return Ok(
+            json!({"message":tokio::task::spawn_blocking(crate::integration::configure).await??}),
+        );
+    }
     if ["save_profile", "load_password", "forget_password"].contains(&op.as_str()) {
         if !human {
             bail!("凭据只能在 App 管理")
