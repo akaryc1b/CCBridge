@@ -625,9 +625,10 @@ export default function App() {
                   </div>
                   <div className="grow">
                     <h3>
-                      {profile.host
-                        ? `${profile.user}@${profile.host}`
-                        : "添加你的服务器"}
+                      {profile.name ||
+                        (profile.host
+                          ? `${profile.user}@${profile.host}`
+                          : "添加你的服务器")}
                     </h3>
                     <p className="muted">
                       {profile.host
