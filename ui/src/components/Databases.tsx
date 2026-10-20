@@ -56,6 +56,7 @@ export function Databases({
     [data, setData] = useState<Data>({ connections: [], bindings: [] }),
     [form, setForm] = useState<Data>(empty),
     [editing, setEditing] = useState(false),
+    [removing, setRemoving] = useState<Data | null>(null),
     [bindings, setBindings] = useState<Data[]>([]),
     [runtime, setRuntime] = useState<Data>({}),
     [busy, setBusy] = useState(false),
@@ -258,17 +259,7 @@ export function Databases({
                 <Button
                   variant="outline"
                   disabled={busy || (d.used_by || []).length > 0}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        `删除连接“${d.name}”？不会删除数据库或业务数据。`,
-                      )
-                    )
-                      void run(async () => {
-                        await request("database_remove", { id: d.id });
-                        await load();
-                      });
-                  }}
+                  onClick={() => setRemoving(d)}
                 >
                   删除
                 </Button>
@@ -395,6 +386,48 @@ export function Databases({
           {error}
         </div>
       )}
+      <Dialog
+        open={!!removing}
+        onOpenChange={(v) => {
+          if (!busy && !v) setRemoving(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>删除连接配置</DialogTitle>
+            <DialogDescription>
+              删除“{removing?.name}
+              ”的连接配置，不会删除数据库或业务数据。被项目引用的连接不能删除。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-3">
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => setRemoving(null)}
+            >
+              取消
+            </Button>
+            <Button
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  await request("database_remove", { id: removing?.id });
+                  setRemoving(null);
+                  await load();
+                })
+              }
+            >
+              确认删除配置
+            </Button>
+          </div>
+          {error && (
+            <p role="alert" className="error-box">
+              {error}
+            </p>
+          )}
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={editing}
         onOpenChange={(v) => {

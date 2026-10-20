@@ -478,7 +478,9 @@ export default function App() {
     }
   }
   const errorEntries = Object.entries(errors).filter(
-    ([key]) => !["task_list", "task_status", "project_list"].includes(key),
+    ([key]) =>
+      !key.startsWith("database_") &&
+      !["task_list", "task_status", "project_list"].includes(key),
   );
   const input = (key: string, type = "text", placeholder = "") => (
     <Input
