@@ -1,0 +1,6 @@
+# 将片段合并到 Codex config.toml，不要覆盖其他配置。
+# App 必须先安装到 /Applications。
+[mcp_servers.ccbridge]
+command = "/Applications/CCBridge.app/Contents/MacOS/ccbridge"
+args = ["mcp"]
+tool_timeout_sec = 960

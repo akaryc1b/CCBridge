@@ -1,0 +1,14 @@
+/target/
+/dist/
+/dist-*/
+/work/
+*.log
+.DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+profile.json
+profiles.json
+databases.json

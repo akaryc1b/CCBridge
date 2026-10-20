@@ -1,0 +1,98 @@
+name: CI and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust toolchain
+        run: rustup toolchain install 1.93.0 --profile minimal --component rustfmt && rustup default 1.93.0
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Check release version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          VERSION=$(awk -F '"' '/^version = / {print $2; exit}' Cargo.toml)
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+      - name: Build Runner
+        run: cargo build --locked --release --no-default-features
+      - name: Runner tests
+        run: cargo test --locked --no-default-features
+      - name: Detached worker smoke
+        run: sh tests/linux-smoke.sh "$PWD/target/release/ccbridge"
+      - name: Prepare Runner
+        run: mkdir -p dist && cp target/release/ccbridge dist/ccbridge-linux-x86_64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-runner
+          path: dist/ccbridge-linux-x86_64
+          retention-days: 14
+
+  macos:
+    needs: linux
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check Apple Silicon runner
+        run: test "$(uname -m)" = arm64
+      - name: Rust toolchain
+        run: rustup toolchain install 1.93.0 --profile minimal --component rustfmt && rustup default 1.93.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-runner
+          path: dist
+      - name: Build App
+        run: cargo build --locked --release
+      - name: Full SSH and MCP integration tests
+        env:
+          CCBRIDGE_TEST_BIN: ${{ github.workspace }}/target/release/ccbridge
+        run: cargo test --locked
+      - name: Package App with Runner
+        run: chmod 700 dist/ccbridge-linux-x86_64 && sh scripts/package-macos.sh --no-build && codesign --verify --deep --strict dist/CCBridge.app
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-app
+          path: dist/CCBridge-macos-arm64.zip
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, macos]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: '*'
+          path: release
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$REPO" --verify-tag --title "CCBridge $TAG" --generate-notes release/CCBridge-macos-arm64.zip release/ccbridge-linux-x86_64

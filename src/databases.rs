@@ -1,0 +1,366 @@
+//! Per-SSH-user database profiles and exact workspace bindings. Secrets never leave RPC input.
+use crate::common::*;
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Database {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub database: String,
+    pub enabled: bool,
+    pub package_root: String,
+    pub node: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub password: String,
+}
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct Binding {
+    pub alias: String,
+    pub connection_id: String,
+}
+#[derive(Default, Serialize, Deserialize)]
+struct Store {
+    #[serde(default)]
+    projects: std::collections::BTreeMap<String, String>,
+    connections: Vec<Database>,
+    bindings: std::collections::BTreeMap<String, Vec<Binding>>,
+}
+fn project_list(s: &Store) -> Vec<Value> {
+    let keys: BTreeSet<_> = s
+        .projects
+        .keys()
+        .chain(s.bindings.keys())
+        .cloned()
+        .collect();
+    keys.into_iter().map(|w|{let name=s.projects.get(&w).cloned().unwrap_or_else(||Path::new(&w).file_name().unwrap_or_default().to_string_lossy().into());
+        let mappings:Vec<_>=s.bindings.get(&w).into_iter().flatten().map(|b|{
+            let d=s.connections.iter().find(|d|d.id==b.connection_id);
+            json!({"alias":b.alias,"connection_id":b.connection_id,"connection_name":d.map(|d|d.name.as_str()),"enabled":d.is_some_and(|d|d.enabled)})
+        }).collect();json!({"name":name,"path":w,"databases":mappings})
+    }).collect()
+}
+fn path() -> Result<PathBuf> {
+    Ok(runner_dir()?.join("databases.json"))
+}
+fn load() -> Result<Store> {
+    let p = path()?;
+    if p.exists() {
+        read_json(&p)
+    } else {
+        Ok(Store::default())
+    }
+}
+fn save(s: &Store) -> Result<()> {
+    private_dir(&runner_dir()?)?;
+    write_json(&path()?, s)?;
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path()?, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+fn workspace(s: &str) -> Result<String> {
+    let p = Path::new(s).canonicalize().context("项目目录不存在")?;
+    if !p.is_dir() || !p.starts_with(home()?.canonicalize()?) {
+        bail!("数据库映射项目必须是当前账号 HOME 下的目录")
+    };
+    Ok(p.to_string_lossy().into())
+}
+fn valid_alias(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 32 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+fn validate(d: &Database) -> Result<()> {
+    valid_id(&d.id)?;
+    if d.name.trim().is_empty() {
+        bail!("请填写连接名称")
+    };
+    if !["mysql", "postgres"].contains(&d.kind.as_str()) {
+        bail!("当前支持 MySQL 与 PostgreSQL")
+    };
+    if d.port == 0
+        || d.host.trim().is_empty()
+        || d.user.trim().is_empty()
+        || d.database.trim().is_empty()
+    {
+        bail!("请填写地址、端口、用户名和数据库名")
+    };
+    if !Path::new(&d.node).is_absolute() || !Path::new(&d.package_root).is_absolute() {
+        bail!("请探测或填写远端 Node 和数据库 MCP 安装绝对路径")
+    };
+    Ok(())
+}
+pub fn redacted(d: &Database) -> Value {
+    let mut v = serde_json::to_value(d).unwrap();
+    v.as_object_mut().unwrap().remove("password");
+    v["password_saved"] = json!(!d.password.is_empty());
+    v["permission_mode"] = json!("safe");
+    v
+}
+pub fn rpc(v: &Value) -> Result<Value> {
+    let mut s = load()?;
+    match field(v, "op")? {
+        "db_projects" => Ok(json!({"projects":project_list(&s)})),
+        "db_resolve" => {
+            let name = field(v, "project")?;
+            let list = project_list(&s);
+            let found: Vec<_> = list
+                .iter()
+                .filter(|p| p["path"] == name || p["name"] == name)
+                .collect();
+            if found.len() != 1 {
+                bail!("项目不存在或名称不唯一，请调用 project_list 并使用准确的项目路径")
+            }
+            let w = workspace(found[0]["path"].as_str().unwrap())?;
+            Ok(json!({"workspace":w}))
+        }
+        "db_project_save" => {
+            let w = workspace(field(v, "workspace")?)?;
+            let name = field(v, "name")?.trim();
+            if name.is_empty() {
+                bail!("请填写项目名称")
+            }
+            if s.projects.iter().any(|(path, n)| path != &w && n == name) {
+                bail!("项目名称已存在，请使用不同名称")
+            }
+            s.projects.insert(w.clone(), name.into());
+            save(&s)?;
+            Ok(json!({"workspace":w,"name":name}))
+        }
+        "db_list" => {
+            let w = v["workspace"].as_str().unwrap_or("");
+            Ok(
+                json!({"projects":project_list(&s),"connections":s.connections.iter().map(redacted).collect::<Vec<_>>(),"bindings":s.bindings.get(w).cloned().unwrap_or_default(),"workspace":w,"storage":"当前 SSH 账号 HOME，私有权限 600；不修改 /etc 共享配置"}),
+            )
+        }
+        "db_save" => {
+            let mut d: Database =
+                serde_json::from_value(v["connection"].clone()).context("数据库配置格式不正确")?;
+            if d.id.is_empty() {
+                d.id = uuid::Uuid::new_v4().to_string()
+            };
+            validate(&d)?;
+            if d.password.is_empty() {
+                if let Some(old) = s.connections.iter().find(|x| x.id == d.id) {
+                    d.password = old.password.clone()
+                }
+            };
+            s.connections.retain(|x| x.id != d.id);
+            s.connections.push(d.clone());
+            save(&s)?;
+            Ok(redacted(&d))
+        }
+        "db_bind" => {
+            let w = workspace(field(v, "workspace")?)?;
+            let bs: Vec<Binding> = serde_json::from_value(v["bindings"].clone())?;
+            if bs.len() > 8 {
+                bail!("每个项目最多绑定 8 个数据库")
+            };
+            let mut aliases = BTreeSet::new();
+            for b in &bs {
+                if !valid_alias(&b.alias) || !aliases.insert(b.alias.clone()) {
+                    bail!("用途别名须唯一，仅用英文字母、数字、下划线，最多32位")
+                };
+                if !s.connections.iter().any(|d| d.id == b.connection_id) {
+                    bail!("映射引用的数据库连接不存在")
+                }
+            }
+            s.bindings.insert(w.clone(), bs.clone());
+            save(&s)?;
+            Ok(json!({"workspace":w,"bindings":bs}))
+        }
+        "db_remove" => {
+            let id = field(v, "id")?;
+            if s.bindings.values().flatten().any(|b| b.connection_id == id) {
+                bail!("连接仍被项目引用，请先移除映射；也可关闭此连接")
+            };
+            s.connections.retain(|d| d.id != id);
+            save(&s)?;
+            Ok(json!({"removed":true}))
+        }
+        "db_detect" => detect(),
+        "db_test" => {
+            let d = s
+                .connections
+                .iter()
+                .find(|d| Some(d.id.as_str()) == v["id"].as_str())
+                .context("请先保存连接")?;
+            test_connection(d)
+        }
+        _ => bail!("未知数据库操作"),
+    }
+}
+/// Exact project mapping, never inherit a parent/sibling project implicitly.
+pub fn snapshot(workspace: &str, parent: Option<&str>) -> Result<Vec<(String, Database)>> {
+    if let Some(id) = parent {
+        let p = task_dir(id)?.join("databases.json");
+        return if p.exists() {
+            read_json(&p)
+        } else {
+            Ok(vec![])
+        };
+    };
+    let s = load()?;
+    let mut out = vec![];
+    for b in s.bindings.get(workspace).into_iter().flatten() {
+        let d = s
+            .connections
+            .iter()
+            .find(|d| d.id == b.connection_id)
+            .context("项目数据库映射已失效")?;
+        if d.enabled {
+            validate(d)?;
+            verify_package(d)?;
+            out.push((b.alias.clone(), d.clone()))
+        }
+    }
+    Ok(out)
+}
+pub fn save_snapshot(dir: &Path, connections: &[(String, Database)]) -> Result<()> {
+    if !connections.is_empty() {
+        write_json(&dir.join("databases.json"), &connections)?;
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(
+            dir.join("databases.json"),
+            std::fs::Permissions::from_mode(0o600),
+        )?;
+    }
+    Ok(())
+}
+fn verify_package(d: &Database) -> Result<()> {
+    let p = Path::new(&d.package_root);
+    let v: Value = read_json(&p.join("package.json")).context("无法读取远端数据库 MCP 安装目录")?;
+    if v["name"] != "universal-db-mcp"
+        || v["version"] != "2.14.0"
+        || !p.join("dist/mcp/mcp-server.js").is_file()
+    {
+        bail!("需要已安装的 universal-db-mcp 2.14.0；不自动修改服务器依赖")
+    };
+    if !Path::new(&d.node).is_file() {
+        bail!("远端 Node 可执行文件不存在")
+    };
+    Ok(())
+}
+fn find_path(name: &str) -> Option<PathBuf> {
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+        .and_then(|p| p.canonicalize().ok())
+}
+fn detect() -> Result<Value> {
+    let node = find_path("node");
+    let root =
+        find_path("universal-db-mcp").and_then(|p| p.parent()?.parent().map(Path::to_path_buf));
+    Ok(
+        json!({"node":node,"package_root":root,"notice":"仅探测当前 SSH 账号 PATH；未找到时填写服务器实际安装路径，不自动安装或连接数据库"}),
+    )
+}
+pub fn mcp_servers(dir: &Path, exe: &Path) -> Result<serde_json::Map<String, Value>> {
+    let p = dir.join("databases.json");
+    let mut out = serde_json::Map::new();
+    if !p.exists() {
+        return Ok(out);
+    };
+    let ds: Vec<(String, Database)> = read_json(&p)?;
+    for (alias, d) in ds {
+        if !valid_alias(&alias) {
+            bail!("数据库用途别名无效")
+        };
+        out.insert(format!("db_{alias}"),json!({"command":exe,"args":["database-server",dir.file_name().unwrap().to_string_lossy(),d.id]}));
+    }
+    Ok(out)
+}
+pub fn serve(task: &str, id: &str) -> Result<()> {
+    valid_id(id)?;
+    let dir = task_dir(task)?;
+    let ds: Vec<(String, Database)> = read_json(&dir.join("databases.json"))?;
+    let (_, d) = ds
+        .into_iter()
+        .find(|(_, d)| d.id == id)
+        .context("本任务没有该数据库映射")?;
+    verify_package(&d)?;
+    let script = dir.join("database-launch.mjs");
+    std::fs::write(&script, include_str!("database-launch.mjs"))?;
+    let error = std::os::unix::process::CommandExt::exec(
+        std::process::Command::new(&d.node)
+            .arg(script)
+            .arg(dir.join("databases.json"))
+            .arg(id),
+    );
+    Err(error.into())
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn aliases_and_redaction() {
+        assert!(valid_alias("business_dev"));
+        assert!(!valid_alias("../../x"));
+        assert!(!valid_alias("业务库"));
+        let d = Database {
+            password: "secret-test".into(),
+            ..Default::default()
+        };
+        let v = redacted(&d);
+        assert!(v.get("password").is_none());
+        assert_eq!(v["password_saved"], true);
+        assert!(!v.to_string().contains("secret-test"));
+    }
+}
+
+fn test_connection(d: &Database) -> Result<Value> {
+    verify_package(d)?;
+    let dir = runner_dir()?
+        .join("database-tests")
+        .join(uuid::Uuid::new_v4().to_string());
+    private_dir(&dir)?;
+    let result = (|| -> Result<Value> {
+        save_snapshot(&dir, &[("test".into(), d.clone())])?;
+        let script = dir.join("launch.mjs");
+        std::fs::write(&script, include_str!("database-launch.mjs"))?;
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        let mut child = Command::new(&d.node)
+            .arg(script)
+            .arg(dir.join("databases.json"))
+            .arg(&d.id)
+            .arg("--test")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .context("无法启动远端 Node")?;
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            if let Some(status) = child.try_wait()? {
+                if status.success() {
+                    return Ok(
+                        json!({"connected":true,"permission_mode":"safe","notice":"数据库认证与连接成功；未读取业务表，不代表所有表均有访问权限"}),
+                    );
+                } else {
+                    bail!(
+                        "数据库连接失败，请检查地址、认证、网络、MCP安装目录及数据库权限；凭据不返回客户端"
+                    )
+                }
+            };
+            if std::time::Instant::now() > end {
+                unsafe {
+                    libc::kill(-(child.id() as i32), libc::SIGKILL);
+                };
+                let _ = child.wait();
+                bail!("数据库连接测试超过30秒，已停止本次测试")
+            };
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    })();
+    let _ = std::fs::remove_dir_all(&dir);
+    result
+}
