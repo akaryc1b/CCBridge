@@ -6,7 +6,16 @@ import {
   eventText,
   eventLabel,
 } from "@/lib/conversation";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useId,
+  isValidElement,
+  cloneElement,
+  type ReactNode,
+  type ReactElement,
+} from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -93,10 +102,13 @@ function Field({
   children: ReactNode;
   hint?: string;
 }) {
+  const id = useId();
   return (
     <div className="field">
-      <Label>{label}</Label>
-      {children}
+      <Label htmlFor={id}>{label}</Label>
+      {isValidElement(children)
+        ? cloneElement(children as ReactElement<Data>, { id })
+        : children}
       {hint && <p className="hint">{hint}</p>}
     </div>
   );
@@ -174,11 +186,15 @@ export default function App() {
     [progress, setProgress] = useState(0),
     [integration, setIntegration] = useState("");
   const drafts = useRef<Record<string, string>>({});
+  const messagesRef = useRef<HTMLDivElement>(null),
+    following = useRef(true);
+
   const submission = useRef<{ signature: string; id: string } | null>(null);
   const detailsRef = useRef(details);
   detailsRef.current = details;
 
   function switchConversation(id: string) {
+    following.current = true;
     drafts.current[selected || "__new__"] = draft;
     setDraft(drafts.current[id || "__new__"] || "");
     setSelected(id);
@@ -194,6 +210,21 @@ export default function App() {
     task = details[selected] || tasks.find((t) => t.task_id === selected),
     runner = connection.probe || {};
   const timeline = conversationTurns(task, details);
+  const transcriptRevision = timeline
+    .map((t) =>
+      [
+        t.task_id,
+        t.state,
+        t.updated_at,
+        t.events?.length,
+        t.result?.result?.length,
+      ].join(":"),
+    )
+    .join("|");
+  useEffect(() => {
+    if (following.current && messagesRef.current)
+      messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
+  }, [selected, transcriptRevision]);
   const currentProject =
     connection.profile?.active_remote_workspace ||
     profile.active_remote_workspace ||
@@ -413,6 +444,8 @@ export default function App() {
     const r = await request(continuing ? "task_reply" : "task_start", args);
     if (r) {
       submission.current = null;
+      following.current = true;
+      drafts.current[selected || "__new__"] = "";
       setDraft("");
       setNewConversation(false);
       setSelected(r.task_id);
@@ -1065,7 +1098,15 @@ export default function App() {
                     </Badge>
                   )}
                 </div>
-                <div className="messages">
+                <div
+                  className="messages"
+                  ref={messagesRef}
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    following.current =
+                      el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+                  }}
+                >
                   {task && !newConversation ? (
                     <>
                       {timeline.map((turn) => (
