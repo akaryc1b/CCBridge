@@ -345,7 +345,7 @@ export default function App() {
       if (selectedRef.current) safe(fetchTask(selectedRef.current));
     }, 5000);
     return () => clearInterval(timer);
-  }, [connected]);
+  }, [connected, runner.runner_version]);
   useEffect(() => {
     if (selected && connected) safe(fetchTask(selected));
   }, [selected, connected]);
