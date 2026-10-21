@@ -252,6 +252,10 @@ export default function App() {
     };
     apply();
     localStorage.setItem("ccbridge-theme", theme);
+    if (isTauri())
+      void invoke("set_window_theme", { theme }).catch((e) =>
+        toast.error(String(e)),
+      );
     media.addEventListener("change", apply);
     return () => media.removeEventListener("change", apply);
   }, [theme]);
@@ -770,7 +774,10 @@ export default function App() {
   const errorEntries = Object.entries(errors).filter(
     ([key, value]) =>
       (!value?.page || value.page === page) &&
-      !(serverEdit && ["save_profile", "connect_ssh"].includes(key)) &&
+      !(
+        serverEdit &&
+        ["save_profile", "connect_ssh", "migrate_password"].includes(key)
+      ) &&
       key !== "clone_repository" &&
       !key.startsWith("database_") &&
       !["task_list", "task_status", "project_list"].includes(key),
@@ -2241,15 +2248,75 @@ export default function App() {
             <Field label="Runner 路径">{input("runner")}</Field>
             <Field label="Claude Code 路径">{input("claude")}</Field>
           </details>
-          {(errors.save_profile || errors.connect_ssh) && (
+          {(errors.migrate_password ||
+            errors.save_profile ||
+            errors.connect_ssh) && (
             <p role="alert" className="text-destructive">
               {String(
-                (errors.save_profile || errors.connect_ssh)?.message ||
+                (
+                  errors.migrate_password ||
+                  errors.save_profile ||
+                  errors.connect_ssh
+                )?.message ||
                   errors.save_profile ||
                   errors.connect_ssh,
               )}
             </p>
           )}
+          {profile.credential_store === "file" &&
+            Object.values(saved).some(
+              (p: any) =>
+                p.host === profile.host &&
+                p.port === profile.port &&
+                p.user === profile.user &&
+                p.remember_password &&
+                p.credential_store !== "file",
+            ) && (
+              <div className="migration">
+                <Button
+                  disabled={
+                    busy.has("migrate_password") ||
+                    (!storageConsent && !storageAck)
+                  }
+                  variant="outline"
+                  onClick={() =>
+                    safe(
+                      request("migrate_password", {
+                        account_key: JSON.stringify([
+                          profile.host,
+                          profile.port,
+                          profile.user,
+                        ]),
+                        storage_ack: storageAck,
+                      }).then((r) => {
+                        if (r) {
+                          setProfile(r.profile);
+                          setStorageConsent(true);
+                          setPassword("");
+                          setSaved((x) => ({
+                            ...x,
+                            [JSON.stringify([
+                              r.profile.host,
+                              r.profile.port,
+                              r.profile.user,
+                            ])]: r.profile,
+                          }));
+                          toast.success(r.message);
+                          setServerEdit(false);
+                        }
+                      }),
+                    )
+                  }
+                >
+                  {busy.has("migrate_password")
+                    ? "正在迁移…"
+                    : "迁移此账号已保存的密码"}
+                </Button>
+                <p className="hint">
+                  只读取此账号的钥匙串密码并保存到本机，原副本保留；macOS可能要求一次授权。
+                </p>
+              </div>
+            )}
           <DialogFooter>
             <Button
               variant="outline"

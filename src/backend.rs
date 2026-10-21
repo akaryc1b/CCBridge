@@ -148,6 +148,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "connect",
             "disconnect",
             "save_profile",
+            "migrate_password",
             "preferences_save",
             "load_profile",
             "forget_password",
@@ -293,6 +294,47 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         return Ok(
             json!({"message":tokio::task::spawn_blocking(crate::integration::configure).await??}),
         );
+    }
+    if op == "migrate_password" {
+        if !human {
+            bail!("密码迁移只能由人在App明确操作")
+        }
+        let profiles: std::collections::BTreeMap<String, Profile> =
+            read_json(&app_dir()?.join("profiles.json"))?;
+        let account = field(&v, "account_key")?;
+        let mut p = profiles
+            .get(account)
+            .cloned()
+            .context("请先保存此账号配置")?;
+        if !p.remember_password {
+            bail!("此账号没有已保存密码，请在App输入")
+        }
+        crate::secret_store::confirm_consent(v["storage_ack"] == true)?;
+        if p.credential_store == "file" {
+            return Ok(json!({"saved":true,"profile":p,"message":"已使用本机保存，无需重复迁移"}));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let password =
+                crate::secret_store::get("keychain", "dev.ccbridge.desktop.ssh", account)
+                    .await
+                    .context("读取原钥匙串密码失败；原保存方式未改变")?;
+            crate::secret_store::set("file", "dev.ccbridge.desktop.ssh", account, password)
+                .await
+                .context("本机保存失败；原钥匙串与账号引用未改变")?;
+            p.credential_store = "file".into();
+            p.save()?;
+            if let Some(c) = state.connection.lock().await.as_mut() {
+                if c.profile.account_key() == account {
+                    c.profile.credential_store = "file".into();
+                }
+            }
+            return Ok(
+                json!({"saved":true,"profile":p,"message":"当前账号已改为本机保存，原钥匙串副本保留"}),
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        bail!("此迁移仅在Mac App可用")
     }
     if ["save_profile", "load_password", "forget_password"].contains(&op.as_str()) {
         if !human {
@@ -893,6 +935,23 @@ fn reply_mode<'a>(
 #[cfg(test)]
 mod mode_tests {
     use super::*;
+    #[tokio::test]
+    async fn mcp_cannot_migrate_or_trigger_gui_auto_connect() {
+        let state = std::sync::Arc::new(BackendState::new(None));
+        for op in ["migrate_password", "auto_connect"] {
+            assert!(
+                dispatch(state.clone(), json!({"op":op}), false)
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(
+            !state
+                .auto_attempted
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+
     #[test]
     fn human_turn_mode_and_legacy_inheritance() {
         assert_eq!(

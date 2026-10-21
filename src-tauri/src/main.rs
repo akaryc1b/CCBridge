@@ -36,7 +36,7 @@ async fn $name(bridge: State<'_, Bridge>, request: Value) -> Result<Value,Value>
 commands! {
  preferences_save=>"preferences_save", auto_connect=>"auto_connect",
  connection_status=>"connection_status", connect_ssh=>"connect", disconnect_ssh=>"disconnect",
- save_profile=>"save_profile", load_profile=>"load_profile", forget_password=>"forget_password",
+ migrate_password=>"migrate_password", save_profile=>"save_profile", load_profile=>"load_profile", forget_password=>"forget_password",
  refresh_runner=>"refresh_runner", install_runner=>"install_runner", set_auto=>"set_auto",
  directory_list=>"directory_list", create_directory=>"create_directory", file_preview=>"file_preview",
  clone_progress=>"clone_progress", clone_repository=>"clone_into_directory", select_workspace=>"select_remote_workspace",
@@ -75,6 +75,18 @@ async fn configure_codex(bridge: State<'_, Bridge>) -> Result<String, String> {
     Ok(r["message"].as_str().unwrap_or("已配置").into())
 }
 
+#[tauri::command]
+fn set_window_theme(window: tauri::WebviewWindow, theme: String) -> Result<(), String> {
+    let value = match theme.as_str() {
+        "light" => Some(tauri::Theme::Light),
+        "dark" => Some(tauri::Theme::Dark),
+        "system" => None,
+        _ => return Err("请选择亮色、暗色或跟随系统".into()),
+    };
+    window
+        .set_theme(value)
+        .map_err(|e| format!("同步窗口主题失败：{e}"))
+}
 #[tauri::command]
 fn codex_configuration_status() -> Result<Value, String> {
     ccbridge::integration::status().map_err(|e| e.to_string())
@@ -211,6 +223,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             initial_state,
+            set_window_theme,
             codex_configuration_status,
             install_location,
             move_to_applications,
@@ -219,6 +232,7 @@ fn main() {
             connection_status,
             connect_ssh,
             disconnect_ssh,
+            migrate_password,
             save_profile,
             load_profile,
             forget_password,
