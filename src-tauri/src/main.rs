@@ -57,7 +57,9 @@ fn initial_state() -> Result<Value, String> {
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(json!({}));
-    Ok(json!({"profile":profile,"profiles":profiles,"version":env!("CARGO_PKG_VERSION")}))
+    Ok(
+        json!({"profile":profile,"profiles":profiles,"version":env!("CARGO_PKG_VERSION"),"architecture":std::env::consts::ARCH}),
+    )
 }
 #[tauri::command]
 async fn configure_codex(bridge: State<'_, Bridge>) -> Result<String, String> {

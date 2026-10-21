@@ -4,9 +4,9 @@
 
 ## 下载与安装
 
-在 [Releases](https://github.com/akaryc1b/CCBridge/releases) 下载 `CCBridge-macos-arm64.zip`，解压后把 `CCBridge.app` 放到 `/Applications`。
+在 [Releases](https://github.com/akaryc1b/CCBridge/releases) 按 Mac 芯片下载 `CCBridge-macos-arm64.zip`（Apple Silicon）或 `CCBridge-macos-x86_64.zip`（Intel），解压后把 `CCBridge.app` 放到 `/Applications`。
 
-- Mac App：Apple Silicon，macOS 12+；Intel Mac 暂无验收版本。
+- Mac App：Apple Silicon / Intel x86_64，macOS 12+。Intel 包已通过 Rosetta CLI 与 SSH/MCP 协议验收；实际 Intel 设备的图形界面仍需在设备上确认。
 - 配套服务器 Runner：Linux x86_64，CI 在 Ubuntu 22.04 构建；Mac arm64 可使用 App 内的同架构程序。
 - App 当前为 ad-hoc 签名，未做 Developer ID 签名或 Apple 公证。更新可能触发 macOS 钥匙串重新授权，授权必须由用户在系统中完成。
 - 服务器必须已有可运行、已认证的 Claude Code。App 不安装 Claude，也不复制模型凭据。
@@ -135,8 +135,8 @@ sh tests/linux-smoke.sh "$PWD/target/release/ccbridge"
 
 推送和 PR 执行 Rust 格式、Linux Runner 测试/烟测、Mac SSH/MCP 集成测试、前端测试与 Tauri 编译。标签 `vX.Y.Z` 与版本一致且所有检查通过后，发布：
 
-- `CCBridge-macos-arm64.zip`：首次安装或应急恢复
-- `CCBridge.app.tar.gz` 与 `.sig`：签名更新包
+- `CCBridge-macos-arm64.zip` / `CCBridge-macos-x86_64.zip`：按芯片首次安装或应急恢复；应用内更新自动按架构选择更新包
+- `CCBridge.app.tar.gz`（ARM）、`CCBridge-macos-x86_64.app.tar.gz`（Intel）与各自 `.sig`：签名更新包
 - `latest.json`：GitHub 更新清单
 - `ccbridge-linux-x86_64`：配套 Runner
 

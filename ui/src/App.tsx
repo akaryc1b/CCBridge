@@ -152,7 +152,8 @@ function Markdown({ text }: { text: string }) {
 }
 export default function App() {
   const [page, setPage] = useState("overview"),
-    [version, setVersion] = useState("0.5.0");
+    [version, setVersion] = useState("0.5.0"),
+    [architecture, setArchitecture] = useState("macOS");
   const [profile, setProfile] = useState<Data>({
       host: "",
       port: 22,
@@ -378,6 +379,13 @@ export default function App() {
         setProfile({ ...profile, ...s.profile });
         setSaved(s.profiles || {});
         setVersion(s.version);
+        setArchitecture(
+          s.architecture === "x86_64"
+            ? "Intel x86_64"
+            : s.architecture === "aarch64"
+              ? "Apple Silicon"
+              : "macOS",
+        );
         await refreshConnection();
       })(),
     );
@@ -1521,7 +1529,7 @@ export default function App() {
                   <div>
                     <h2>CCBridge {version}</h2>
                     <p className="muted">
-                      Apple Silicon · 开源版 · 无需 Developer ID
+                      {architecture} · 开源版 · 无需 Developer ID
                     </p>
                   </div>
                   <Badge variant="outline">稳定通道</Badge>
@@ -1616,7 +1624,7 @@ export default function App() {
                 <dt>密码存储</dt>
                 <dd>macOS 钥匙串 · 沿用现有账号身份</dd>
                 <dt>数据库功能</dt>
-                <dd>暂不开发，已有配置保持不变</dd>
+                <dd>多项目、多连接用途映射 · 固定只读 safe</dd>
                 <dt>发布方式</dt>
                 <dd>开源签名更新 · ad-hoc App 签名 · 无 Developer ID</dd>
               </dl>

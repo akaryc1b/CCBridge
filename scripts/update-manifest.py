@@ -5,7 +5,13 @@ root = pathlib.Path(__file__).resolve().parent.parent
 out = pathlib.Path(sys.argv[1])
 version = json.loads((root / 'src-tauri/tauri.conf.json').read_text())['version']
 assert re.fullmatch(r'\d+\.\d+\.\d+',version)
-signature = (out/'CCBridge.app.tar.gz.sig').read_text().strip()
-assert signature and (out/'CCBridge.app.tar.gz').is_file()
-manifest = {'version':version,'notes':f'CCBridge {version}：修复项目浏览高亮与工作目录混淆、快速切换目录的响应竞争。','pub_date':datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z'),'platforms':{'darwin-aarch64':{'signature':signature,'url':f'https://github.com/akaryc1b/CCBridge/releases/download/v{version}/CCBridge.app.tar.gz'}}}
+arch = sys.argv[2] if len(sys.argv)>2 else 'arm64'
+platform = {'arm64':'darwin-aarch64','x86_64':'darwin-x86_64'}[arch]
+asset = sys.argv[3] if len(sys.argv)>3 else 'CCBridge.app.tar.gz'
+assert '/' not in asset and asset.endswith('.app.tar.gz')
+signature = (out/(asset+'.sig')).read_text().strip()
+assert signature and (out/asset).is_file()
+manifest = {'version':version,'notes':f'CCBridge {version}：修复项目浏览高亮与工作目录混淆、快速切换目录的响应竞争。','pub_date':datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z'),'platforms':{platform:{'signature':signature,'url':f'https://github.com/akaryc1b/CCBridge/releases/download/v{version}/{asset}'}}}
 (out/'latest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
+
+(out/f'latest-{platform}.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
