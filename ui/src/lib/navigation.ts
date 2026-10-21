@@ -17,7 +17,7 @@ export function latestNavigation<T>(
   pending: (value: boolean) => void,
 ) {
   let generation = 0;
-  return async (path: string) => {
+  const navigate = async (path: string) => {
     const id = ++generation;
     pending(true);
     try {
@@ -27,4 +27,9 @@ export function latestNavigation<T>(
       if (id === generation) pending(false);
     }
   };
+  navigate.invalidate = () => {
+    generation++;
+    pending(false);
+  };
+  return navigate;
 }

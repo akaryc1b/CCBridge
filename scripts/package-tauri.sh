@@ -30,3 +30,10 @@ ASSET=CCBridge.app.tar.gz
 cp "$TARGET_DIR/${BUILD_SUBDIR}release/bundle/macos/CCBridge.app.tar.gz" "$DEST/$ASSET"
 cp "$TARGET_DIR/${BUILD_SUBDIR}release/bundle/macos/CCBridge.app.tar.gz.sig" "$DEST/$ASSET.sig"
 python3 scripts/update-manifest.py "$DEST" "$ARCH" "$ASSET"
+
+# Standard first-install experience; updater archives retain their existing URLs.
+STAGE=$(mktemp -d)
+trap 'rm -rf "$STAGE"' EXIT HUP INT TERM
+ditto "$APP" "$STAGE/CCBridge.app"
+ln -s /Applications "$STAGE/Applications"
+hdiutil create -volname CCBridge -srcfolder "$STAGE" -format UDZO -ov "$DEST/CCBridge-macos-$ARCH.dmg"

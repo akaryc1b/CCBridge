@@ -165,6 +165,7 @@ pub struct Profile {
     pub claude: String,
     pub model: String,
     pub remember_password: bool,
+    pub credential_store: String,
     pub allow_auto: bool,
     pub local_repository: String,
     pub search_root: String,
@@ -184,6 +185,7 @@ impl Default for Profile {
             claude: String::new(),
             model: String::new(),
             remember_password: false,
+            credential_store: "keychain".into(),
             allow_auto: false,
             local_repository: String::new(),
             search_root: String::new(),
@@ -215,6 +217,9 @@ impl Profile {
         write_json(&dir.join("profile.json"), self)
     }
     pub fn validate(&self) -> Result<()> {
+        if !self.credential_store.is_empty() {
+            crate::secret_store::validate_store(&self.credential_store)?;
+        }
         if self.host.trim().is_empty() || self.user.trim().is_empty() || self.port == 0 {
             bail!("服务器、用户名和端口不能为空")
         }

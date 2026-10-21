@@ -56,6 +56,31 @@ pub fn snippet(exe: &Path) -> String {
         serde_json::to_string(&exe.to_string_lossy()).unwrap()
     )
 }
+pub fn status() -> Result<serde_json::Value> {
+    let home = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".codex")
+        });
+    let path = home.join("config.toml");
+    if !path.exists() {
+        return Ok(serde_json::json!({"configured":false,"message":"尚未配置"}));
+    }
+    let d = fs::read_to_string(path)?
+        .parse::<DocumentMut>()
+        .context("Codex配置格式无效，未修改")?;
+    let server = d.get("mcp_servers").and_then(|t| t.get("ccbridge"));
+    let valid = server.is_some_and(|s| {
+        s.get("command").and_then(Item::as_str) == executable().to_str()
+            && s.get("args").and_then(Item::as_array).is_some_and(|a| {
+                a.len() == 1 && a.get(0).and_then(toml_edit::Value::as_str) == Some("mcp")
+            })
+            && s.get("enabled").and_then(Item::as_bool) != Some(false)
+    });
+    Ok(
+        serde_json::json!({"configured":valid,"message":if valid {"已配置 · 需要在Codex重新加载MCP"}else{"未配置或入口需要更新"}}),
+    )
+}
 pub fn configure() -> Result<String> {
     let exe = executable();
     let home = std::env::var_os("CODEX_HOME")

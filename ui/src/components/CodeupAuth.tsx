@@ -32,6 +32,7 @@ export function CodeupAuth({
   account,
   url: initialUrl,
   initialScope = "local",
+  onSaved,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -39,7 +40,10 @@ export function CodeupAuth({
   account: string;
   url: string;
   initialScope?: string;
+  onSaved?: () => void;
 }) {
+  const [storage, setStorage] = useState("keychain"),
+    [storageAck, setStorageAck] = useState(false);
   const [scope, setScope] = useState(initialScope),
     [url, setUrl] = useState(initialUrl),
     [username, setUsername] = useState(""),
@@ -71,6 +75,8 @@ export function CodeupAuth({
       .then((r) => {
         if (active) {
           setStatus(r);
+          setStorage(r.storage === "file" ? "file" : "keychain");
+          setStorageAck(false);
           setUsername(r.username || "");
         }
       })
@@ -86,11 +92,18 @@ export function CodeupAuth({
     setBusy(op);
     setError("");
     setMessage(
-      op === "git_access" ? "正在用 Git 检测仓库访问…" : "正在处理钥匙串…",
+      op === "git_access" ? "正在用 Git 检测仓库访问…" : "正在保存认证…",
     );
     try {
       const r = await invoke<Data>(op, {
-        request: { scope, url, username, secret },
+        request: {
+          scope,
+          url,
+          username,
+          secret,
+          storage,
+          storage_ack: storageAck,
+        },
       });
       if (op === "git_access") {
         setMessage(r.message || "仓库可以读取");
@@ -100,10 +113,14 @@ export function CodeupAuth({
         setMessage(
           op === "git_auth_remove"
             ? "已忘记 App 保存的认证；系统原有 Git 凭据助手不受影响"
-            : "认证已保存到 macOS 钥匙串，可检测访问或直接克隆",
+            : "认证已保存，可检测访问或直接克隆",
         );
       }
       setForget(false);
+      if (op === "git_auth_save" && onSaved) {
+        onOpenChange(false);
+        onSaved();
+      }
     } catch (e) {
       setMessage("");
       setError(errorText(e));
@@ -138,8 +155,8 @@ export function CodeupAuth({
         </Select>
         <p className="hint">
           {scope === "remote"
-            ? `当前账号：${account || "尚未连接"}。认证按此 SSH 账号隔离保存于本机钥匙串，仅在执行时经加密 SSH 提供；不写入远端 Git 配置。`
-            : "认证保存于本机钥匙串，仅用于 codeup.aliyun.com。未保存时继续使用原有 Git 凭据助手。"}
+            ? `当前账号：${account || "尚未连接"}。认证按此 SSH 账号隔离保存于本机所选存储，仅在执行时经加密 SSH 提供；不写入远端 Git 配置。`
+            : "认证保存于本机所选存储，仅用于 codeup.aliyun.com。未保存时继续使用原有 Git 凭据助手。"}
         </p>
         <Badge variant="outline">
           {status.configured
@@ -179,6 +196,33 @@ export function CodeupAuth({
         <p className="hint">
           检测只读取远端引用，不克隆、不推送。填写但未保存的凭据也可直接检测；不会显示或回填已保存的令牌。
         </p>
+        <Label>密码保存方式</Label>
+        <Select
+          value={storage}
+          onValueChange={(v) => {
+            setStorage(v);
+            setStorageAck(false);
+          }}
+          disabled={disabled}
+        >
+          <SelectTrigger>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="keychain">系统钥匙串</SelectItem>
+            <SelectItem value="file">本机私有文件</SelectItem>
+          </SelectContent>
+        </Select>
+        {storage === "file" && (
+          <label className="hint">
+            <input
+              type="checkbox"
+              checked={storageAck}
+              onChange={(e) => setStorageAck(e.target.checked)}
+            />{" "}
+            我理解密码以明文保存在当前用户私有目录，同一用户程序仍可读取；切换方式需要重新输入。
+          </label>
+        )}
         {message && (
           <p role="status" className="flex items-center gap-2">
             {busy ? (
@@ -228,10 +272,15 @@ export function CodeupAuth({
             检测仓库访问
           </Button>
           <Button
-            disabled={disabled || !username.trim() || !secret}
+            disabled={
+              disabled ||
+              !username.trim() ||
+              !secret ||
+              (storage === "file" && !storageAck)
+            }
             onClick={() => void run("git_auth_save")}
           >
-            保存认证
+            {onSaved ? "保存并重试克隆" : "保存认证"}
           </Button>
         </DialogFooter>
       </DialogContent>

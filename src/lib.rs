@@ -32,3 +32,7 @@ pub mod workspace_ops;
 
 #[cfg(feature = "bridge")]
 pub mod git_auth;
+
+pub mod secret_store;
+
+pub mod install;

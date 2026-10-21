@@ -27,6 +27,10 @@ case "$path/" in "$home/"*) ;; *) printf 'CCBRIDGE_OUTSIDE_HOME' >&2; exit 42;; 
 pub fn list_script(home: &str, path: &str, hidden: bool) -> Result<String> {
     let mut s = guard(home, path)?;
     s += r#"printf 'CCBRIDGE_FS_V1\000%s\000' "$path"
+if [ -e "$path/.git" ]; then
+ branch=$(git -C "$path" symbolic-ref --short HEAD 2>/dev/null || printf 'detached HEAD')
+ printf 'repository_root\000%s\000' "$branch"
+fi
 count=0
 "#;
     let glob = if hidden {
@@ -57,12 +61,17 @@ pub fn parse_list(out: &[u8]) -> Result<Value> {
     let path = std::str::from_utf8(a[1])?;
     let mut entries = Vec::new();
     let mut truncated = false;
+    let mut branch = None;
     for pair in a[2..].chunks(2) {
         if pair.len() < 2 {
             break;
         }
         let kind = std::str::from_utf8(pair[0])?;
         let name = String::from_utf8_lossy(pair[1]);
+        if kind == "repository_root" {
+            branch = Some(name.to_string());
+            continue;
+        }
         if kind == "truncated" {
             truncated = true;
             continue;
@@ -78,7 +87,7 @@ pub fn parse_list(out: &[u8]) -> Result<Value> {
             v["name"].as_str().unwrap_or("").to_lowercase(),
         )
     });
-    Ok(json!({"path":path,"entries":entries,"truncated":truncated}))
+    Ok(json!({"path":path,"entries":entries,"truncated":truncated,"branch":branch}))
 }
 pub fn mkdir_script(home: &str, parent: &str, name: &str) -> Result<String> {
     if name.is_empty() || [".", ".."].contains(&name) || name.contains(['/', '\0', '\n', '\r']) {

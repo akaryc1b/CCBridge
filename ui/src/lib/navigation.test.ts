@@ -35,3 +35,18 @@ describe("project navigation", () => {
     expect(busy).toEqual([true, true, false]);
   });
 });
+
+it("invalidates a previous account navigation before it can commit", async () => {
+  let finish!: (v: string) => void;
+  const committed: string[] = [];
+  const nav = latestNavigation<string>(
+    () => new Promise((r) => (finish = r)),
+    (v) => committed.push(v),
+    () => {},
+  );
+  const pending = nav("/home/old");
+  nav.invalidate();
+  finish("old files");
+  await pending;
+  expect(committed).toEqual([]);
+});

@@ -34,6 +34,7 @@ macro_rules! commands { ($($name:ident => $op:literal),* $(,)?) => {$ (
 async fn $name(bridge: State<'_, Bridge>, request: Value) -> Result<Value,Value> { call(&bridge,$op,request).await }
 )*}; }
 commands! {
+ preferences_save=>"preferences_save", auto_connect=>"auto_connect",
  connection_status=>"connection_status", connect_ssh=>"connect", disconnect_ssh=>"disconnect",
  save_profile=>"save_profile", load_profile=>"load_profile", forget_password=>"forget_password",
  refresh_runner=>"refresh_runner", install_runner=>"install_runner", set_auto=>"set_auto",
@@ -60,17 +61,53 @@ fn initial_state() -> Result<Value, String> {
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(json!({}));
     Ok(
-        json!({"profile":profile,"profiles":profiles,"version":env!("CARGO_PKG_VERSION"),"architecture":std::env::consts::ARCH}),
+        json!({"preferences":std::fs::read(dir.join("preferences.json")).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok()).unwrap_or(json!({})),"data_directory":dir,"profile":profile,"profiles":profiles,"version":env!("CARGO_PKG_VERSION"),"architecture":std::env::consts::ARCH}),
     )
 }
 #[tauri::command]
 async fn configure_codex(bridge: State<'_, Bridge>) -> Result<String, String> {
+    if ccbridge::install::location()["installed"] != true {
+        return Err("请先从应用程序打开CCBridge，再写入MCP配置".into());
+    }
     let r = call(&bridge, "configure_codex", json!({}))
         .await
         .map_err(|e| e["message"].as_str().unwrap_or("配置失败").to_string())?;
     Ok(r["message"].as_str().unwrap_or("已配置").into())
 }
 
+#[tauri::command]
+fn codex_configuration_status() -> Result<Value, String> {
+    ccbridge::integration::status().map_err(|e| e.to_string())
+}
+#[tauri::command]
+fn install_location() -> Value {
+    ccbridge::install::location()
+}
+#[tauri::command]
+async fn move_to_applications(
+    app: tauri::AppHandle,
+    bridge: State<'_, Bridge>,
+) -> Result<(), String> {
+    call(&bridge, "prepare_install", json!({}))
+        .await
+        .map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        let result = tauri::async_runtime::spawn_blocking(ccbridge::install::install)
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Err(e) = result {
+            let _ = call(&bridge, "cancel_update", json!({})).await;
+            return Err(e.to_string());
+        }
+        std::process::Command::new("/usr/bin/open")
+            .arg("/Applications/CCBridge.app")
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        app.exit(0);
+    }
+    Ok(())
+}
 #[tauri::command]
 async fn check_update(
     app: tauri::AppHandle,
@@ -132,6 +169,9 @@ async fn apply_update(
     bridge: State<'_, Bridge>,
     state: State<'_, PendingUpdate>,
 ) -> Result<Value, String> {
+    if ccbridge::install::location()["installed"] != true {
+        return Err("请先移到应用程序文件夹，再安装更新".into());
+    }
     call(&bridge, "prepare_update", json!({}))
         .await
         .map_err(|e| e["message"].as_str().unwrap_or("更新排空失败").to_string())?;
@@ -171,6 +211,11 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             initial_state,
+            codex_configuration_status,
+            install_location,
+            move_to_applications,
+            preferences_save,
+            auto_connect,
             connection_status,
             connect_ssh,
             disconnect_ssh,

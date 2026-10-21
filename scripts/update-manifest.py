@@ -11,7 +11,7 @@ asset = sys.argv[3] if len(sys.argv)>3 else 'CCBridge.app.tar.gz'
 assert '/' not in asset and asset.endswith('.app.tar.gz')
 signature = (out/(asset+'.sig')).read_text().strip()
 assert signature and (out/asset).is_file()
-manifest = {'version':version,'notes':f'CCBridge {version}：Codeup 双端认证、Git 分支和可恢复文件管理；优化构建缓存与分架构自动发布。','pub_date':datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z'),'platforms':{platform:{'signature':signature,'url':f'https://github.com/akaryc1b/CCBridge/releases/download/v{version}/{asset}'}}}
+manifest = {'version':version,'notes':f'CCBridge {version}：全新工作台、文件和项目会话布局，亮暗主题；DMG安装、可选本机密码保存与启动自动连接。','pub_date':datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00','Z'),'platforms':{platform:{'signature':signature,'url':f'https://github.com/akaryc1b/CCBridge/releases/download/v{version}/{asset}'}}}
 (out/'latest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
 
 (out/f'latest-{platform}.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')

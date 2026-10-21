@@ -94,24 +94,42 @@ fn metadata() -> Result<BTreeMap<String, String>> {
         Ok(BTreeMap::new())
     }
 }
+fn storage(k: &str) -> Result<String> {
+    let f = app_dir()?.join("git-auth-stores.json");
+    let m: BTreeMap<String, String> = if f.exists() {
+        read_json(&f)?
+    } else {
+        BTreeMap::new()
+    };
+    Ok(m.get(k).cloned().unwrap_or_else(|| "keychain".into()))
+}
 pub fn status(scope: &str, p: &Profile) -> Result<Value> {
     let user = metadata()?.get(&key(scope, p)?).cloned();
     Ok(
-        json!({"scope":scope,"configured":user.is_some(),"username":user,"host":"codeup.aliyun.com","storage":"macOS 钥匙串；远端凭据按 SSH 账号隔离"}),
+        json!({"scope":scope,"configured":user.is_some(),"username":user,"host":"codeup.aliyun.com","storage":storage(&key(scope,p)?)?}),
     )
 }
 #[cfg(target_os = "macos")]
-pub async fn save(scope: &str, p: &Profile, c: Credential) -> Result<Value> {
+pub async fn save(scope: &str, p: &Profile, c: Credential, store: &str) -> Result<Value> {
     c.validate()?;
     let key = key(scope, p)?;
-    let k = key.clone();
+    crate::secret_store::validate_store(store)?;
     let username = c.username.clone();
-    crate::credentials::call(move || {
-        keyring::Entry::new("dev.ccbridge.git.codeup", &k)?
-            .set_password(&serde_json::to_string(&c)?)?;
-        Ok(())
-    })
+    crate::secret_store::set(
+        store,
+        "dev.ccbridge.git.codeup",
+        &key,
+        serde_json::to_string(&c)?,
+    )
     .await?;
+    let f = app_dir()?.join("git-auth-stores.json");
+    let mut stores: BTreeMap<String, String> = if f.exists() {
+        read_json(&f)?
+    } else {
+        BTreeMap::new()
+    };
+    stores.insert(key.clone(), store.into());
+    write_json(&f, &stores)?;
     let mut m = metadata()?;
     m.insert(key, username);
     write_json(&app_dir()?.join("git-auth.json"), &m)?;
@@ -123,27 +141,17 @@ pub async fn load(scope: &str, p: &Profile) -> Result<Option<Credential>> {
     if !metadata()?.contains_key(&k) {
         return Ok(None);
     }
-    crate::credentials::call(move || {
-        let encoded = keyring::Entry::new("dev.ccbridge.git.codeup", &k)?
-            .get_password()
-            .context("无法读取 Codeup 认证，请在 App 重新保存或处理钥匙串授权")?;
-        let c: Credential = serde_json::from_str(&encoded)?;
-        c.validate()?;
-        Ok(Some(c))
-    })
-    .await
+    let encoded = crate::secret_store::get(&storage(&k)?, "dev.ccbridge.git.codeup", &k)
+        .await
+        .context("无法读取Codeup认证，请检查保存位置")?;
+    let c: Credential = serde_json::from_str(&encoded)?;
+    c.validate()?;
+    Ok(Some(c))
 }
 #[cfg(target_os = "macos")]
 pub async fn remove(scope: &str, p: &Profile) -> Result<Value> {
     let k = key(scope, p)?;
-    let key = k.clone();
-    crate::credentials::call(move || {
-        match keyring::Entry::new("dev.ccbridge.git.codeup", &key)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    })
-    .await?;
+    crate::secret_store::forget("dev.ccbridge.git.codeup", &k).await?;
     let mut m = metadata()?;
     m.remove(&k);
     write_json(&app_dir()?.join("git-auth.json"), &m)?;
@@ -154,7 +162,7 @@ pub async fn load(_scope: &str, _p: &Profile) -> Result<Option<Credential>> {
     Ok(None)
 }
 #[cfg(not(target_os = "macos"))]
-pub async fn save(_scope: &str, _p: &Profile, _c: Credential) -> Result<Value> {
+pub async fn save(_scope: &str, _p: &Profile, _c: Credential, _store: &str) -> Result<Value> {
     bail!("认证保存仅在 macOS App 内可用")
 }
 #[cfg(not(target_os = "macos"))]

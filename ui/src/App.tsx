@@ -1,6 +1,9 @@
+import { Workbench } from "@/components/Workbench";
+import { DropdownMenu as Menu } from "radix-ui";
 import { CodeupAuth } from "@/components/CodeupAuth";
 import {
   FileActions,
+  FileContextMenu,
   FileOperation,
   TrashDialog,
   BranchDialog,
@@ -30,6 +33,14 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
+  Sun,
+  Moon,
+  Monitor,
+  MoreHorizontal,
+  GitBranch,
+  Search,
+  Command,
+  FolderOpen,
   Server,
   FolderGit2,
   MessagesSquare,
@@ -86,12 +97,12 @@ import {
 import { Progress } from "@/components/ui/progress";
 type Data = Record<string, any>;
 const pages = [
-  ["overview", "概览", Activity],
-  ["servers", "服务器", Server],
+  ["overview", "工作台", Activity],
   ["projects", "项目与文件", FolderGit2],
-  ["chat", "任务与对话", MessagesSquare],
+  ["chat", "会话", MessagesSquare],
   ["databases", "数据库", Database],
-  ["codex", "Codex 接入", Cable],
+  ["servers", "服务器", Server],
+  ["codex", "Codex / MCP", Cable],
   ["updates", "应用更新", Download],
   ["settings", "设置", Settings],
 ] as const;
@@ -208,6 +219,43 @@ export default function App() {
     [fileOperation, setFileOperation] = useState<Data | null>(null),
     [trashOpen, setTrashOpen] = useState(false),
     [branchesOpen, setBranchesOpen] = useState(false);
+  const [modelEditing, setModelEditing] = useState(false);
+  const [mcpStatus, setMcpStatus] = useState<Data>({});
+  const [theme, setTheme] = useState(
+    localStorage.getItem("ccbridge-theme") || "system",
+  );
+  const [preferences, setPreferences] = useState<Data>({});
+  const [installLocation, setInstallLocation] = useState<Data>({
+    installed: true,
+  });
+  const [storageAck, setStorageAck] = useState(false);
+  const [utilityDialog, setUtilityDialog] = useState("");
+  const [draftProject, setDraftProject] = useState("");
+  const [fileFilter, setFileFilter] = useState("");
+  const [sessionFilter, setSessionFilter] = useState("");
+  const [dataDirectory, setDataDirectory] = useState("");
+  const autoStarted = useRef(false);
+  const composerStates = useRef<Record<string, Data>>({});
+  useEffect(() => {
+    const media = matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => {
+      document.documentElement.dataset.theme =
+        theme === "system" ? (media.matches ? "dark" : "light") : theme;
+      document.documentElement.classList.toggle(
+        "dark",
+        document.documentElement.dataset.theme === "dark",
+      );
+    };
+    apply();
+    localStorage.setItem("ccbridge-theme", theme);
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [theme]);
+  function startDraft(project: string) {
+    switchConversation("");
+    setDraftProject(project);
+    setPage("chat");
+  }
   const drafts = useRef<Record<string, string>>({});
   const messagesRef = useRef<HTMLDivElement>(null),
     following = useRef(true);
@@ -219,12 +267,19 @@ export default function App() {
   function switchConversation(id: string) {
     following.current = true;
     drafts.current[selected || "__new__"] = draft;
+    composerStates.current[selected || "__new__"] = {
+      mode,
+      modelPolicy,
+      model,
+    };
     setDraft(drafts.current[id || "__new__"] || "");
     setSelected(id);
     setNewConversation(!id);
-    setModelPolicy("inherit");
+    const stored = composerStates.current[id || "__new__"];
+    setModelPolicy(stored?.modelPolicy || "inherit");
+    setModel(stored?.model || "");
     const previous = details[id] || tasks.find((t) => t.task_id === id);
-    if (previous) setMode(previous.mode);
+    setMode(stored?.mode || previous?.mode || "automatic");
   }
   const requestSequence = useRef(new Map<string, number>());
   const inflight = useRef(new Map<string, number>()),
@@ -282,8 +337,8 @@ export default function App() {
           ? String((e as Data).message)
           : String(e);
       if (requestSequence.current.get(command) === sequence) {
-        setErrors((old) => ({ ...old, [command]: message }));
-        if (!quiet) toast.error(message);
+        setErrors((old) => ({ ...old, [command]: { page, message } }));
+        // Render once beside the affected page; callers with inline errors own their feedback.
       }
       throw e;
     } finally {
@@ -324,7 +379,9 @@ export default function App() {
       const message = await invoke<string>("configure_codex");
       setIntegration(message);
       setIntegrationState("success");
-      toast.success(message);
+      invoke<Data>("codex_configuration_status")
+        .then(setMcpStatus)
+        .catch(() => {});
     } catch (e) {
       const message =
         typeof e === "object" && e !== null && "message" in e
@@ -332,7 +389,6 @@ export default function App() {
           : String(e);
       setIntegration(`配置失败：${message}`);
       setIntegrationState("error");
-      toast.error(`配置失败：${message}`);
     }
   }
   async function cloneRepositories() {
@@ -402,6 +458,34 @@ export default function App() {
       },
       setBrowsing,
     );
+  const browserAccount = useRef("");
+  useEffect(() => {
+    if (!connection.connected) return;
+    const identity = JSON.stringify([
+      connection.profile?.host,
+      connection.profile?.port,
+      connection.profile?.user,
+    ]);
+    if (browserAccount.current && browserAccount.current !== identity) {
+      browserNavigation.current?.invalidate();
+      setListing({ entries: [] });
+      setPath("");
+      setProjects([]);
+      setTasks([]);
+      setDetails({});
+      setSelected("");
+      setDraft("");
+      setPreview("");
+      drafts.current = {};
+      composerStates.current = {};
+    }
+    browserAccount.current = identity;
+  }, [
+    connection.connected,
+    connection.profile?.host,
+    connection.profile?.port,
+    connection.profile?.user,
+  ]);
   const previewGeneration = useRef(0);
   async function previewFile(p: string) {
     const id = ++previewGeneration.current;
@@ -467,6 +551,14 @@ export default function App() {
         setProfile({ ...profile, ...s.profile });
         setSaved(s.profiles || {});
         setVersion(s.version);
+        setPreferences(s.preferences || {});
+        setDataDirectory(s.data_directory || "");
+        invoke<Data>("codex_configuration_status")
+          .then(setMcpStatus)
+          .catch((e) => setMcpStatus({ message: String(e) }));
+        invoke<Data>("install_location")
+          .then(setInstallLocation)
+          .catch(() => {});
         setArchitecture(
           s.architecture === "x86_64"
             ? "Intel x86_64"
@@ -474,7 +566,19 @@ export default function App() {
               ? "Apple Silicon"
               : "macOS",
         );
-        await refreshConnection();
+        const c = await refreshConnection();
+        if (!c?.connected && !autoStarted.current) {
+          autoStarted.current = true;
+          try {
+            const result = await request("auto_connect");
+            if (result?.connected) {
+              setConnection(result);
+              setProfile(result.profile);
+            }
+          } catch {
+            /* single attempt; visible page error remains */
+          }
+        }
       })(),
     );
   }, []);
@@ -545,7 +649,11 @@ export default function App() {
     );
   async function connect() {
     try {
-      const c = await request("connect_ssh", { profile, password });
+      const c = await request("connect_ssh", {
+        profile,
+        password,
+        storage_ack: storageAck,
+      });
       if (c) {
         setPassword("");
         setConnection(c);
@@ -563,7 +671,16 @@ export default function App() {
   }
   async function send() {
     const prompt = draft.trim();
-    if (!prompt) return;
+    if (
+      !prompt ||
+      !connected ||
+      busy.has("task_start") ||
+      busy.has("task_reply") ||
+      (task && !newConversation && active(task)) ||
+      (mode === "automatic" && !profile.allow_auto) ||
+      (modelPolicy === "explicit" && !model.trim())
+    )
+      return;
     const continuing = task && !newConversation;
     const args: Data = {
       prompt,
@@ -574,10 +691,12 @@ export default function App() {
     if (modelPolicy === "explicit") args.model = model.trim();
     if (continuing) args.reply_to = task.task_id;
     else if (
-      currentProject &&
-      projects.some((p) => (p.path || p.workspace) === currentProject)
+      (draftProject || currentProject) &&
+      projects.some(
+        (p) => (p.path || p.workspace) === (draftProject || currentProject),
+      )
     )
-      args.remote_project = currentProject;
+      args.remote_project = draftProject || currentProject;
     const signature = JSON.stringify({
       ...args,
       reply_to: continuing ? task.task_id : null,
@@ -592,6 +711,7 @@ export default function App() {
       drafts.current[selected || "__new__"] = "";
       setDraft("");
       setNewConversation(false);
+      setModelEditing(false);
       setSelected(r.task_id);
       setDetails((d) => ({ ...d, [r.task_id]: r }));
       await refreshTasks();
@@ -605,7 +725,10 @@ export default function App() {
       setUpdatePhase(r.available ? "available" : "current");
     } catch (e) {
       setUpdatePhase("failed");
-      setErrors((x) => ({ ...x, update: String(e) }));
+      setErrors((x) => ({
+        ...x,
+        update: { page: "updates", message: String(e) },
+      }));
     }
   }
   async function downloadUpdate() {
@@ -615,11 +738,15 @@ export default function App() {
       setUpdatePhase("verified");
     } catch (e) {
       setUpdatePhase("failed");
-      setErrors((x) => ({ ...x, update: String(e) }));
+      setErrors((x) => ({
+        ...x,
+        update: { page: "updates", message: String(e) },
+      }));
     }
   }
   const errorEntries = Object.entries(errors).filter(
-    ([key]) =>
+    ([key, value]) =>
+      (!value?.page || value.page === page) &&
       !key.startsWith("database_") &&
       !["task_list", "task_status", "project_list"].includes(key),
   );
@@ -638,11 +765,9 @@ export default function App() {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-icon">
-            <Terminal size={19} />
+            <Command size={19} />
           </span>
-          <div>
-            CCBridge<small>远端开发，近在眼前</small>
-          </div>
+          <div>CCBridge</div>
         </div>
         <nav>
           {pages.map(([id, label, Icon]) => (
@@ -666,52 +791,144 @@ export default function App() {
               {connected ? `${profile.user}@${profile.host}` : "尚未连接服务器"}
             </span>
           </div>
-          <small>CCBridge {version} · 开源版</small>
+          <div className="theme-switch">
+            <span>外观</span>
+            <div>
+              {(
+                [
+                  ["light", Sun, "亮色"],
+                  ["dark", Moon, "暗色"],
+                  ["system", Monitor, "跟随系统"],
+                ] as const
+              ).map(([v, Icon, label]) => (
+                <Button
+                  key={v}
+                  aria-label={label}
+                  title={label}
+                  variant="ghost"
+                  className={theme === v ? "chosen" : ""}
+                  onClick={() => setTheme(v)}
+                >
+                  <Icon size={14} />
+                </Button>
+              ))}
+            </div>
+          </div>
         </div>
       </aside>
       <main>
         <header>
-          <div>
-            <span className="breadcrumb">工作空间</span>
-            <ChevronRight size={14} />
-            <strong>{pages.find((p) => p[0] === page)?.[1]}</strong>
-          </div>
-          <Badge variant={connected ? "secondary" : "outline"}>
-            <span className={connected ? "dot live" : "dot"} />
-            {connected ? "SSH 已连接" : "未连接"}
-          </Badge>
-        </header>
-        <div className={`page ${page === "chat" ? "chat-page" : ""}`}>
-          <div className="page-heading">
-            <div>
-              <h1>{pages.find((p) => p[0] === page)?.[1]}</h1>
-              <p>
-                {
-                  {
-                    overview: "连接、项目与执行状态，一目了然。",
-                    servers: "保存你的 SSH 账号，在当前用户目录内独立运行。",
-                    projects: "选择远端项目，浏览文件，或克隆已有仓库。",
-                    chat: "以会话阅读结果，按轮次控制模型与执行权限。",
-                    databases: "为每个项目配置多个只读数据库用途。",
-                    codex: "一次配置，在其他 Codex 会话中直接派发和续聊。",
-                    updates: "从 GitHub 获取签名更新，无需重新下载安装包。",
-                    settings: "本地偏好与兼容信息。",
-                  }[page]
-                }
-              </p>
-            </div>
-            {page === "chat" && (
-              <Button
-                onClick={() => {
-                  switchConversation("");
-                  setModelPolicy("inherit");
-                }}
-              >
-                <Plus size={16} />
-                新对话
+          <h1>{pages.find((p) => p[0] === page)?.[1]}</h1>
+          <div className="page-actions">
+            {(page === "overview" || page === "chat") && (
+              <Button onClick={() => startDraft(currentProject)}>
+                <Plus size={15} />
+                新任务
               </Button>
             )}
+            {page === "projects" && (
+              <>
+                <Button
+                  variant="outline"
+                  disabled={!locationReady}
+                  onClick={() => setBranchesOpen(true)}
+                >
+                  <GitBranch size={15} />
+                  {listing.branch || "分支"}
+                </Button>
+                <Menu.Root>
+                  <Menu.Trigger asChild>
+                    <Button variant="outline" disabled={!locationReady}>
+                      <Plus size={15} />
+                      新建
+                    </Button>
+                  </Menu.Trigger>
+                  <Menu.Portal>
+                    <Menu.Content className="context-menu" sideOffset={5}>
+                      <Menu.Item
+                        onSelect={() =>
+                          setFileOperation({
+                            action: "create",
+                            entry: { path: listedPath, name: "" },
+                          })
+                        }
+                      >
+                        文件
+                      </Menu.Item>
+                      <Menu.Item onSelect={() => setUtilityDialog("folder")}>
+                        文件夹
+                      </Menu.Item>
+                    </Menu.Content>
+                  </Menu.Portal>
+                </Menu.Root>
+                <Button
+                  disabled={!locationReady}
+                  onClick={() => setCloneOpen(true)}
+                >
+                  克隆仓库
+                </Button>
+                <Menu.Root>
+                  <Menu.Trigger asChild>
+                    <Button aria-label="更多项目操作" variant="ghost">
+                      <MoreHorizontal size={17} />
+                    </Button>
+                  </Menu.Trigger>
+                  <Menu.Portal>
+                    <Menu.Content className="context-menu" sideOffset={5}>
+                      <Menu.Item onSelect={() => setUtilityDialog("project")}>
+                        添加为项目…
+                      </Menu.Item>
+                      <Menu.Item
+                        disabled={
+                          !locationReady || listedPath === currentProject
+                        }
+                        onSelect={() =>
+                          safe(
+                            request("select_workspace", {
+                              path: listedPath,
+                            }).then(refreshConnection),
+                          )
+                        }
+                      >
+                        设为MCP默认项目
+                      </Menu.Item>
+                      <Menu.Item onSelect={() => setTrashOpen(true)}>
+                        回收区
+                      </Menu.Item>
+                      <Menu.Item
+                        onSelect={() => {
+                          setAuthScope(localAuth ? "local" : "remote");
+                          setAuthOpen(true);
+                        }}
+                      >
+                        Codeup认证
+                      </Menu.Item>
+                    </Menu.Content>
+                  </Menu.Portal>
+                </Menu.Root>
+              </>
+            )}
           </div>
+        </header>
+        <div
+          className={`page page-${page} ${page === "chat" ? "chat-page" : ""}`}
+        >
+          {!installLocation.installed && (
+            <div className="notice">
+              当前App不在“应用程序”中。
+              <Button
+                onClick={() =>
+                  safe(
+                    invoke("move_to_applications").catch((e) =>
+                      toast.error(String(e)),
+                    ),
+                  )
+                }
+              >
+                安装到Applications并重新打开
+              </Button>
+            </div>
+          )}
           {!connected &&
             page !== "servers" &&
             page !== "updates" &&
@@ -732,7 +949,7 @@ export default function App() {
             <div className="error-box" role="alert">
               {errorEntries.map(([k, v]) => (
                 <div key={k}>
-                  <span>{String(v)}</span>
+                  <span>{String(v?.message || v)}</span>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -751,65 +968,26 @@ export default function App() {
             </div>
           )}
           {page === "overview" && (
-            <>
-              <div className="stats">
-                <Panel title="SSH 连接">
-                  <div className="metric">
-                    {connected ? "已连接" : "未连接"}
-                  </div>
-                  <p className="muted">
-                    {connected
-                      ? `${profile.user} · ${profile.host}:${profile.port}`
-                      : "连接你自己的服务器账号"}
-                  </p>
-                </Panel>
-                <Panel title="远端项目">
-                  <div className="metric">
-                    {projects.length}
-                    <small>个项目</small>
-                  </div>
-                  <p className="muted truncate">
-                    {currentProject || "尚未选择工作区"}
-                  </p>
-                </Panel>
-                <Panel title="进行中的任务">
-                  <div className="metric">
-                    {tasks.filter(active).length}
-                    <small>个任务</small>
-                  </div>
-                  <p className="muted">
-                    {tasks.filter((t) => t.state === "waiting_approval").length}{" "}
-                    个等待审批
-                  </p>
-                </Panel>
-              </div>
-              <Panel
-                title="开始远端协作"
-                description="项目目录和已有会话相互独立，切换工作区不会改变旧任务。"
-              >
-                <div className="quick-actions">
-                  <Button variant="outline" onClick={() => setPage("projects")}>
-                    <FolderGit2 />
-                    选择项目
-                  </Button>
-                  <Button onClick={() => setPage("chat")}>
-                    <MessagesSquare />
-                    打开对话
-                  </Button>
-                  <Button variant="outline" onClick={() => setPage("codex")}>
-                    <Cable />
-                    配置 Codex
-                  </Button>
-                </div>
-              </Panel>
-            </>
+            <Workbench
+              projects={projects}
+              tasks={tasks}
+              currentProject={currentProject}
+              connection={connection}
+              onFiles={(p) => {
+                setPage("projects");
+                safe(browse(p));
+              }}
+              onNew={startDraft}
+              onSession={(id) => {
+                setPage("chat");
+                switchConversation(id);
+              }}
+              onPage={setPage}
+            />
           )}
           {page === "servers" && (
             <>
-              <Panel
-                title="当前服务器"
-                description="SSH 端口可修改；22 只是 SSH 的标准端口，不是固定要求。"
-              >
+              <Panel title="当前服务器">
                 <div className="server-row">
                   <div className="server-symbol">
                     <Server />
@@ -886,10 +1064,27 @@ export default function App() {
                   </Field>
                 )}
               </Panel>
-              <Panel
-                title="远端运行环境"
-                description="连接 SSH 不等于 Claude Code 和 Runner 已就绪。"
-              >
+              <Panel title="执行权限">
+                <div className="switch-row">
+                  <Switch
+                    checked={profile.allow_auto === true}
+                    onCheckedChange={(v) =>
+                      v
+                        ? setAutoConfirm(true)
+                        : safe(
+                            request("set_auto", { allow: false }).then(
+                              refreshConnection,
+                            ),
+                          )
+                    }
+                  />
+                  <div>
+                    <Label>允许全自动任务</Label>
+                    <p className="muted">App 与 MCP 可按任务请求全自动</p>
+                  </div>
+                </div>
+              </Panel>{" "}
+              <Panel title="远端运行环境">
                 <div className="environment-row">
                   <div>
                     <Label>当前账号 Runner</Label>
@@ -975,89 +1170,60 @@ export default function App() {
                   disabled={busy.has("save_profile")}
                   onClick={() =>
                     safe(
-                      request("save_profile", { profile, password }).then(() =>
-                        toast.success("默认模型已保存"),
-                      ),
+                      request("save_profile", {
+                        profile,
+                        password,
+                        storage_ack: storageAck,
+                      }).then(() => toast.success("默认模型已保存")),
                     )
                   }
                 >
                   保存默认模型
                 </Button>
               </Panel>
-              <Panel
-                title="执行权限"
-                description="允许全自动与每轮实际模式分别设置。全自动不扩大你派发任务的范围。"
-              >
-                <div className="switch-row">
-                  <Switch
-                    checked={profile.allow_auto === true}
-                    onCheckedChange={(v) =>
-                      v
-                        ? setAutoConfirm(true)
-                        : safe(
-                            request("set_auto", { allow: false }).then(
-                              refreshConnection,
-                            ),
-                          )
-                    }
-                  />
-                  <div>
-                    <Label>允许选择全自动模式</Label>
-                    <p className="muted">
-                      跳过 Claude 工具审批，可使用该 SSH
-                      账号的文件、命令和网络权限。
-                    </p>
-                  </div>
-                </div>
-              </Panel>
             </>
           )}
           {page === "projects" && (
             <div className="project-grid">
-              <Panel
-                title="已注册项目"
-                description="每个项目有独立目录，可包含多个 Git 仓库。"
-              >
-                <div className="stack">
-                  {projects.map((p) => (
-                    <button
-                      className={`project-item ${(p.path || p.workspace) === browsedProject ? "active" : ""}`}
-                      key={p.path || p.workspace}
-                      onClick={() => safe(browse(p.path || p.workspace))}
-                    >
-                      <FolderGit2 size={20} />
-                      <div>
-                        <strong>
-                          {p.name}
-                          {(p.path || p.workspace) === currentProject && (
-                            <Badge variant="secondary">新任务目录</Badge>
-                          )}
-                        </strong>
-                        <small>{p.path || p.workspace}</small>
-                      </div>
-                      <ChevronRight size={15} />
-                    </button>
-                  ))}
-                  {!projects.length && (
-                    <p className="empty">连接后选择文件夹并注册为项目。</p>
-                  )}
+              <aside className="project-sidebar">
+                <div className="section-title">
+                  <span>项目</span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="添加项目"
+                    onClick={() => setUtilityDialog("project")}
+                  >
+                    <Plus size={14} />
+                  </Button>
                 </div>
+                {projects.map((p) => (
+                  <button
+                    className={`project-item ${p.path === browsedProject ? "active" : ""}`}
+                    key={p.path}
+                    onClick={() => safe(browse(p.path))}
+                  >
+                    <FolderOpen size={17} />
+                    <div>
+                      <strong>{p.name}</strong>
+                      {p.path === currentProject && <small>MCP默认项目</small>}
+                    </div>
+                  </button>
+                ))}
+                <div className="section-divider" />
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   disabled={!connected}
                   onClick={() =>
                     safe(browse(connection.environment?.home || ""))
                   }
                 >
                   <Folder size={16} />
-                  浏览账号 HOME
+                  账号 HOME
                 </Button>
-              </Panel>
-              <Panel
-                title="远端文件"
-                description={`当前新任务工作目录：${currentProject || "尚未设置"}。浏览文件不会改变已有会话。`}
-              >
-                <div className="toolbar">
+              </aside>
+              <section className="file-workspace">
+                <div className="path-toolbar">
                   <Input
                     aria-label="远端目录"
                     value={path}
@@ -1065,193 +1231,128 @@ export default function App() {
                     onKeyDown={(e) => e.key === "Enter" && safe(browse(path))}
                   />
                   <Button
-                    variant="outline"
-                    disabled={!connected}
-                    onClick={() => safe(browse(path))}
-                  >
-                    <RefreshCw size={16} />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={!path}
+                    aria-label="上一级"
+                    variant="ghost"
+                    disabled={!locationReady}
                     onClick={() =>
                       safe(browse(path.slice(0, path.lastIndexOf("/")) || "/"))
                     }
                   >
-                    <ArrowUp size={16} />
+                    <ArrowUp size={15} />
                   </Button>
+                  <Button
+                    aria-label="刷新目录"
+                    variant="ghost"
+                    disabled={!connected}
+                    onClick={() => safe(browse(path))}
+                  >
+                    <RefreshCw className={browsing ? "spin" : ""} size={15} />
+                  </Button>
+                  <Input
+                    className="file-filter"
+                    aria-label="筛选文件"
+                    placeholder="筛选文件…"
+                    value={fileFilter}
+                    onChange={(e) => setFileFilter(e.target.value)}
+                  />
                 </div>
-                <p className="hint" role="status">
-                  {browsing
-                    ? `正在打开：${path}`
-                    : listedPath
-                      ? `当前浏览：${listedPath}`
-                      : "选择项目或输入目录并回车"}
-                </p>
                 <div className="file-list" aria-busy={browsing}>
-                  {(listing.entries || []).map((e: Data) => (
-                    <div key={e.path} className="file-row">
-                      <button
+                  <div className="file-head">
+                    <span>名称</span>
+                    <span>类型</span>
+                  </div>
+                  {(listing.entries || [])
+                    .filter((e: Data) =>
+                      e.name.toLowerCase().includes(fileFilter.toLowerCase()),
+                    )
+                    .map((e: Data) => (
+                      <FileContextMenu
                         key={e.path}
-                        disabled={!locationReady}
-                        onClick={() =>
-                          ["directory", "repository"].includes(e.kind)
-                            ? safe(browse(e.path))
-                            : safe(previewFile(e.path))
-                        }
-                      >
-                        {e.kind === "file" ? (
-                          <FileText size={17} />
-                        ) : (
-                          <Folder size={17} />
-                        )}
-                        <span>{e.name}</span>
-                        {e.kind === "repository" && (
-                          <Badge variant="secondary">Git</Badge>
-                        )}
-                        <ChevronRight size={14} />
-                      </button>
-                      <FileActions
                         entry={e}
                         disabled={!locationReady}
                         onAction={(action, entry) =>
                           setFileOperation({ action, entry })
                         }
-                      />
-                    </div>
-                  ))}
+                      >
+                        <div
+                          className="file-row"
+                          onKeyDown={(event) => {
+                            if (!locationReady) return;
+                            if (event.key === "F2") {
+                              event.preventDefault();
+                              setFileOperation({ action: "rename", entry: e });
+                            } else if (
+                              event.metaKey &&
+                              event.key === "Backspace"
+                            ) {
+                              event.preventDefault();
+                              setFileOperation({ action: "trash", entry: e });
+                            }
+                          }}
+                        >
+                          <button
+                            disabled={!locationReady}
+                            onClick={() =>
+                              ["directory", "repository"].includes(e.kind)
+                                ? safe(browse(e.path))
+                                : safe(previewFile(e.path))
+                            }
+                          >
+                            {e.kind === "file" ? (
+                              <FileText size={17} />
+                            ) : (
+                              <Folder size={17} />
+                            )}
+                            <span>{e.name}</span>
+                            {e.kind === "repository" && (
+                              <Badge variant="outline">Git</Badge>
+                            )}
+                            <small>
+                              {e.kind === "file"
+                                ? "文件"
+                                : e.kind === "symlink"
+                                  ? "链接"
+                                  : "文件夹"}
+                            </small>
+                          </button>
+                          <FileActions
+                            entry={e}
+                            disabled={!locationReady}
+                            onAction={(action, entry) =>
+                              setFileOperation({ action, entry })
+                            }
+                          />
+                        </div>
+                      </FileContextMenu>
+                    ))}
                   {!listing.entries?.length && (
-                    <p className="empty">选择项目或打开 HOME 浏览目录。</p>
+                    <p className="empty">
+                      {browsing
+                        ? "正在打开…"
+                        : listedPath
+                          ? "空文件夹"
+                          : "选择项目或输入目录"}
+                    </p>
                   )}
                 </div>
-                {listing.truncated && (
-                  <p className="hint">目录超过 1000 项，当前显示已截断。</p>
-                )}
-                <div className="toolbar flex-wrap">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setAuthScope(localAuth ? "local" : "remote");
-                      setAuthOpen(true);
-                    }}
-                  >
-                    Codeup 认证 / 检测
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={!locationReady}
-                    onClick={() => setBranchesOpen(true)}
-                  >
-                    Git 分支
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={!connected}
-                    onClick={() => setTrashOpen(true)}
-                  >
-                    回收区
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={!locationReady}
-                    onClick={() =>
-                      setFileOperation({
-                        action: "create",
-                        entry: { path: listedPath, name: "" },
-                      })
-                    }
-                  >
-                    新建文件
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={!locationReady}
-                    onClick={() => setCloneOpen(true)}
-                  >
-                    <Plus size={16} />
-                    克隆仓库
-                  </Button>
-                  <Button
-                    disabled={
-                      !locationReady ||
-                      listedPath === currentProject ||
-                      busy.has("select_workspace")
-                    }
-                    onClick={() =>
-                      safe(
-                        request("select_workspace", { path: listedPath }).then(
-                          refreshConnection,
-                        ),
-                      )
-                    }
-                  >
-                    {listedPath === currentProject
-                      ? "已是新任务目录"
-                      : "设为新任务工作目录"}
-                  </Button>
+                <div className="file-status">
+                  {listing.entries?.length || 0}项
+                  {listing.truncated ? " · 仅显示前1000项" : ""}
+                  <span>服务器文件</span>
                 </div>
-                <div className="register">
-                  <Input
-                    aria-label="新文件夹名称"
-                    value={folderName}
-                    onChange={(e) => setFolderName(e.target.value)}
-                    placeholder="新文件夹名称"
-                  />
-                  <Button
-                    variant="outline"
-                    disabled={
-                      !locationReady ||
-                      !folderName.trim() ||
-                      busy.has("create_directory")
-                    }
-                    onClick={() =>
-                      safe(
-                        request("create_directory", {
-                          path: listedPath,
-                          name: folderName,
-                        }).then(() => {
-                          setFolderName("");
-                          return browse(path);
-                        }),
-                      )
-                    }
-                  >
-                    新建文件夹
-                  </Button>
-                </div>
-                <div className="register">
-                  <Input
-                    value={projectName}
-                    onChange={(e) => setProjectName(e.target.value)}
-                    placeholder="项目名称，例如 EHS"
-                  />
-                  <Button
-                    variant="outline"
-                    disabled={!locationReady || !projectName.trim()}
-                    onClick={() =>
-                      safe(
-                        request("project_save", {
-                          name: projectName,
-                          path: listedPath,
-                          workspace: listedPath,
-                        }).then(() => {
-                          toast.success("项目已注册");
-                          return refreshProjects();
-                        }),
-                      )
-                    }
-                  >
-                    注册为项目
-                  </Button>
-                </div>
-              </Panel>
+              </section>
             </div>
           )}
           {page === "chat" && (
             <div className="chat-layout">
               <aside className="sessions">
                 <div className="sessions-heading">
-                  <Label>会话</Label>
+                  <Input
+                    aria-label="搜索会话"
+                    placeholder="搜索会话…"
+                    value={sessionFilter}
+                    onChange={(e) => setSessionFilter(e.target.value)}
+                  />
                   <Button
                     variant="ghost"
                     size="icon"
@@ -1272,27 +1373,55 @@ export default function App() {
                       <span>{group.name}</span>
                       <Badge variant="secondary">{group.sessions.length}</Badge>
                     </summary>
-                    <div className="session-project-path" title={group.path}>
-                      {group.path}
-                    </div>
-                    {group.sessions.map((t) => (
-                      <button
-                        className={selected === t.task_id ? "active" : ""}
-                        key={t.task_id}
-                        onClick={() => switchConversation(t.task_id)}
-                      >
-                        <strong>
-                          {t.prompt?.slice(0, 40) || t.task_id.slice(0, 8)}
-                        </strong>
-                        <span>
-                          <i className={`dot ${active(t) ? "live" : ""}`} />
-                          {statusLabels[t.state] || t.state}
-                        </span>
-                        {t.workspace !== group.path && (
-                          <small>{t.workspace}</small>
-                        )}
-                      </button>
-                    ))}
+                    <Button
+                      className="group-new"
+                      variant="ghost"
+                      aria-label={`为${group.name}新建任务`}
+                      onClick={() =>
+                        startDraft(
+                          group.registered ? group.path : currentProject,
+                        )
+                      }
+                    >
+                      <Plus size={13} />
+                    </Button>
+                    {group.sessions
+                      .filter((t) =>
+                        (t.prompt || t.title || "")
+                          .toLowerCase()
+                          .includes(sessionFilter.toLowerCase()),
+                      )
+                      .map((t) => (
+                        <button
+                          className={selected === t.task_id ? "active" : ""}
+                          key={t.task_id}
+                          onClick={() => switchConversation(t.task_id)}
+                        >
+                          <strong>
+                            {String(t.title || t.prompt || t.task_id)
+                              .split("\n")
+                              .find((s) => s.trim())
+                              ?.replace(/^#+\s*/, "")
+                              .slice(0, 48)}
+                          </strong>
+                          <span>
+                            {t.state !== "completed" && (
+                              <>
+                                <i
+                                  className={`dot ${active(t) ? "live" : ""}`}
+                                />
+                                {statusLabels[t.state] || t.state} ·{" "}
+                              </>
+                            )}
+                            {new Date(
+                              (t.updated_at || t.created_at) * 1000,
+                            ).toLocaleDateString()}
+                          </span>
+                          {t.workspace !== group.path && (
+                            <small>{t.workspace}</small>
+                          )}
+                        </button>
+                      ))}
                   </details>
                 ))}
                 {!tasks.length && <p className="empty">还没有远端任务</p>}
@@ -1301,12 +1430,16 @@ export default function App() {
                 <div className="conversation-heading">
                   <div>
                     <strong>
-                      {task && !newConversation ? "当前对话" : "新对话"}
+                      {task && !newConversation
+                        ? String(task.title || task.prompt || "会话")
+                            .split("\n")[0]
+                            .slice(0, 40)
+                        : "新任务"}
                     </strong>
                     <small>
                       {task && !newConversation
                         ? task.workspace
-                        : currentProject || "在项目页选择工作区"}
+                        : draftProject || currentProject || "选择项目"}
                     </small>
                   </div>
                   {task && !newConversation && (
@@ -1406,7 +1539,7 @@ export default function App() {
                             {(turn.events || []).length > 0 && (
                               <details>
                                 <summary>
-                                  工具与运行记录 · {turn.events.length} 条
+                                  运行记录 · {turn.events.length} 条
                                 </summary>
                                 {turn.events.map((e: Data, i: number) => (
                                   <details key={i}>
@@ -1422,14 +1555,22 @@ export default function App() {
                     </>
                   ) : (
                     <div className="chat-empty">
-                      <span>
-                        <MessagesSquare size={30} />
-                      </span>
-                      <h2>从一个明确的任务开始</h2>
-                      <p>
-                        Claude
-                        在远端项目里读取和执行。结果保留为会话，随时继续追问。
-                      </p>
+                      <FolderOpen size={22} />
+                      <Select
+                        value={draftProject || currentProject || undefined}
+                        onValueChange={setDraftProject}
+                      >
+                        <SelectTrigger aria-label="新任务项目">
+                          <SelectValue placeholder="选择项目" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {projects.map((p) => (
+                            <SelectItem key={p.path} value={p.path}>
+                              {p.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                   )}
                   {task?.state === "waiting_approval" &&
@@ -1476,8 +1617,30 @@ export default function App() {
                 </div>
                 <div className="composer">
                   <div className="composer-options">
+                    <Button
+                      variant="outline"
+                      className="composer-project"
+                      title={
+                        task && !newConversation
+                          ? task.workspace
+                          : draftProject || currentProject
+                      }
+                      onClick={() => {
+                        if (!task || newConversation)
+                          setUtilityDialog("draft-project");
+                      }}
+                    >
+                      <FolderOpen size={13} />
+                      {projects.find(
+                        (p) =>
+                          p.path ===
+                          (task && !newConversation
+                            ? task.workspace
+                            : draftProject || currentProject),
+                      )?.name || "项目"}
+                    </Button>
                     <Select value={mode} onValueChange={setMode}>
-                      <SelectTrigger className="w-36">
+                      <SelectTrigger className="mode-select">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -1490,9 +1653,15 @@ export default function App() {
                         <SelectItem value="approval">审批模式</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Select value={modelPolicy} onValueChange={setModelPolicy}>
+                    <Select
+                      value={modelPolicy}
+                      onValueChange={(v) => {
+                        setModelPolicy(v);
+                        setModelEditing(v === "explicit");
+                      }}
+                    >
                       <SelectTrigger
-                        className="min-w-64 max-w-full"
+                        className="model-select"
                         aria-label="下一轮模型"
                       >
                         <SelectValue />
@@ -1505,30 +1674,43 @@ export default function App() {
                           )}
                         </SelectItem>
                         <SelectItem value="remote_default">
-                          远端配置（模型待确认）
+                          远端默认（实际未上报）
                         </SelectItem>
                         <SelectItem value="explicit">
                           {model.trim() || "指定模型…"}
                         </SelectItem>
                       </SelectContent>
                     </Select>
-                    {modelPolicy === "explicit" && (
-                      <Input
-                        className="model-input"
-                        value={model}
-                        onChange={(e) => setModel(e.target.value)}
-                        placeholder="sonnet / opus / 完整 ID"
-                      />
-                    )}
+                    {modelPolicy === "explicit" &&
+                      (modelEditing || !model.trim()) && (
+                        <Input
+                          className="model-input"
+                          onBlur={() => {
+                            if (model.trim()) setModelEditing(false);
+                          }}
+                          value={model}
+                          onChange={(e) => setModel(e.target.value)}
+                          placeholder="sonnet / opus / 完整 ID"
+                        />
+                      )}
+                    {modelPolicy === "explicit" &&
+                      !modelEditing &&
+                      model.trim() && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setModelEditing(true)}
+                        >
+                          修改模型
+                        </Button>
+                      )}
                   </div>
                   <Textarea
                     aria-label="任务指令"
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     placeholder={
-                      task && !newConversation
-                        ? "继续追问当前对话…"
-                        : "描述要在远端项目中完成的任务…"
+                      task && !newConversation ? "继续追问…" : "描述任务…"
                     }
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -1538,12 +1720,7 @@ export default function App() {
                     }}
                   />
                   <div className="composer-footer">
-                    <span>
-                      {task && !newConversation
-                        ? "继续当前会话 · 保留原目录"
-                        : "新任务 · 使用当前项目"}{" "}
-                      · ⌘ Enter 发送
-                    </span>
+                    <span>Shift ↵ 换行</span>
                     <div>
                       {task && active(task) && (
                         <Button
@@ -1573,7 +1750,7 @@ export default function App() {
                         onClick={() => safe(send())}
                       >
                         <Send size={15} />
-                        {task && !newConversation ? "继续对话" : "派发任务"}
+                        发送 ⌘ ↵
                       </Button>
                     </div>
                   </div>
@@ -1591,70 +1768,56 @@ export default function App() {
             />
           )}
           {page === "codex" && (
-            <>
-              <Panel
-                title="一键配置 Codex"
-                description="使用 /Applications 中的稳定路径；保留其他 MCP 和已有配置。"
-              >
-                <div className="step">
-                  <span>1</span>
-                  <div>
-                    <h3>安装并连接</h3>
-                    <p>
-                      当前版本 {version}。在服务器页连接
-                      SSH，在项目页选择远端工作区。
-                    </p>
-                  </div>
-                </div>
-                <div className="step">
-                  <span>2</span>
-                  <div>
-                    <h3>自动写入 MCP 配置</h3>
-                    <p>仅合并 ccbridge 配置，并生成原配置备份。</p>
-                    <Button
-                      disabled={integrationState === "saving"}
-                      onClick={() => void configureCodex()}
-                    >
-                      <Cable size={16} />
-                      {integrationState === "saving"
-                        ? "正在配置…"
-                        : integrationState === "error"
-                          ? "重试配置 Codex MCP"
-                          : "配置 Codex MCP"}
-                    </Button>
-                    {integration && (
-                      <p
-                        role={integrationState === "error" ? "alert" : "status"}
-                        className={
-                          integrationState === "error"
-                            ? "text-destructive"
-                            : "hint"
-                        }
-                      >
-                        {integration}
-                      </p>
-                    )}
-                  </div>
-                </div>
-                <div className="step">
-                  <span>3</span>
-                  <div>
-                    <h3>重新加载 MCP，再开始对话</h3>
-                    <p>
-                      Codex 检查连接和项目后，通过 cc_start 派发，cc_reply
-                      续聊，cc_result 等待结果。模型与模式按每轮请求记录。
-                    </p>
-                  </div>
-                </div>
-              </Panel>
-              <Panel title="稳定的调用入口">
-                <pre>{`[mcp_servers.ccbridge]\ncommand = "/Applications/CCBridge.app/Contents/MacOS/ccbridge"\nargs = ["mcp"]\ntool_timeout_sec = 960`}</pre>
-                <p className="hint">
-                  不写死某个人的用户名或本地仓库路径。每个同事在 App 保存自己的
-                  SSH 账号。
+            <Panel title="Codex MCP">
+              <p role="status" className="muted">
+                {mcpStatus.message || "正在检查配置…"}
+              </p>
+              <div className="toolbar">
+                <Button
+                  disabled={
+                    !installLocation.installed || integrationState === "saving"
+                  }
+                  onClick={() => void configureCodex()}
+                >
+                  <Cable size={16} />
+                  {integrationState === "saving"
+                    ? "正在配置…"
+                    : "自动写入MCP配置"}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    safe(
+                      navigator.clipboard
+                        .writeText(
+                          `[mcp_servers.ccbridge]\ncommand = "/Applications/CCBridge.app/Contents/MacOS/ccbridge"\nargs = ["mcp"]\ntool_timeout_sec = 960`,
+                        )
+                        .then(() => toast.success("配置已复制"))
+                        .catch(() => toast.error("复制失败")),
+                    )
+                  }
+                >
+                  复制配置
+                </Button>
+              </div>
+              {integration && (
+                <p
+                  role={integrationState === "error" ? "alert" : "status"}
+                  className={
+                    integrationState === "error" ? "text-destructive" : "hint"
+                  }
+                >
+                  {integration}
                 </p>
-              </Panel>
-            </>
+              )}
+              <details>
+                <summary>查看配置片段</summary>
+                <pre>{`[mcp_servers.ccbridge]\ncommand = "/Applications/CCBridge.app/Contents/MacOS/ccbridge"\nargs = ["mcp"]\ntool_timeout_sec = 960`}</pre>
+              </details>
+              <p className="hint">
+                写入后在Codex重新加载MCP。配置已保存不代表当前会话已加载工具。
+              </p>
+            </Panel>
           )}
           {page === "updates" && (
             <>
@@ -1668,9 +1831,7 @@ export default function App() {
                   </span>
                   <div>
                     <h2>CCBridge {version}</h2>
-                    <p className="muted">
-                      {architecture} · 开源版 · 无需 Developer ID
-                    </p>
+                    <p className="muted">{architecture}</p>
                   </div>
                   <Badge variant="outline">稳定通道</Badge>
                 </div>
@@ -1736,42 +1897,194 @@ export default function App() {
                   等待会阻止安装。请先完成活动，再安装；不会强制中断远端任务。
                 </p>
               </Panel>
-              <Panel title="更新与安全">
-                <div className="security-lines">
-                  <p>
-                    <ShieldCheck size={18} />
-                    使用独立的开源发布签名，不需要 Apple 开发者账号。
-                  </p>
-                  <p>
-                    <Check size={18} />
-                    签名、下载或检查失败，不替换当前 App。
-                  </p>
-                  <p>
-                    <Folder size={18} />
-                    账号配置和会话保留在原有用户目录。
-                  </p>
-                </div>
-              </Panel>
             </>
           )}
           {page === "settings" && (
-            <Panel title="兼容与存储">
-              <dl>
-                <dt>当前版本</dt>
-                <dd>{version}</dd>
-                <dt>数据目录</dt>
-                <dd>~/Library/Application Support/CCBridge</dd>
-                <dt>密码存储</dt>
-                <dd>macOS 钥匙串 · 沿用现有账号身份</dd>
-                <dt>数据库功能</dt>
-                <dd>多项目、多连接用途映射 · 固定只读 safe</dd>
-                <dt>发布方式</dt>
-                <dd>开源签名更新 · ad-hoc App 签名 · 无 Developer ID</dd>
-              </dl>
-            </Panel>
+            <>
+              <Panel title="启动">
+                <div className="switch-row">
+                  <Switch
+                    aria-label="启动时自动连接SSH"
+                    checked={preferences.auto_connect === true}
+                    onCheckedChange={(v) =>
+                      safe(
+                        request("preferences_save", { auto_connect: v }).then(
+                          () => {
+                            setPreferences({ auto_connect: v });
+                            toast.success(
+                              v
+                                ? "已开启：下次启动连接上次账号"
+                                : "已关闭自动连接",
+                            );
+                          },
+                        ),
+                      )
+                    }
+                  />
+                  <div>
+                    <Label>启动App时自动连接SSH</Label>
+                    <p className="hint">
+                      {profile.user && profile.host
+                        ? `${profile.user}@${profile.host} · 需要已保存密码和确认指纹`
+                        : "先保存服务器账号"}
+                    </p>
+                  </div>
+                </div>
+              </Panel>
+              <Panel title="外观">
+                <div className="toolbar">
+                  {[
+                    ["light", "亮色"],
+                    ["dark", "暗色"],
+                    ["system", "跟随系统"],
+                  ].map(([v, label]) => (
+                    <Button
+                      key={v}
+                      variant={theme === v ? "default" : "outline"}
+                      onClick={() => setTheme(v)}
+                    >
+                      {label}
+                    </Button>
+                  ))}
+                </div>
+              </Panel>
+              <Panel title="凭据">
+                <p className="muted">
+                  SSH：
+                  {profile.remember_password
+                    ? profile.credential_store === "file"
+                      ? "本机保存"
+                      : "系统钥匙串"
+                    : "未保存"}
+                </p>
+                <div className="toolbar">
+                  <Button variant="outline" onClick={() => setServerEdit(true)}>
+                    管理SSH密码
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setAuthScope("local");
+                      setAuthOpen(true);
+                    }}
+                  >
+                    本机Codeup
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={!connected}
+                    onClick={() => {
+                      setAuthScope("remote");
+                      setAuthOpen(true);
+                    }}
+                  >
+                    服务器Codeup
+                  </Button>
+                </div>
+              </Panel>
+              <Panel title="关于">
+                <dl>
+                  <dt>版本</dt>
+                  <dd>
+                    {version} · {architecture}
+                  </dd>
+                  <dt>数据目录</dt>
+                  <dd>{dataDirectory}</dd>
+                </dl>
+                <Button variant="outline" onClick={() => setPage("updates")}>
+                  检查应用更新
+                </Button>
+              </Panel>
+            </>
           )}
         </div>
       </main>
+      <Dialog
+        open={!!utilityDialog}
+        onOpenChange={(v) => !v && setUtilityDialog("")}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              {utilityDialog === "folder"
+                ? "新建文件夹"
+                : utilityDialog === "draft-project"
+                  ? "新任务项目"
+                  : "添加为项目"}
+            </DialogTitle>
+            <DialogDescription>
+              {utilityDialog === "draft-project"
+                ? "仅用于此草稿，不改变MCP默认项目"
+                : listedPath || "先选择远端目录"}
+            </DialogDescription>
+          </DialogHeader>
+          {utilityDialog === "draft-project" ? (
+            <Select
+              value={draftProject || currentProject || undefined}
+              onValueChange={(v) => {
+                setDraftProject(v);
+                setUtilityDialog("");
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="选择项目" />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((p) => (
+                  <SelectItem value={p.path} key={p.path}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : (
+            <>
+              <Input
+                aria-label="名称"
+                value={utilityDialog === "folder" ? folderName : projectName}
+                onChange={(e) =>
+                  utilityDialog === "folder"
+                    ? setFolderName(e.target.value)
+                    : setProjectName(e.target.value)
+                }
+              />
+              <DialogFooter>
+                <Button
+                  disabled={
+                    !locationReady ||
+                    !(
+                      utilityDialog === "folder" ? folderName : projectName
+                    ).trim()
+                  }
+                  onClick={() =>
+                    safe(
+                      (utilityDialog === "folder"
+                        ? request("create_directory", {
+                            path: listedPath,
+                            name: folderName,
+                          })
+                        : request("project_save", {
+                            path: listedPath,
+                            workspace: listedPath,
+                            name: projectName,
+                          })
+                      ).then(async () => {
+                        await browse(listedPath);
+                        await refreshProjects();
+                        setUtilityDialog("");
+                        setFolderName("");
+                        setProjectName("");
+                      }),
+                    )
+                  }
+                >
+                  确认
+                </Button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
       <CodeupAuth
         key={`${connection.profile?.host}:${connection.profile?.user}:${connection.profile?.port}`}
         open={authOpen}
@@ -1784,6 +2097,13 @@ export default function App() {
         }
         url={cloneUrls.trim().split(/\s+/)[0] || ""}
         initialScope={authScope}
+        onSaved={
+          cloneOpen && cloneError
+            ? () => {
+                void cloneRepositories();
+              }
+            : undefined
+        }
       />
       <FileOperation
         key={`${fileOperation?.entry.path}:${fileOperation?.action}`}
@@ -1807,14 +2127,16 @@ export default function App() {
         onClose={() => setBranchesOpen(false)}
         path={listedPath}
       />
-      <Toaster richColors position="bottom-right" />
+      <Toaster
+        theme={theme === "system" ? "system" : (theme as "light" | "dark")}
+        richColors
+        position="bottom-right"
+      />
       <Dialog open={serverEdit} onOpenChange={setServerEdit}>
         <DialogContent className="server-dialog">
           <DialogHeader>
             <DialogTitle>SSH 服务器</DialogTitle>
-            <DialogDescription>
-              密码只用于 SSH 登录；记住密码时保存在本机钥匙串。
-            </DialogDescription>
+            <DialogDescription>保存你的SSH账号。</DialogDescription>
           </DialogHeader>
           <Field label="连接名称（可选）">
             {input("name", "text", "例如：我的开发服务器")}
@@ -1830,7 +2152,7 @@ export default function App() {
             label="密码"
             hint={
               profile.remember_password
-                ? "留空可使用钥匙串已保存密码"
+                ? "已保存，留空即可"
                 : "只在本次连接中使用"
             }
           >
@@ -1846,8 +2168,39 @@ export default function App() {
               checked={!!profile.remember_password}
               onCheckedChange={(v) => patch("remember_password", v)}
             />
-            <Label>在钥匙串记住密码</Label>
+            <Label>记住密码</Label>
           </div>
+          {profile.remember_password && (
+            <>
+              <Field label="密码保存位置">
+                <Select
+                  value={profile.credential_store || "keychain"}
+                  onValueChange={(v) => {
+                    patch("credential_store", v);
+                    setStorageAck(false);
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="keychain">系统钥匙串</SelectItem>
+                    <SelectItem value="file">本机保存</SelectItem>
+                  </SelectContent>
+                </Select>
+              </Field>
+              {profile.credential_store === "file" && (
+                <label className="storage-warning">
+                  <input
+                    type="checkbox"
+                    checked={storageAck}
+                    onChange={(e) => setStorageAck(e.target.checked)}
+                  />
+                  我了解：本机保存不会弹钥匙串授权，但当前Mac账号下的其他程序可能读取密码。
+                </label>
+              )}
+            </>
+          )}
           <details>
             <summary>高级设置 · 通常留空</summary>
             <Field label="Runner 路径">{input("runner")}</Field>
@@ -1859,9 +2212,11 @@ export default function App() {
               disabled={busy.has("save_profile")}
               onClick={() =>
                 safe(
-                  request("save_profile", { profile, password }).then(() =>
-                    toast.success("连接配置已保存"),
-                  ),
+                  request("save_profile", {
+                    profile,
+                    password,
+                    storage_ack: storageAck,
+                  }).then(() => toast.success("连接配置已保存")),
                 )
               }
             >
@@ -1959,14 +2314,20 @@ export default function App() {
             onChange={(e) => setCloneUrls(e.target.value)}
             placeholder="https://github.com/owner/repository.git"
           />
-          <div className="switch-row">
-            <Switch
-              checked={localAuth}
-              onCheckedChange={setLocalAuth}
-              disabled={busy.has("clone_repository")}
-            />
-            <Label>使用本机 Git 认证传输（不上传凭据）</Label>
-          </div>
+          <Label>获取方式</Label>
+          <Select
+            value={localAuth ? "local" : "remote"}
+            onValueChange={(v) => setLocalAuth(v === "local")}
+            disabled={busy.has("clone_repository")}
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="local">本机获取，再通过SSH传输</SelectItem>
+              <SelectItem value="remote">服务器直接获取</SelectItem>
+            </SelectContent>
+          </Select>
           <Button
             variant="outline"
             disabled={busy.has("clone_repository")}

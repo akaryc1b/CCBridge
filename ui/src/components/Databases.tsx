@@ -52,6 +52,7 @@ export function Databases({
   request: (command: string, args?: Data) => Promise<any>;
   refreshProjects: () => Promise<void>;
 }) {
+  const [tab, setTab] = useState("connections");
   const [workspace, setWorkspace] = useState(currentProject),
     [data, setData] = useState<Data>({ connections: [], bindings: [] }),
     [form, setForm] = useState<Data>(empty),
@@ -111,276 +112,296 @@ export function Databases({
   );
   return (
     <div className="space-y-5">
-      <Card>
-        <CardHeader>
-          <CardTitle>数据库连接</CardTitle>
-          <CardDescription>
-            连接保存在当前 SSH
-            账号下。每个项目可以映射多个连接，同一连接也可供多个项目使用。
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex flex-wrap gap-3">
-            <Button
-              disabled={!connected || busy}
-              onClick={() =>
-                void run(async () => {
-                  const r = await request("database_detect", {});
-                  setRuntime(r);
-                  setNotice(r.notice);
-                })
-              }
-            >
-              探测远端 MCP 环境
-            </Button>
-            <Button
-              disabled={!connected || busy}
-              onClick={() => {
-                setForm({
-                  ...empty,
-                  node: runtime.node || "",
-                  package_root: runtime.package_root || "",
-                });
-                setEditing(true);
-              }}
-            >
-              新增连接
-            </Button>
-            <Button
-              variant="outline"
-              disabled={!connected || busy}
-              onClick={() => void run(() => load())}
-            >
-              刷新
-            </Button>
-          </div>
-          {runtime.candidates?.map((c: Data) => (
-            <div
-              key={c.package_root}
-              className="rounded-lg border p-3 space-y-1"
-            >
-              <Badge variant={c.compatible ? "secondary" : "outline"}>
-                {c.compatible ? "运行文件已找到" : "版本暂不兼容"}
-              </Badge>
-              <p className="break-all">{c.package_root}</p>
-              <p className="hint">
-                universal-db-mcp {c.version} · {c.source}
-              </p>
-            </div>
-          ))}
-          {runtime.registered?.map((r: Data) => (
-            <p key={r.name} className="hint">
-              已发现 Claude MCP：{r.name} · {r.command}
-              （仅识别运行环境，不继承共享凭据与权限）
-            </p>
-          ))}
-          {notice && (
-            <p role="status" className="hint">
-              {notice}
-            </p>
-          )}
-          {data.connections.length === 0 && (
-            <p className="hint">
-              还没有连接。探测只查找软件，不会自动读取共享数据库凭据或连接业务数据库。
-            </p>
-          )}
-          {data.connections.map((d: Data) => (
-            <div
-              key={d.id}
-              className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4"
-            >
-              <div>
-                <strong>{d.name}</strong>{" "}
-                <Badge variant={d.enabled ? "secondary" : "outline"}>
-                  {d.enabled ? "已启用" : "未启用"}
-                </Badge>
-                <p className="hint">
-                  {d.kind} · {d.host}:{d.port} / {d.database}
-                </p>
-                <p className="hint">
-                  {d.password_saved ? "已保存密码" : "未保存密码"} · 只读 safe ·{" "}
-                  {(d.used_by || []).length} 个项目引用
-                </p>
-                {checks[d.id] && (
-                  <p role="status" className="hint">
-                    {Object.values(checks[d.id]).join(" · ")}
-                  </p>
-                )}
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => {
-                    setForm({ ...d, password: "" });
-                    setEditing(true);
-                  }}
-                >
-                  编辑
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      const r = await request("database_protocol_test", {
-                        id: d.id,
-                      });
-                      setChecks((p) => ({
-                        ...p,
-                        [d.id]: {
-                          ...p[d.id],
-                          mcp: `MCP：${r.notice}（${new Date().toLocaleTimeString()}）`,
-                        },
-                      }));
-                    })
-                  }
-                >
-                  检查 MCP 握手
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      const r = await request("database_test", { id: d.id });
-                      setChecks((p) => ({
-                        ...p,
-                        [d.id]: {
-                          ...p[d.id],
-                          database: `数据库：${r.notice}（${new Date().toLocaleTimeString()}）`,
-                        },
-                      }));
-                    })
-                  }
-                >
-                  测试数据库连接
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={busy || (d.used_by || []).length > 0}
-                  onClick={() => setRemoving(d)}
-                >
-                  删除
-                </Button>
-              </div>
-            </div>
-          ))}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>项目数据库映射</CardTitle>
-          <CardDescription>
-            按准确项目目录匹配，不继承父目录或其他项目。变更仅对新会话生效；续聊保留原连接快照。
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Label>配置项目</Label>
-          <Select
-            value={workspace || undefined}
-            onValueChange={setWorkspace}
-            disabled={busy || !connected}
-          >
-            <SelectTrigger aria-label="数据库映射项目">
-              <SelectValue placeholder="选择项目" />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((p) => (
-                <SelectItem key={p.path} value={p.path}>
-                  {p.name} · {p.path}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {bindings.map((b, i) => (
-            <div key={i} className="flex flex-wrap gap-3 items-center">
-              <Input
-                className="max-w-52"
-                aria-label={`第${i + 1}个数据库用途别名`}
-                placeholder="用途：business_dev"
-                value={b.alias}
-                disabled={busy}
-                onChange={(e) =>
-                  setBindings(
-                    bindings.map((x, j) =>
-                      j === i ? { ...x, alias: e.target.value } : x,
-                    ),
-                  )
-                }
-              />
-              <Select
-                value={b.connection_id || undefined}
-                disabled={busy}
-                onValueChange={(v) =>
-                  setBindings(
-                    bindings.map((x, j) =>
-                      j === i ? { ...x, connection_id: v } : x,
-                    ),
-                  )
-                }
-              >
-                <SelectTrigger
-                  className="max-w-80"
-                  aria-label={`第${i + 1}个映射连接`}
-                >
-                  <SelectValue placeholder="选择数据库连接" />
-                </SelectTrigger>
-                <SelectContent>
-                  {data.connections.map((d: Data) => (
-                    <SelectItem key={d.id} value={d.id}>
-                      {d.name}
-                      {d.enabled ? "" : "（未启用）"}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+      <div className="toolbar">
+        <Button
+          variant={tab === "connections" ? "secondary" : "ghost"}
+          onClick={() => setTab("connections")}
+        >
+          连接
+        </Button>
+        <Button
+          variant={tab === "mapping" ? "secondary" : "ghost"}
+          onClick={() => setTab("mapping")}
+        >
+          项目映射
+        </Button>
+      </div>
+      {tab === "connections" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>数据库连接</CardTitle>
+            <CardDescription>
+              连接保存在当前 SSH
+              账号下。每个项目可以映射多个连接，同一连接也可供多个项目使用。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap gap-3">
               <Button
-                variant="ghost"
-                disabled={busy}
-                onClick={() => setBindings(bindings.filter((_, j) => j !== i))}
+                disabled={!connected || busy}
+                onClick={() =>
+                  void run(async () => {
+                    const r = await request("database_detect", {});
+                    setRuntime(r);
+                    setNotice(r.notice);
+                  })
+                }
               >
-                移除映射
+                探测远端 MCP 环境
+              </Button>
+              <Button
+                disabled={!connected || busy}
+                onClick={() => {
+                  setForm({
+                    ...empty,
+                    node: runtime.node || "",
+                    package_root: runtime.package_root || "",
+                  });
+                  setEditing(true);
+                }}
+              >
+                新增连接
+              </Button>
+              <Button
+                variant="outline"
+                disabled={!connected || busy}
+                onClick={() => void run(() => load())}
+              >
+                刷新
               </Button>
             </div>
-          ))}
-          <p className="hint">
-            用途别名使用英文字母、数字、下划线，例如
-            business_dev、workflow、reporting。Claude 将看到 db_用途别名。
-          </p>
-          <div className="flex gap-3">
-            <Button
-              variant="outline"
-              disabled={
-                !workspace ||
-                busy ||
-                bindings.length >= 8 ||
-                !data.connections.length
-              }
-              onClick={() =>
-                setBindings([...bindings, { alias: "", connection_id: "" }])
-              }
+            {runtime.candidates?.map((c: Data) => (
+              <div
+                key={c.package_root}
+                className="rounded-lg border p-3 space-y-1"
+              >
+                <Badge variant={c.compatible ? "secondary" : "outline"}>
+                  {c.compatible ? "运行文件已找到" : "版本暂不兼容"}
+                </Badge>
+                <p className="break-all">{c.package_root}</p>
+                <p className="hint">
+                  universal-db-mcp {c.version} · {c.source}
+                </p>
+              </div>
+            ))}
+            {runtime.registered?.map((r: Data) => (
+              <p key={r.name} className="hint">
+                已发现 Claude MCP：{r.name} · {r.command}
+                （仅识别运行环境，不继承共享凭据与权限）
+              </p>
+            ))}
+            {notice && (
+              <p role="status" className="hint">
+                {notice}
+              </p>
+            )}
+            {data.connections.length === 0 && (
+              <p className="hint">
+                还没有连接。探测只查找软件，不会自动读取共享数据库凭据或连接业务数据库。
+              </p>
+            )}
+            {data.connections.map((d: Data) => (
+              <div
+                key={d.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4"
+              >
+                <div>
+                  <strong>{d.name}</strong>{" "}
+                  <Badge variant={d.enabled ? "secondary" : "outline"}>
+                    {d.enabled ? "已启用" : "未启用"}
+                  </Badge>
+                  <p className="hint">
+                    {d.kind} · {d.host}:{d.port} / {d.database}
+                  </p>
+                  <p className="hint">
+                    {d.password_saved ? "已保存密码" : "未保存密码"} · 只读 safe
+                    · {(d.used_by || []).length} 个项目引用
+                  </p>
+                  {checks[d.id] && (
+                    <p role="status" className="hint">
+                      {Object.values(checks[d.id]).join(" · ")}
+                    </p>
+                  )}
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => {
+                      setForm({ ...d, password: "" });
+                      setEditing(true);
+                    }}
+                  >
+                    编辑
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        const r = await request("database_protocol_test", {
+                          id: d.id,
+                        });
+                        setChecks((p) => ({
+                          ...p,
+                          [d.id]: {
+                            ...p[d.id],
+                            mcp: `MCP：${r.notice}（${new Date().toLocaleTimeString()}）`,
+                          },
+                        }));
+                      })
+                    }
+                  >
+                    检查 MCP 握手
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => {
+                        const r = await request("database_test", { id: d.id });
+                        setChecks((p) => ({
+                          ...p,
+                          [d.id]: {
+                            ...p[d.id],
+                            database: `数据库：${r.notice}（${new Date().toLocaleTimeString()}）`,
+                          },
+                        }));
+                      })
+                    }
+                  >
+                    测试数据库连接
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={busy || (d.used_by || []).length > 0}
+                    onClick={() => setRemoving(d)}
+                  >
+                    删除
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+      {tab === "mapping" && (
+        <Card>
+          <CardHeader>
+            <CardTitle>项目数据库映射</CardTitle>
+            <CardDescription>
+              按准确项目目录匹配，不继承父目录或其他项目。变更仅对新会话生效；续聊保留原连接快照。
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <Label>配置项目</Label>
+            <Select
+              value={workspace || undefined}
+              onValueChange={setWorkspace}
+              disabled={busy || !connected}
             >
-              添加映射
-            </Button>
-            <Button
-              disabled={!workspace || busy}
-              onClick={() =>
-                void run(async () => {
-                  await request("database_bind", { workspace, bindings });
-                  await load();
-                  await refreshProjects();
-                  setNotice(
-                    "项目映射已保存；已有会话保持原配置，新会话使用新映射。",
-                  );
-                })
-              }
-            >
-              保存项目映射
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+              <SelectTrigger aria-label="数据库映射项目">
+                <SelectValue placeholder="选择项目" />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((p) => (
+                  <SelectItem key={p.path} value={p.path}>
+                    {p.name} · {p.path}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {bindings.map((b, i) => (
+              <div key={i} className="flex flex-wrap gap-3 items-center">
+                <Input
+                  className="max-w-52"
+                  aria-label={`第${i + 1}个数据库用途别名`}
+                  placeholder="用途：business_dev"
+                  value={b.alias}
+                  disabled={busy}
+                  onChange={(e) =>
+                    setBindings(
+                      bindings.map((x, j) =>
+                        j === i ? { ...x, alias: e.target.value } : x,
+                      ),
+                    )
+                  }
+                />
+                <Select
+                  value={b.connection_id || undefined}
+                  disabled={busy}
+                  onValueChange={(v) =>
+                    setBindings(
+                      bindings.map((x, j) =>
+                        j === i ? { ...x, connection_id: v } : x,
+                      ),
+                    )
+                  }
+                >
+                  <SelectTrigger
+                    className="max-w-80"
+                    aria-label={`第${i + 1}个映射连接`}
+                  >
+                    <SelectValue placeholder="选择数据库连接" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {data.connections.map((d: Data) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        {d.name}
+                        {d.enabled ? "" : "（未启用）"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() =>
+                    setBindings(bindings.filter((_, j) => j !== i))
+                  }
+                >
+                  移除映射
+                </Button>
+              </div>
+            ))}
+            <p className="hint">
+              用途别名使用英文字母、数字、下划线，例如
+              business_dev、workflow、reporting。Claude 将看到 db_用途别名。
+            </p>
+            <div className="flex gap-3">
+              <Button
+                variant="outline"
+                disabled={
+                  !workspace ||
+                  busy ||
+                  bindings.length >= 8 ||
+                  !data.connections.length
+                }
+                onClick={() =>
+                  setBindings([...bindings, { alias: "", connection_id: "" }])
+                }
+              >
+                添加映射
+              </Button>
+              <Button
+                disabled={!workspace || busy}
+                onClick={() =>
+                  void run(async () => {
+                    await request("database_bind", { workspace, bindings });
+                    await load();
+                    await refreshProjects();
+                    setNotice(
+                      "项目映射已保存；已有会话保持原配置，新会话使用新映射。",
+                    );
+                  })
+                }
+              >
+                保存项目映射
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
       {error && (
         <div role="alert" className="error-box">
           {error}

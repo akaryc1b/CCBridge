@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { DropdownMenu } from "radix-ui";
+import { DropdownMenu, ContextMenu } from "radix-ui";
 import {
   MoreHorizontal,
   GitBranch,
@@ -54,7 +54,7 @@ export function FileActions({
       </DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content
-          className="z-50 min-w-36 rounded-md border bg-white p-1 shadow-md"
+          className="z-50 min-w-36 rounded-md border bg-card p-1 shadow-md"
           sideOffset={4}
         >
           {(
@@ -66,7 +66,7 @@ export function FileActions({
           ).map(([id, label, Icon]) => (
             <DropdownMenu.Item
               key={String(id)}
-              className="flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm outline-none focus:bg-blue-50"
+              className="flex cursor-pointer items-center gap-2 rounded px-3 py-2 text-sm outline-none focus:bg-accent"
               onSelect={() => onAction(String(id), entry)}
             >
               <Icon size={14} />
@@ -76,6 +76,38 @@ export function FileActions({
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
     </DropdownMenu.Root>
+  );
+}
+export function FileContextMenu({
+  entry,
+  disabled,
+  onAction,
+  children,
+}: {
+  entry: Data;
+  disabled: boolean;
+  onAction: (action: string, entry: Data) => void;
+  children: ReactNode;
+}) {
+  return (
+    <ContextMenu.Root>
+      <ContextMenu.Trigger asChild disabled={disabled}>
+        {children}
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content className="context-menu">
+          {[
+            ["rename", "重命名"],
+            ["move", "移动到…"],
+            ["trash", "移入回收区"],
+          ].map(([id, label]) => (
+            <ContextMenu.Item key={id} onSelect={() => onAction(id, entry)}>
+              {label}
+            </ContextMenu.Item>
+          ))}
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
   );
 }
 export function FileOperation({
@@ -119,7 +151,22 @@ export function FileOperation({
           request: { path: entry.path, action, name, destination },
         },
       );
-      toast.success(result.message || "操作已完成");
+      toast.success(
+        result.message || "操作已完成",
+        result.id
+          ? {
+              action: {
+                label: "撤销",
+                onClick: () => {
+                  void invoke("trash_restore", { request: { id: result.id } })
+                    .then(() => onDone())
+                    .then(() => toast.success("已恢复到原路径"))
+                    .catch((e) => toast.error(errorText(e)));
+                },
+              },
+            }
+          : undefined,
+      );
       await onDone().catch(() =>
         toast.error(
           "操作已完成，但目录刷新失败；请重新连接后刷新，不要重复执行",
@@ -444,62 +491,63 @@ export function BranchDialog({
             )}
           </p>
         )}
-        <Select
-          value={action}
-          onValueChange={(v) => {
-            setAction(v);
-            setConfirm(false);
-            setBranch("");
-          }}
+        <Label htmlFor="branch-search">查找分支或输入新分支名</Label>
+        <Input
+          id="branch-search"
+          value={branch}
           disabled={busy}
-        >
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="switch">切换已有本地分支</SelectItem>
-            <SelectItem value="create">从当前 HEAD 新建并切换</SelectItem>
-            <SelectItem value="track">从远端分支建立跟踪分支</SelectItem>
-          </SelectContent>
-        </Select>
-        {action === "switch" ? (
-          <Select value={branch} onValueChange={setBranch} disabled={busy}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="选择本地分支" />
-            </SelectTrigger>
-            <SelectContent>
-              {(info.branches || []).map((b: string) => (
-                <SelectItem key={b} value={b}>
-                  {b}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <>
-            <Label htmlFor="branch-name">新本地分支名称</Label>
-            <Input
-              id="branch-name"
-              value={branch}
-              disabled={busy}
-              onChange={(e) => setBranch(e.target.value)}
-              placeholder="feature/example"
-            />
-            {action === "track" && (
-              <Select value={remote} onValueChange={setRemote} disabled={busy}>
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="选择远端分支" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(info.remote_branches || []).map((b: string) => (
-                    <SelectItem key={b} value={b}>
-                      {b}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-          </>
+          onChange={(e) => {
+            setBranch(e.target.value);
+            setAction(
+              (info.branches || []).includes(e.target.value)
+                ? "switch"
+                : "create",
+            );
+            setRemote("");
+          }}
+          placeholder="搜索分支…"
+        />
+        <div className="branch-list">
+          {(info.branches || [])
+            .filter((b: string) => b.includes(branch))
+            .map((b: string) => (
+              <Button
+                key={b}
+                variant={branch === b ? "secondary" : "ghost"}
+                disabled={busy || b === info.current}
+                onClick={() => {
+                  setBranch(b);
+                  setAction("switch");
+                  setRemote("");
+                }}
+              >
+                {b}
+                {b === info.current ? " · 当前" : ""}
+              </Button>
+            ))}
+          {(info.remote_branches || [])
+            .filter((b: string) => b.includes(branch))
+            .map((b: string) => (
+              <Button
+                key={b}
+                variant="ghost"
+                disabled={busy}
+                onClick={() => {
+                  setRemote(b);
+                  setBranch(b.replace(/^origin\//, ""));
+                  setAction("track");
+                }}
+              >
+                {b}
+              </Button>
+            ))}
+        </div>
+        {branch && !(info.branches || []).includes(branch) && (
+          <p className="hint">
+            {action === "track"
+              ? `从 ${remote} 建立跟踪分支`
+              : `从当前 ${info.current || "HEAD"} 新建 ${branch}`}
+          </p>
         )}
         <p className="hint">
           不自动
@@ -529,9 +577,11 @@ export function BranchDialog({
               !branch ||
               (action === "track" && !remote)
             }
-            onClick={() => (confirm ? void change() : setConfirm(true))}
+            onClick={() => void change()}
           >
-            {busy ? "正在执行…" : confirm ? "确认执行" : "应用分支操作"}
+            {busy
+              ? "正在执行…"
+              : `${action === "switch" ? "切换到" : "新建并切换到"} ${branch || "分支"}`}
           </Button>
         </DialogFooter>
       </DialogContent>

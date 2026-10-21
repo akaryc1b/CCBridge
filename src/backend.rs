@@ -10,6 +10,7 @@ pub struct BackendState {
     pub clone_progress: std::sync::Mutex<Value>,
     pub gate: std::sync::Mutex<crate::update_gate::UpdateGate>,
     pub writes: Mutex<()>,
+    pub auto_attempted: std::sync::atomic::AtomicBool,
 }
 impl BackendState {
     pub fn new(connection: Option<ssh::Connection>) -> Self {
@@ -18,6 +19,7 @@ impl BackendState {
             clone_progress: std::sync::Mutex::new(json!({})),
             gate: Default::default(),
             writes: Mutex::new(()),
+            auto_attempted: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -30,6 +32,47 @@ impl Drop for Activity {
 }
 pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
     let op = field(&v, "op")?;
+    if op == "prepare_install" {
+        if !human {
+            bail!("安装只能由人在App操作")
+        }
+        if state.connection.lock().await.is_some() {
+            return Box::pin(dispatch(state, json!({"op":"prepare_update"}), true)).await;
+        }
+        state.gate.lock().unwrap().prepare()?;
+        return Ok(state.gate.lock().unwrap().snapshot());
+    }
+    if op == "auto_connect" {
+        if !human {
+            bail!("自动连接只能由App启动触发")
+        }
+        if state
+            .auto_attempted
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(json!({"skipped":true,"reason":"本次启动已尝试连接"}));
+        }
+        let prefs_path = app_dir()?.join("preferences.json");
+        let prefs: Value = if prefs_path.exists() {
+            read_json(&prefs_path)?
+        } else {
+            json!({})
+        };
+        if prefs["auto_connect"] != true {
+            return Ok(json!({"skipped":true}));
+        }
+        let p: Profile = read_json(&app_dir()?.join("profile.json"))?;
+        if !p.remember_password || p.fingerprint.is_empty() {
+            bail!("自动连接需要已保存密码和已确认指纹，请在服务器页设置")
+        }
+        return Box::pin(dispatch(
+            state,
+            json!({"op":"connect","profile":p,"password":""}),
+            true,
+        ))
+        .await;
+    }
+
     if !human && v["client_protocol"] != 1 && ["status", "result"].contains(&op) {
         let mut gate = state.gate.lock().unwrap();
         if gate.draining {
@@ -105,6 +148,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "connect",
             "disconnect",
             "save_profile",
+            "preferences_save",
             "load_profile",
             "forget_password",
             "load_password",
@@ -153,6 +197,22 @@ pub struct Job {
 }
 async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     let op = field(&v, "op")?.to_owned();
+    if op == "preferences_save" {
+        if !human {
+            bail!("只能在App修改启动偏好")
+        }
+        if v["auto_connect"] == true {
+            let p: Profile = read_json(&app_dir()?.join("profile.json"))?;
+            if !p.remember_password || p.fingerprint.is_empty() {
+                bail!("请先保存SSH密码并确认服务器指纹，再开启自动连接")
+            }
+        }
+        write_json(
+            &app_dir()?.join("preferences.json"),
+            &json!({"auto_connect":v["auto_connect"]==true}),
+        )?;
+        return Ok(json!({"saved":true}));
+    }
     if op == "clone_progress" {
         return Ok(state.clone_progress.lock().unwrap().clone());
     }
@@ -197,10 +257,14 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             c.validate()?
         }
         if op == "git_auth_save" {
+            if v["storage"] == "file" && v["storage_ack"] != true {
+                bail!("请先确认本机保存的安全提示")
+            }
             return crate::git_auth::save(
                 scope,
                 &p,
                 draft.context("请输入要保存的 Codeup 密码 / 令牌")?,
+                v["storage"].as_str().unwrap_or("keychain"),
             )
             .await;
         }
@@ -236,24 +300,47 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         }
         let p: Profile = serde_json::from_value(v["profile"].clone())?;
         p.validate()?;
+        if p.credential_store == "file"
+            && v["password"].as_str().is_some_and(|s| !s.is_empty())
+            && v["storage_ack"] != true
+        {
+            bail!("请先确认本机保存的安全提示")
+        }
         #[cfg(target_os = "macos")]
         {
-            let account = serde_json::to_string(&(p.host.as_str(), p.port, p.user.as_str()))?;
-            let password = v["password"].as_str().unwrap_or("").to_string();
-            let credential_op = op.clone();
-            let remember = p.remember_password;
-            let credential_result=crate::credentials::call(move||{
-                let entry=keyring::Entry::new("dev.ccbridge.desktop.ssh",&account)?;
-                if credential_op=="load_password" {return Ok(json!({"password":entry.get_password().map_err(|e|anyhow::anyhow!("钥匙串读取失败：{e}"))?}));}
-                if credential_op=="forget_password" || !remember {
-                    match entry.delete_credential(){Ok(())|Err(keyring::Error::NoEntry)=>{},Err(e)=>return Err(e.into())}
+            let account = p.account_key();
+            let store = if p.credential_store.is_empty() {
+                "keychain"
+            } else {
+                &p.credential_store
+            };
+            let password = v["password"].as_str().unwrap_or("");
+            if op == "load_password" {
+                return Ok(
+                    json!({"password":crate::secret_store::get(store,"dev.ccbridge.desktop.ssh",&account).await?}),
+                );
+            }
+            if op == "forget_password" || !p.remember_password {
+                crate::secret_store::forget("dev.ccbridge.desktop.ssh", &account).await?;
+                if op == "forget_password" {
                     return Ok(json!({"deleted":true}));
                 }
-                if !password.is_empty(){entry.set_password(&password)?;}else{entry.get_password().map_err(|_|anyhow::anyhow!("请先输入密码，或取消记住密码"))?;}
-                Ok(json!({"saved":true}))
-            }).await?;
-            if op != "save_profile" {
-                return Ok(credential_result);
+            } else if !password.is_empty() {
+                crate::secret_store::set(
+                    store,
+                    "dev.ccbridge.desktop.ssh",
+                    &account,
+                    password.into(),
+                )
+                .await?;
+            } else {
+                let previous: Profile = read_json(&app_dir()?.join("profile.json"))?;
+                if !previous.remember_password
+                    || previous.account_key() != account
+                    || previous.credential_store != p.credential_store
+                {
+                    bail!("切换密码保存方式或账号时，请重新输入密码；不会自动导出原密码")
+                }
             }
         }
         p.save()?;
@@ -262,6 +349,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 c.profile.name = p.name;
                 c.profile.model = p.model;
                 c.profile.remember_password = p.remember_password;
+                c.profile.credential_store = p.credential_store;
             }
         }
         return Ok(json!({"saved":true}));
@@ -289,6 +377,13 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         }
         let p: Profile = serde_json::from_value(v["profile"].clone())?;
         p.validate()?;
+        if p.credential_store == "file"
+            && v["password"].as_str().is_some_and(|s| !s.is_empty())
+            && v["storage_ack"] != true
+        {
+            bail!("请先确认本机保存的安全提示")
+        }
+
         let old = { state.connection.lock().await.take() };
         if let Some(old) = old {
             let _ = old
@@ -300,12 +395,17 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         let typed_password = !password.is_empty();
         #[cfg(target_os = "macos")]
         let password = if password.is_empty() && p.remember_password {
-            let account = serde_json::to_string(&(p.host.as_str(), p.port, p.user.as_str()))?;
-            crate::credentials::call(move || {
-                Ok(keyring::Entry::new("dev.ccbridge.desktop.ssh", &account)?.get_password()?)
-            })
+            crate::secret_store::get(
+                if p.credential_store.is_empty() {
+                    "keychain"
+                } else {
+                    &p.credential_store
+                },
+                "dev.ccbridge.desktop.ssh",
+                &p.account_key(),
+            )
             .await
-            .context("读取已保存 SSH 密码失败，请处理钥匙串授权或手动输入密码")?
+            .context("读取已保存SSH密码失败，请在App输入或检查保存位置")?
         } else {
             password
         };
@@ -314,31 +414,39 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         } else {
             None
         };
-        let conn = ssh::connect(p, password).await?;
+        let mut conn = ssh::connect(p, password).await?;
         let mut credential_warning = None::<String>;
         #[cfg(target_os = "macos")]
         if let Some(password) = remembered {
-            let account = serde_json::to_string(&(
-                conn.profile.host.as_str(),
-                conn.profile.port,
-                conn.profile.user.as_str(),
-            ))?;
-            if let Err(e) = crate::credentials::call(move || {
-                Ok(keyring::Entry::new("dev.ccbridge.desktop.ssh", &account)?
-                    .set_password(&password)?)
-            })
+            if let Err(e) = crate::secret_store::set(
+                if conn.profile.credential_store.is_empty() {
+                    "keychain"
+                } else {
+                    &conn.profile.credential_store
+                },
+                "dev.ccbridge.desktop.ssh",
+                &conn.profile.account_key(),
+                password,
+            )
             .await
             {
-                credential_warning = Some(format!("SSH 已连接，但密码尚未保存：{e}"));
+                credential_warning = Some(format!("SSH已连接，但密码未保存：{e}"));
+                let old: Option<Profile> = read_json(&app_dir()?.join("profile.json")).ok();
+                if let Some(old) = old.filter(|old| old.account_key() == conn.profile.account_key())
+                {
+                    conn.profile.credential_store = old.credential_store;
+                    conn.profile.remember_password = old.remember_password;
+                } else {
+                    conn.profile.remember_password = false;
+                }
             }
         }
         conn.profile.save()?;
         let mut r = conn.info();
         if let Some(w) = credential_warning {
             r["credential_warning_detail"] = json!(w);
-            r["credential_warning"] = json!(
-                "SSH 已连接，但密码未保存。请检查 macOS 钥匙串授权；下次可手动输入 SSH 密码。"
-            );
+            r["credential_warning"] =
+                json!("SSH已连接，但新密码未保存，原保存方式保持不变。请检查所选存储后重新保存。");
         }
         *state.connection.lock().await = Some(conn);
         return Ok(r);

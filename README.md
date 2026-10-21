@@ -4,18 +4,28 @@
 
 ## 下载与安装
 
-在 [Releases](https://github.com/akaryc1b/CCBridge/releases) 按 Mac 芯片下载 `CCBridge-macos-arm64.zip`（Apple Silicon）或 `CCBridge-macos-x86_64.zip`（Intel），解压后把 `CCBridge.app` 放到 `/Applications`。
+在 [Releases](https://github.com/akaryc1b/CCBridge/releases) 按 Mac 芯片下载 `CCBridge-macos-arm64.dmg`（Apple Silicon）或 `CCBridge-macos-x86_64.dmg`（Intel），打开后将 `CCBridge.app` 拖入 Applications，再从应用程序启动。ZIP仅作恢复备用；ARM先发，Intel随后追加到同一版本。
 
 - Mac App：Apple Silicon / Intel x86_64，macOS 12+。Intel 包已通过 Rosetta CLI 与 SSH/MCP 协议验收；实际 Intel 设备的图形界面仍需在设备上确认。
 - 配套服务器 Runner：Linux x86_64，CI 在 Ubuntu 22.04 构建；Mac arm64 可使用 App 内的同架构程序。
 - App 当前为 ad-hoc 签名，未做 Developer ID 签名或 Apple 公证。更新可能触发 macOS 钥匙串重新授权，授权必须由用户在系统中完成。
 - 服务器必须已有可运行、已认证的 Claude Code。App 不安装 Claude，也不复制模型凭据。
 
+## 外观、密码保存与启动连接
+
+左下角可选择亮色、暗色或跟随系统。工作台可直接打开项目文件或新建任务；普通浏览不会更改MCP默认项目。
+
+“设置 → 启动App时自动连接SSH”默认关闭。开启前需保存密码并确认服务器指纹；每次GUI启动只尝试一次。失败可在服务器页手动重试，主动断开后不重连，也不重放任务。
+
+“服务器 → 编辑连接”可选择保存位置。**本机保存是明文私有文件，不等同于钥匙串保护**：目录0700、文件0600，同一Mac账号的程序仍可能读取。保存前排除Time Machine；其他备份工具需用户自行排除。密码不写入profile或MCP配置，切换方式需重新输入，不自动导出旧钥匙串。Codeup本机和远端作用域各自选择保存位置。
+
+应用内更新继续下载并验证独立签名包，不需要每次重新安装DMG。非标准位置启动时提示移到应用程序；已有旧版时保留它，提示Finder替换或使用签名更新，不强行覆盖运行中的副本。
+
 ## Codeup、分支与文件管理
 
 在“项目与文件”点击 **Codeup 认证 / 检测**，选择“本机获取”或“服务器当前 SSH 账号直接获取”，输入普通 HTTPS 仓库地址即可检测已有 Git 凭据。缺少认证时，在同一弹窗输入 Codeup HTTPS 克隆用户名及密码 / 访问令牌，点击“保存认证”，然后检测访问。留空密码不会覆盖已保存的认证；不接受把令牌嵌进仓库 URL。
 
-凭据保存在 macOS 钥匙串。本机凭据与远端凭据分开，远端再按 SSH 主机、端口、账号隔离。远端执行时经 SSH 临时提供，不写入远端 Git 配置、仓库地址或项目文件。认证供 CCBridge 的检测、克隆和 fetch 使用；未保存 App 认证时，继续沿用原有 Git 凭据助手。不同同事在自己的 Mac 保存自己的认证。
+凭据默认保存在 macOS 钥匙串，也可明确选择本机私有文件。本机凭据与远端凭据分开，远端再按 SSH 主机、端口、账号隔离。远端执行时经 SSH 临时提供，不写入远端 Git 配置、仓库地址或项目文件。认证供 CCBridge 的检测、克隆和 fetch 使用；未保存 App 认证时，继续沿用原有 Git 凭据助手。不同同事在自己的 Mac 保存自己的认证。
 
 打开具体 Git 仓库根目录，点击 **Git 分支**：查看当前分支与未提交状态、切换本地分支、新建分支、从远端引用建立跟踪分支；“获取远端分支”只 fetch、不合并。不会自动 stash、reset 或推送，有未提交改动或相关运行任务时拒绝切换。
 
@@ -47,7 +57,7 @@
 
 ## 对话与权限
 
-“任务与对话”按项目分组会话，组内按最近更新时间排列，可折叠项目；项目子目录归入最具体的已注册项目，未注册目录单独分组。消息展示 Markdown；工具过程和原始事件折叠显示。追问保持同一 Claude 会话和远端目录，切换 App 工作区不会改变旧会话目录。⌘ Enter 发送，Enter 换行。
+“会话”按项目分组会话，组内按最近更新时间排列，可折叠项目；项目子目录归入最具体的已注册项目，未注册目录单独分组。消息展示 Markdown；工具过程和原始事件折叠显示。追问保持同一 Claude 会话和远端目录，切换 App 工作区不会改变旧会话目录。⌘ Enter 发送，Enter 换行。
 
 MCP 新任务默认审批模式；App 输入框会明确显示下一轮模式。用户可在 App 开启“允许选择全自动模式”，再为下一轮选择全自动。MCP 新任务必须显式传入对应模式；MCP 追问沿用上一轮模式，不允许静默提升权限。运行中的一轮权限固定。
 
@@ -67,7 +77,7 @@ MCP `cc_start` / `cc_reply` 支持可选 `model` 和 `model_policy`（`inherit`�
 
 ## 接入 Codex
 
-在 App 的“Codex 接入”点击“一键配置 Codex”，再重新加载 MCP 或新开会话。只更新 `mcp_servers.ccbridge`，保留其他服务与配置；修改前创建私有备份，无改动不重复备份。
+在 App 的“Codex / MCP”点击“自动写入MCP配置”，再重新加载 MCP 或新开会话。只更新 `mcp_servers.ccbridge`，保留其他服务与配置；修改前创建私有备份，无改动不重复备份。
 
 也可以合并以下片段到 Codex 的 `config.toml`：
 
@@ -147,7 +157,7 @@ sh tests/linux-smoke.sh "$PWD/target/release/ccbridge"
 
 推送和 PR 执行 Rust 格式、Linux Runner 测试/烟测、Mac SSH/MCP 集成测试、前端测试与 Tauri 编译。标签 `vX.Y.Z` 与版本一致，Linux/数据库公共检查及对应架构检查通过后，该架构立即发布，不等待另一架构。ARM 与 Intel 分别构建、独立发布到同一个 Release；后完成的架构追加文件，并合并 `latest.json`，不会覆盖先完成的架构。尚未完成的架构不会被冒充为可更新；可以先下载已完成架构。发布包含：
 
-- `CCBridge-macos-arm64.zip` / `CCBridge-macos-x86_64.zip`：按芯片首次安装或应急恢复；应用内更新自动按架构选择更新包
+- `CCBridge-macos-arm64.dmg` / `CCBridge-macos-x86_64.dmg`：按芯片首次安装或应急恢复；应用内更新自动按架构选择更新包
 - `CCBridge.app.tar.gz`（ARM）、`CCBridge-macos-x86_64.app.tar.gz`（Intel）与各自 `.sig`：签名更新包
 - `latest.json`：GitHub 更新清单
 - `ccbridge-linux-x86_64`：配套 Runner
