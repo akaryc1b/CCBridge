@@ -1407,6 +1407,10 @@ export default function App() {
                     </summary>
                     <Button
                       className="group-new"
+                      disabled={!group.registered}
+                      title={
+                        group.registered ? "新任务" : "请先在项目页注册此目录"
+                      }
                       variant="ghost"
                       aria-label={`为${group.name}新建任务`}
                       onClick={() =>
