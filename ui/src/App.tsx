@@ -574,7 +574,7 @@ export default function App() {
     safe(
       (async () => {
         const s = await invoke<Data>("initial_state");
-        setProfile({ ...profile, ...s.profile });
+        setProfile({ ...profile, ...s.profile, credential_store: "file" });
         setSaved(s.profiles || {});
         setVersion(s.version);
         setPreferences(s.preferences || {});
@@ -684,7 +684,12 @@ export default function App() {
       if (c) {
         setPassword("");
         setConnection(c);
-        setProfile(c.profile || profile);
+        setProfile(c.profile || { ...profile, credential_store: "file" });
+        const stored = c.profile || profile;
+        setSaved((x) => ({
+          ...x,
+          [JSON.stringify([stored.host, stored.port, stored.user])]: stored,
+        }));
         setServerEdit(false);
         toast.success("SSH 已连接");
       }
@@ -1996,9 +2001,16 @@ export default function App() {
                 <p className="muted">
                   SSH：
                   {profile.remember_password
-                    ? profile.credential_store === "file"
+                    ? (
+                        Object.values(saved).find(
+                          (p: any) =>
+                            p.host === profile.host &&
+                            p.port === profile.port &&
+                            p.user === profile.user,
+                        ) as Data
+                      )?.credential_store === "file"
                       ? "本机保存"
-                      : "系统钥匙串"
+                      : "旧凭据待迁移"
                     : "未保存"}
                 </p>
                 <div className="toolbar">
@@ -2218,23 +2230,7 @@ export default function App() {
           </div>
           {profile.remember_password && (
             <>
-              <Field label="密码保存位置">
-                <Select
-                  value={profile.credential_store || "keychain"}
-                  onValueChange={(v) => {
-                    patch("credential_store", v);
-                    setStorageAck(false);
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="keychain">系统钥匙串</SelectItem>
-                    <SelectItem value="file">本机保存</SelectItem>
-                  </SelectContent>
-                </Select>
-              </Field>
+              <p className="hint">密码保存在本机，仅当前Mac账号可访问。</p>
               {profile.credential_store === "file" && !storageConsent && (
                 <label className="storage-warning">
                   <input
@@ -2294,7 +2290,10 @@ export default function App() {
                         storage_ack: storageAck,
                       }).then((r) => {
                         if (r) {
-                          setProfile(r.profile);
+                          setProfile({
+                            ...r.profile,
+                            credential_store: "file",
+                          });
                           setStorageConsent(true);
                           setPassword("");
                           setSaved((x) => ({
@@ -2334,6 +2333,14 @@ export default function App() {
                   }).then((r) => {
                     if (r) {
                       setPassword("");
+                      setSaved((x) => ({
+                        ...x,
+                        [JSON.stringify([
+                          profile.host,
+                          profile.port,
+                          profile.user,
+                        ])]: profile,
+                      }));
                       if (profile.credential_store === "file")
                         setStorageConsent(true);
                       toast.success("连接配置已保存");

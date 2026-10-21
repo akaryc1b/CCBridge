@@ -46,7 +46,7 @@ export function CodeupAuth({
   consented?: boolean;
   onConsent?: () => void;
 }) {
-  const [storage, setStorage] = useState("keychain"),
+  const [storage, setStorage] = useState("file"),
     [storageAck, setStorageAck] = useState(false);
   const [scope, setScope] = useState(initialScope),
     [url, setUrl] = useState(initialUrl),
@@ -79,7 +79,7 @@ export function CodeupAuth({
       .then((r) => {
         if (active) {
           setStatus(r);
-          setStorage(r.storage === "file" ? "file" : "keychain");
+          setStorage("file");
           setStorageAck(false);
           setUsername(r.username || "");
         }
@@ -109,7 +109,11 @@ export function CodeupAuth({
           storage_ack: storageAck,
         },
       });
-      if (op === "git_auth_save" && storage === "file") onConsent?.();
+      if (
+        ["git_auth_save", "git_auth_migrate"].includes(op) &&
+        storage === "file"
+      )
+        onConsent?.();
       if (op === "git_access") {
         setMessage(r.message || "仓库可以读取");
       } else {
@@ -122,7 +126,7 @@ export function CodeupAuth({
         );
       }
       setForget(false);
-      if (op === "git_auth_save" && onSaved) {
+      if (["git_auth_save", "git_auth_migrate"].includes(op) && onSaved) {
         onOpenChange(false);
         onSaved();
       }
@@ -201,23 +205,14 @@ export function CodeupAuth({
         <p className="hint">
           检测只读取远端引用，不克隆、不推送。填写但未保存的凭据也可直接检测；不会显示或回填已保存的令牌。
         </p>
-        <Label>密码保存方式</Label>
-        <Select
-          value={storage}
-          onValueChange={(v) => {
-            setStorage(v);
-            setStorageAck(false);
-          }}
-          disabled={disabled}
-        >
-          <SelectTrigger>
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="keychain">系统钥匙串</SelectItem>
-            <SelectItem value="file">本机私有文件</SelectItem>
-          </SelectContent>
-        </Select>
+        {status.configured && status.storage !== "file" && (
+          <Button
+            disabled={disabled || (!consented && !storageAck)}
+            onClick={() => void run("git_auth_migrate")}
+          >
+            迁移此作用域已保存的认证
+          </Button>
+        )}
         {storage === "file" && !consented && (
           <label className="hint">
             <input
@@ -225,7 +220,7 @@ export function CodeupAuth({
               checked={storageAck}
               onChange={(e) => setStorageAck(e.target.checked)}
             />{" "}
-            我理解密码以明文保存在当前用户私有目录，同一用户程序仍可读取；切换方式需要重新输入。
+            我理解密码以明文保存在当前用户私有目录，同一用户程序仍可读取。
           </label>
         )}
         {message && (

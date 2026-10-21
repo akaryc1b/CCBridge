@@ -116,7 +116,7 @@ pub fn confirm_consent(confirmed: bool) -> Result<()> {
 }
 pub fn validate_store(store: &str) -> Result<()> {
     if !["keychain", "file"].contains(&store) {
-        bail!("请选择钥匙串或本机保存")
+        bail!("保存方式无效")
     };
     Ok(())
 }
@@ -140,28 +140,16 @@ pub async fn set(store: &str, service: &str, key: &str, value: String) -> Result
             .arg(&dir)
             .output()?;
         if !status.status.success() {
-            bail!(
-                "无法将本机凭据目录排除出Time Machine备份；本次未保存，请选择钥匙串或检查系统备份权限"
-            )
+            bail!("无法将本机凭据目录排除出Time Machine备份；本次未保存，请检查系统备份权限")
         }
         update(&format!("{service}:{key}"), Some(&value))?;
         return Ok(());
     }
-    let (service, key) = (service.to_string(), key.to_string());
-    crate::credentials::call(move || Ok(keyring::Entry::new(&service, &key)?.set_password(&value)?))
-        .await
+    bail!("仅支持本机保存，钥匙串只用于显式迁移旧凭据")
 }
 #[cfg(all(feature = "bridge", target_os = "macos"))]
 pub async fn forget(service: &str, key: &str) -> Result<()> {
-    update(&format!("{service}:{key}"), None)?;
-    let (service, key) = (service.to_string(), key.to_string());
-    crate::credentials::call(move || {
-        match keyring::Entry::new(&service, &key)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.into()),
-        }
-    })
-    .await
+    update(&format!("{service}:{key}"), None)
 }
 #[cfg(test)]
 mod tests {

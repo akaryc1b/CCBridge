@@ -113,7 +113,9 @@ pub fn status(scope: &str, p: &Profile) -> Result<Value> {
 pub async fn save(scope: &str, p: &Profile, c: Credential, store: &str) -> Result<Value> {
     c.validate()?;
     let key = key(scope, p)?;
-    crate::secret_store::validate_store(store)?;
+    if store != "file" {
+        bail!("仅支持本机保存")
+    };
     let username = c.username.clone();
     crate::secret_store::set(
         store,
@@ -141,12 +143,29 @@ pub async fn load(scope: &str, p: &Profile) -> Result<Option<Credential>> {
     if !metadata()?.contains_key(&k) {
         return Ok(None);
     }
-    let encoded = crate::secret_store::get(&storage(&k)?, "dev.ccbridge.git.codeup", &k)
+    if storage(&k)? != "file" {
+        bail!("旧版Codeup认证尚未迁移，请在App认证窗口点击迁移")
+    }
+    let encoded = crate::secret_store::get("file", "dev.ccbridge.git.codeup", &k)
         .await
         .context("无法读取Codeup认证，请检查保存位置")?;
     let c: Credential = serde_json::from_str(&encoded)?;
     c.validate()?;
     Ok(Some(c))
+}
+#[cfg(target_os = "macos")]
+pub async fn migrate(scope: &str, p: &Profile) -> Result<Value> {
+    let k = key(scope, p)?;
+    if storage(&k)? == "file" {
+        return status(scope, p);
+    }
+    let encoded = crate::secret_store::get("keychain", "dev.ccbridge.git.codeup", &k).await?;
+    let c: Credential = serde_json::from_str(&encoded)?;
+    save(scope, p, c, "file").await
+}
+#[cfg(not(target_os = "macos"))]
+pub async fn migrate(_scope: &str, _p: &Profile) -> Result<Value> {
+    bail!("请在Mac App迁移旧凭据")
 }
 #[cfg(target_os = "macos")]
 pub async fn remove(scope: &str, p: &Profile) -> Result<Value> {

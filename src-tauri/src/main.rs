@@ -45,7 +45,7 @@ commands! {
  database_list=>"db_list", database_save=>"db_save", database_bind=>"db_bind",
  database_remove=>"db_remove", database_detect=>"db_detect", database_test=>"db_test",
  database_protocol_test=>"db_protocol_test",
- git_auth_status=>"git_auth_status", git_auth_save=>"git_auth_save", git_auth_remove=>"git_auth_remove", git_access=>"git_access",
+ git_auth_migrate=>"git_auth_migrate", git_auth_status=>"git_auth_status", git_auth_save=>"git_auth_save", git_auth_remove=>"git_auth_remove", git_access=>"git_access",
  file_create=>"file_create", file_mutate=>"file_mutate", trash_list=>"trash_list", trash_restore=>"trash_restore", branches=>"branches", branch_change=>"branch_change", branch_fetch=>"branch_fetch",
  update_safety=>"safe_update_state"
 }
@@ -244,6 +244,7 @@ fn main() {
             file_preview,
             clone_repository,
             clone_progress,
+            git_auth_migrate,
             git_auth_status,
             git_auth_save,
             git_auth_remove,

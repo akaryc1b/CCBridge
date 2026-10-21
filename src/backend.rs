@@ -163,6 +163,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "select_remote_workspace",
             "create_directory",
             "git_auth_save",
+            "git_auth_migrate",
             "git_auth_remove",
             "file_create",
             "file_mutate",
@@ -220,6 +221,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     if [
         "git_auth_status",
         "git_auth_save",
+        "git_auth_migrate",
         "git_auth_remove",
         "git_access",
     ]
@@ -244,6 +246,10 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if op == "git_auth_status" {
             return crate::git_auth::status(scope, &p);
         }
+        if op == "git_auth_migrate" {
+            crate::secret_store::confirm_consent(v["storage_ack"] == true)?;
+            return crate::git_auth::migrate(scope, &p).await;
+        }
         if op == "git_auth_remove" {
             return crate::git_auth::remove(scope, &p).await;
         }
@@ -258,14 +264,12 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             c.validate()?
         }
         if op == "git_auth_save" {
-            if v["storage"] == "file" {
-                crate::secret_store::confirm_consent(v["storage_ack"] == true)?;
-            }
+            crate::secret_store::confirm_consent(v["storage_ack"] == true)?;
             return crate::git_auth::save(
                 scope,
                 &p,
                 draft.context("请输入要保存的 Codeup 密码 / 令牌")?,
-                v["storage"].as_str().unwrap_or("keychain"),
+                "file",
             )
             .await;
         }
@@ -340,7 +344,8 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if !human {
             bail!("凭据只能在 App 管理")
         }
-        let p: Profile = serde_json::from_value(v["profile"].clone())?;
+        let mut p: Profile = serde_json::from_value(v["profile"].clone())?;
+        p.credential_store = "file".into();
         p.validate()?;
         if p.credential_store == "file" && v["password"].as_str().is_some_and(|s| !s.is_empty()) {
             crate::secret_store::confirm_consent(v["storage_ack"] == true)?;
@@ -414,7 +419,8 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if !human {
             bail!("只能在 App 登录")
         }
-        let p: Profile = serde_json::from_value(v["profile"].clone())?;
+        let mut p: Profile = serde_json::from_value(v["profile"].clone())?;
+        p.credential_store = "file".into();
         p.validate()?;
         if p.credential_store == "file" && v["password"].as_str().is_some_and(|s| !s.is_empty()) {
             crate::secret_store::confirm_consent(v["storage_ack"] == true)?;
@@ -431,17 +437,9 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         let typed_password = !password.is_empty();
         #[cfg(target_os = "macos")]
         let password = if password.is_empty() && p.remember_password {
-            crate::secret_store::get(
-                if p.credential_store.is_empty() {
-                    "keychain"
-                } else {
-                    &p.credential_store
-                },
-                "dev.ccbridge.desktop.ssh",
-                &p.account_key(),
-            )
-            .await
-            .context("读取已保存SSH密码失败，请在App输入或检查保存位置")?
+            crate::secret_store::get("file", "dev.ccbridge.desktop.ssh", &p.account_key())
+                .await
+                .context("读取已保存SSH密码失败，请在App输入或检查保存位置")?
         } else {
             password
         };
@@ -455,11 +453,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         #[cfg(target_os = "macos")]
         if let Some(password) = remembered {
             if let Err(e) = crate::secret_store::set(
-                if conn.profile.credential_store.is_empty() {
-                    "keychain"
-                } else {
-                    &conn.profile.credential_store
-                },
+                "file",
                 "dev.ccbridge.desktop.ssh",
                 &conn.profile.account_key(),
                 password,
