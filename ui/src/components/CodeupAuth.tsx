@@ -273,7 +273,7 @@ export function CodeupAuth({
                     ? "检测失败"
                     : vpsStatus.configured
                       ? "VPS 已配置"
-                      : "VPS 未配置"}
+                      : "未由 App 配置"}
             </Badge>
           </div>
           <p className="hint">

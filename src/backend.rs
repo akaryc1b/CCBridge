@@ -555,7 +555,12 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if !human {
             bail!("VPS 认证检测只能在 App 操作")
         }
-        let mut r = c.git_access(field(&v, "url")?, None).await?;
+        let mut r = c.git_access(field(&v, "url")?, None).await.map_err(|e| {
+            let text=format!("{e:#}");
+            if text.contains("未取得 Codeup 认证") || text.contains("未通过认证") || text.contains("读取权限") {
+                anyhow::anyhow!("VPS 自身 Git 认证或仓库权限不足；请在此窗口点击‘同步到当前 VPS’或更新 VPS 令牌，并核对仓库地址与权限后再检测。本次未使用 Mac 凭据。")
+            } else { e.context("VPS 自身 Git 检测失败，本次未使用 Mac 凭据") }
+        })?;
         r["message"] = json!("VPS 自身 Git 认证检测通过，未注入 Mac 凭据");
         return Ok(r);
     }
