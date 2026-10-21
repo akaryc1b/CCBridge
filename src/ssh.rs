@@ -365,8 +365,15 @@ impl Connection {
                     total,
                 );
                 let u = url.clone();
-                let bundle =
-                    tokio::task::spawn_blocking(move || crate::transfer::bundle(&u)).await??;
+                let cred = if crate::git_auth::host(&url).is_ok() {
+                    crate::git_auth::load("local", &self.profile).await?
+                } else {
+                    None
+                };
+                let bundle = tokio::task::spawn_blocking(move || {
+                    crate::transfer::bundle_with_auth(&u, cred.as_ref())
+                })
+                .await??;
                 report(&format!("{name}：通过 SSH 传输并导入仓库"), index, total);
                 let cmd =
                     crate::transfer::import_script(&self.environment.home, parent, &name, &url)?;
@@ -378,16 +385,24 @@ impl Connection {
                 result
             } else {
                 report(&format!("{name}：使用服务器 Git 认证克隆"), index, total);
-                let mut cmd = crate::remote_fs::guard(&self.environment.home, parent)?;
+                let cred = if crate::git_auth::host(&url).is_ok() {
+                    crate::git_auth::load("remote", &self.profile).await?
+                } else {
+                    None
+                };
+                let host = url::Url::parse(&url)?.host_str().unwrap_or("").to_string();
+                let (mut cmd, input) = crate::git_auth::remote_prefix(&host, cred.as_ref());
+                cmd += &crate::remote_fs::guard(&self.environment.home, parent)?;
                 cmd += &format!(
                     r#"dest="$path"/{}
 if [ -e "$dest" ] || [ -L "$dest" ]; then printf CCBRIDGE_ALREADY_EXISTS >&2; exit 43; fi
-GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false git -c credential.interactive=false clone --quiet -- {} "$dest"
+git_auth clone --quiet -- {} "$dest"
 "#,
                     shell_quote(&name),
                     shell_quote(&url)
                 );
-                self.execute_for(cmd, &[], Duration::from_secs(600)).await?
+                self.execute_for(cmd, &input, Duration::from_secs(600))
+                    .await?
             };
             if status != Some(0) {
                 return Ok(
@@ -401,6 +416,62 @@ GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false git -c credential.interactive=f
         }
         report("全部仓库处理完成", total, total);
         Ok(json!({"complete":true,"root":parent,"repositories":prepared}))
+    }
+    pub async fn git_access(
+        &self,
+        url: &str,
+        cred: Option<crate::git_auth::Credential>,
+    ) -> Result<Value> {
+        let host = crate::git_auth::host(url)?;
+        let (mut cmd, input) = crate::git_auth::remote_prefix(&host, cred.as_ref());
+        cmd += &format!("git_auth ls-remote --heads -- {}\n", shell_quote(url));
+        let (out, err, status) = self
+            .execute_for(cmd, &input, Duration::from_secs(120))
+            .await?;
+        if status != Some(0) {
+            bail!(
+                "远端 Codeup 访问失败：{}",
+                crate::transfer::local_failure(&String::from_utf8_lossy(&err))
+                    .replace("本机", "远端")
+                    .replace("macOS 钥匙串", "钥匙串")
+            )
+        }
+        Ok(
+            json!({"accessible":true,"message":"远端 Git 已通过仓库读取检测","branches":String::from_utf8_lossy(&out).lines().count()}),
+        )
+    }
+    pub async fn git_fetch(&self, path: &str) -> Result<Value> {
+        self.rpc(json!({"op":"branches","path":path})).await?;
+        let mut guard = crate::remote_fs::guard(&self.environment.home, path)?;
+        guard += "git -C \"$path\" remote get-url origin\n";
+        let (out, _, status) = self.execute(guard, &[]).await?;
+        if status != Some(0) {
+            bail!("没有可用的 origin 远端")
+        }
+        let url = String::from_utf8(out)?.trim().to_string();
+        let host = url::Url::parse(&url)
+            .ok()
+            .and_then(|u| u.host_str().map(String::from))
+            .unwrap_or_default();
+        let cred = if crate::git_auth::host(&url).is_ok() {
+            crate::git_auth::load("remote", &self.profile).await?
+        } else {
+            None
+        };
+        let (mut cmd, input) = crate::git_auth::remote_prefix(&host, cred.as_ref());
+        cmd += &crate::remote_fs::guard(&self.environment.home, path)?;
+        cmd += "git_auth -C \"$path\" fetch origin\n";
+        let (_, err, status) = self
+            .execute_for(cmd, &input, Duration::from_secs(300))
+            .await?;
+        if status != Some(0) {
+            bail!(
+                "获取远端分支失败：{}",
+                crate::transfer::local_failure(&String::from_utf8_lossy(&err))
+                    .replace("本机", "远端")
+            )
+        }
+        self.rpc(json!({"op":"branches","path":path})).await
     }
     pub async fn prepare_repositories(&self, group: &str, urls: &str) -> Result<Value> {
         let plan = crate::provision::plan(group, urls)?;

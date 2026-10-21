@@ -27,3 +27,8 @@ pub mod ssh;
 pub mod transfer;
 #[cfg(feature = "bridge")]
 pub mod update_gate;
+
+pub mod workspace_ops;
+
+#[cfg(feature = "bridge")]
+pub mod git_auth;

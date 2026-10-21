@@ -1,3 +1,10 @@
+import { CodeupAuth } from "@/components/CodeupAuth";
+import {
+  FileActions,
+  FileOperation,
+  TrashDialog,
+  BranchDialog,
+} from "@/components/WorkspaceTools";
 import { containingProject, latestNavigation } from "@/lib/navigation";
 import { Databases } from "@/components/Databases";
 import {
@@ -196,6 +203,11 @@ export default function App() {
     [integrationState, setIntegrationState] = useState("idle"),
     [cloneProgress, setCloneProgress] = useState<Data>({}),
     [cloneError, setCloneError] = useState("");
+  const [authOpen, setAuthOpen] = useState(false),
+    [authScope, setAuthScope] = useState("local"),
+    [fileOperation, setFileOperation] = useState<Data | null>(null),
+    [trashOpen, setTrashOpen] = useState(false),
+    [branchesOpen, setBranchesOpen] = useState(false);
   const drafts = useRef<Record<string, string>>({});
   const messagesRef = useRef<HTMLDivElement>(null),
     following = useRef(true);
@@ -1078,26 +1090,35 @@ export default function App() {
                 </p>
                 <div className="file-list" aria-busy={browsing}>
                   {(listing.entries || []).map((e: Data) => (
-                    <button
-                      key={e.path}
-                      disabled={!locationReady}
-                      onClick={() =>
-                        ["directory", "repository"].includes(e.kind)
-                          ? safe(browse(e.path))
-                          : safe(previewFile(e.path))
-                      }
-                    >
-                      {e.kind === "file" ? (
-                        <FileText size={17} />
-                      ) : (
-                        <Folder size={17} />
-                      )}
-                      <span>{e.name}</span>
-                      {e.kind === "repository" && (
-                        <Badge variant="secondary">Git</Badge>
-                      )}
-                      <ChevronRight size={14} />
-                    </button>
+                    <div key={e.path} className="file-row">
+                      <button
+                        key={e.path}
+                        disabled={!locationReady}
+                        onClick={() =>
+                          ["directory", "repository"].includes(e.kind)
+                            ? safe(browse(e.path))
+                            : safe(previewFile(e.path))
+                        }
+                      >
+                        {e.kind === "file" ? (
+                          <FileText size={17} />
+                        ) : (
+                          <Folder size={17} />
+                        )}
+                        <span>{e.name}</span>
+                        {e.kind === "repository" && (
+                          <Badge variant="secondary">Git</Badge>
+                        )}
+                        <ChevronRight size={14} />
+                      </button>
+                      <FileActions
+                        entry={e}
+                        disabled={!locationReady}
+                        onAction={(action, entry) =>
+                          setFileOperation({ action, entry })
+                        }
+                      />
+                    </div>
                   ))}
                   {!listing.entries?.length && (
                     <p className="empty">选择项目或打开 HOME 浏览目录。</p>
@@ -1106,7 +1127,42 @@ export default function App() {
                 {listing.truncated && (
                   <p className="hint">目录超过 1000 项，当前显示已截断。</p>
                 )}
-                <div className="toolbar">
+                <div className="toolbar flex-wrap">
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setAuthScope(localAuth ? "local" : "remote");
+                      setAuthOpen(true);
+                    }}
+                  >
+                    Codeup 认证 / 检测
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={!locationReady}
+                    onClick={() => setBranchesOpen(true)}
+                  >
+                    Git 分支
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={!connected}
+                    onClick={() => setTrashOpen(true)}
+                  >
+                    回收区
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={!locationReady}
+                    onClick={() =>
+                      setFileOperation({
+                        action: "create",
+                        entry: { path: listedPath, name: "" },
+                      })
+                    }
+                  >
+                    新建文件
+                  </Button>
                   <Button
                     variant="outline"
                     disabled={!locationReady}
@@ -1716,6 +1772,41 @@ export default function App() {
           )}
         </div>
       </main>
+      <CodeupAuth
+        key={`${connection.profile?.host}:${connection.profile?.user}:${connection.profile?.port}`}
+        open={authOpen}
+        onOpenChange={setAuthOpen}
+        connected={connected}
+        account={
+          connected
+            ? `${connection.profile?.user}@${connection.profile?.host}:${connection.profile?.port}`
+            : ""
+        }
+        url={cloneUrls.trim().split(/\s+/)[0] || ""}
+        initialScope={authScope}
+      />
+      <FileOperation
+        key={`${fileOperation?.entry.path}:${fileOperation?.action}`}
+        operation={fileOperation}
+        onClose={() => setFileOperation(null)}
+        onDone={async () => {
+          await browse(listedPath);
+        }}
+        home={connection.environment?.home || ""}
+      />
+      <TrashDialog
+        open={trashOpen}
+        onClose={() => setTrashOpen(false)}
+        onDone={async () => {
+          await browse(listedPath);
+        }}
+      />
+      <BranchDialog
+        key={listedPath}
+        open={branchesOpen}
+        onClose={() => setBranchesOpen(false)}
+        path={listedPath}
+      />
       <Toaster richColors position="bottom-right" />
       <Dialog open={serverEdit} onOpenChange={setServerEdit}>
         <DialogContent className="server-dialog">
@@ -1876,6 +1967,16 @@ export default function App() {
             />
             <Label>使用本机 Git 认证传输（不上传凭据）</Label>
           </div>
+          <Button
+            variant="outline"
+            disabled={busy.has("clone_repository")}
+            onClick={() => {
+              setAuthScope(localAuth ? "local" : "remote");
+              setAuthOpen(true);
+            }}
+          >
+            配置 Codeup 认证 / 检测仓库访问
+          </Button>
           {(busy.has("clone_repository") ||
             cloneProgress.stage ||
             cloneError) && (

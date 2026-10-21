@@ -117,6 +117,13 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "refresh_runner",
             "select_remote_workspace",
             "create_directory",
+            "git_auth_save",
+            "git_auth_remove",
+            "file_create",
+            "file_mutate",
+            "trash_restore",
+            "branch_change",
+            "branch_fetch",
             "project_save",
             "set_auto",
             "bind_repository",
@@ -148,6 +155,72 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     let op = field(&v, "op")?.to_owned();
     if op == "clone_progress" {
         return Ok(state.clone_progress.lock().unwrap().clone());
+    }
+    if [
+        "git_auth_status",
+        "git_auth_save",
+        "git_auth_remove",
+        "git_access",
+    ]
+    .contains(&op.as_str())
+    {
+        if !human {
+            bail!("Git 认证只能在 App 操作")
+        }
+        let scope = v["scope"].as_str().unwrap_or("local");
+        let p: Profile = if scope == "remote" {
+            state
+                .connection
+                .lock()
+                .await
+                .as_ref()
+                .context("远端认证请先连接 SSH")?
+                .profile
+                .clone()
+        } else {
+            serde_json::from_value(v["profile"].clone()).unwrap_or_default()
+        };
+        if op == "git_auth_status" {
+            return crate::git_auth::status(scope, &p);
+        }
+        if op == "git_auth_remove" {
+            return crate::git_auth::remove(scope, &p).await;
+        }
+        let draft = v["secret"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|secret| crate::git_auth::Credential {
+                username: v["username"].as_str().unwrap_or("").into(),
+                secret: secret.into(),
+            });
+        if let Some(c) = &draft {
+            c.validate()?
+        }
+        if op == "git_auth_save" {
+            return crate::git_auth::save(
+                scope,
+                &p,
+                draft.context("请输入要保存的 Codeup 密码 / 令牌")?,
+            )
+            .await;
+        }
+        let url = field(&v, "url")?.to_string();
+        crate::git_auth::host(&url)?;
+        let cred = match draft {
+            Some(c) => Some(c),
+            None => crate::git_auth::load(scope, &p).await?,
+        };
+        if scope == "remote" {
+            let c = state
+                .connection
+                .lock()
+                .await
+                .clone()
+                .context("请先连接 SSH")?;
+            return c.git_access(&url, cred).await;
+        }
+        tokio::task::spawn_blocking(move || crate::transfer::access(&url, cred.as_ref())).await??;
+        return Ok(json!({"accessible":true,"message":"本机 Git 已通过仓库读取检测"}));
     }
     if op == "configure_codex" {
         if !human {
@@ -304,6 +377,41 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     drop(guard);
     if c.handle.is_closed() {
         bail!("SSH 已断开，请在 App 重新连接；不要自动重放任务")
+    }
+    if [
+        "file_create",
+        "file_mutate",
+        "trash_list",
+        "trash_restore",
+        "branches",
+        "branch_change",
+        "branch_fetch",
+    ]
+    .contains(&op.as_str())
+    {
+        if !human {
+            bail!("文件和分支管理只能由人在 App 操作")
+        }
+        if [
+            "file_create",
+            "file_mutate",
+            "trash_list",
+            "trash_restore",
+            "branch_fetch",
+            "branches",
+            "branch_change",
+        ]
+        .contains(&op.as_str())
+            && c.probe["runner_version"].as_str() != Some(env!("CARGO_PKG_VERSION"))
+        {
+            bail!("请先在服务器页更新当前账号 Runner，再使用文件和分支管理")
+        }
+        let mut req = v.clone();
+        req["protected"] = json!([c.profile.active_remote_workspace, c.profile.workspace]);
+        if op == "branch_fetch" {
+            return c.git_fetch(field(&v, "path")?).await;
+        }
+        return c.rpc(req).await;
     }
     if op == "directory_list" {
         return c

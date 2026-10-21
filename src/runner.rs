@@ -55,6 +55,8 @@ pub fn rpc_stdio() -> Result<()> {
 }
 pub fn dispatch(v: Value) -> Result<Value> {
     match field(&v, "op")? {
+        "file_create" | "file_mutate" | "trash_list" | "trash_restore" | "branches"
+        | "branch_change" => crate::workspace_ops::rpc(&v),
         "project_list" | "project_save" | "project_resolve" => crate::projects::rpc(&v),
         "db_list" | "db_save" | "db_bind" | "db_remove" | "db_detect" | "db_test"
         | "db_protocol_test" | "db_project_save" | "db_projects" | "db_resolve" => {

@@ -3,7 +3,7 @@ use anyhow::{Context, Result, bail};
 use std::{
     io::Read,
     path::PathBuf,
-    process::{Command, Stdio},
+    process::Stdio,
     time::{Duration, Instant},
 };
 pub struct Bundle {
@@ -15,9 +15,8 @@ impl Drop for Bundle {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
-fn git(args: &[&str]) -> Result<()> {
-    let mut c = Command::new("git")
-        .args(args)
+fn git(args: &[&str], cred: Option<&crate::git_auth::Credential>, host: &str) -> Result<()> {
+    let mut c = crate::git_auth::command(args, cred, host)
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -60,7 +59,9 @@ fn git(args: &[&str]) -> Result<()> {
 pub fn local_failure(stderr: &str) -> &'static str {
     let e = stderr.to_ascii_lowercase();
     if e.contains("25293") || e.contains("keychain") || e.contains("interaction is not allowed") {
-        "macOS 钥匙串没有放行 Git 凭据；请在系统弹窗授权，或在终端用 Git 验证此仓库的认证后重试"
+        "macOS 钥匙串没有放行 Git 凭据；请在系统弹窗授权，或在 App 的 Codeup 认证中重新保存后重试"
+    } else if e.contains("could not read username") || e.contains("terminal prompts disabled") {
+        "本机 Git 未取得 Codeup 认证，请在 App 的 Codeup 认证中输入保存，再检测仓库访问"
     } else if [
         "username",
         "authentication",
@@ -72,7 +73,7 @@ pub fn local_failure(stderr: &str) -> &'static str {
     .iter()
     .any(|s| e.contains(s))
     {
-        "本机 Git 没有获得此仓库的读取权限；请在本机终端验证仓库访问并配置 Git 凭据助手。SSH 登录密码不能用于 Git 认证"
+        "本机 Git 未通过认证或仓库读取校验；请在 App 的 Codeup 认证中填写或更新凭据，再检测仓库访问；也请确认仓库地址和账号权限"
     } else if e.contains("resolve host") || e.contains("connect") || e.contains("timed out") {
         "本机无法连接 Git 服务，请检查本机网络、代理和 DNS 后重试"
     } else if e.contains("certificate") {
@@ -82,6 +83,17 @@ pub fn local_failure(stderr: &str) -> &'static str {
     }
 }
 pub fn bundle(url: &str) -> Result<Bundle> {
+    bundle_with_auth(url, None)
+}
+pub fn access(url: &str, cred: Option<&crate::git_auth::Credential>) -> Result<()> {
+    let host = crate::git_auth::host(url)?;
+    git(&["ls-remote", "--", url], cred, &host)
+}
+pub fn bundle_with_auth(url: &str, cred: Option<&crate::git_auth::Credential>) -> Result<Bundle> {
+    let host = url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(String::from))
+        .unwrap_or_default();
     let dir = crate::common::app_dir()?
         .join("transfers")
         .join(uuid::Uuid::new_v4().to_string());
@@ -91,22 +103,30 @@ pub fn bundle(url: &str) -> Result<Bundle> {
         dir: dir.clone(),
     };
     let mirror = dir.join("mirror.git");
-    git(&[
-        "clone",
-        "--mirror",
-        "--quiet",
-        "--",
-        url,
-        mirror.to_str().context("本机临时路径无效")?,
-    ])?;
-    git(&[
-        "-C",
-        mirror.to_str().unwrap(),
-        "bundle",
-        "create",
-        b.path.to_str().unwrap(),
-        "--all",
-    ])?;
+    git(
+        &[
+            "clone",
+            "--mirror",
+            "--quiet",
+            "--",
+            url,
+            mirror.to_str().context("本机临时路径无效")?,
+        ],
+        cred,
+        &host,
+    )?;
+    git(
+        &[
+            "-C",
+            mirror.to_str().unwrap(),
+            "bundle",
+            "create",
+            b.path.to_str().unwrap(),
+            "--all",
+        ],
+        cred,
+        &host,
+    )?;
     Ok(b)
 }
 pub fn import_script(home: &str, parent: &str, name: &str, url: &str) -> Result<String> {
@@ -132,6 +152,7 @@ rm -- "$bundle"
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
     #[test]
     fn local_errors_identify_the_local_machine() {
         assert!(local_failure("fatal: could not read Username").contains("本机"));
