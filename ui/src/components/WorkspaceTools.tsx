@@ -548,9 +548,11 @@ export function BranchDialog({
         </div>
         {branch && !(info.branches || []).includes(branch) && (
           <p className="hint">
-            {action === "track"
-              ? `从 ${remote} 建立跟踪分支`
-              : `从当前 ${info.current || "HEAD"} 新建 ${branch}`}
+            {action === "fast_forward"
+              ? `将当前 ${info.current || "HEAD"} 快进到 ${branch}，保留分支名称`
+              : action === "track"
+                ? `从 ${remote} 建立跟踪分支`
+                : `从当前 ${info.current || "HEAD"} 新建 ${branch}`}
           </p>
         )}
         <p className="hint">
