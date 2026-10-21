@@ -145,7 +145,7 @@ sh tests/linux-smoke.sh "$PWD/target/release/ccbridge"
 
 更新前会排空本地写入、检查远端任务，并等待 MCP 长调用租约结束。执行中的任务和审批不会被强制中断。旧版 MCP 没有租约协议，旧等待调用会保守地阻止更新至其最大等待窗口结束；重新加载 MCP 后的新调用使用租约。无法确认远端状态时不安装。
 
-推送和 PR 执行 Rust 格式、Linux Runner 测试/烟测、Mac SSH/MCP 集成测试、前端测试与 Tauri 编译。标签 `vX.Y.Z` 与版本一致且所有检查通过后，发布：
+推送和 PR 执行 Rust 格式、Linux Runner 测试/烟测、Mac SSH/MCP 集成测试、前端测试与 Tauri 编译。标签 `vX.Y.Z` 与版本一致，Linux/数据库公共检查及对应架构检查通过后，该架构立即发布，不等待另一架构。ARM 与 Intel 分别构建、独立发布到同一个 Release；后完成的架构追加文件，并合并 `latest.json`，不会覆盖先完成的架构。尚未完成的架构不会被冒充为可更新；可以先下载已完成架构。发布包含：
 
 - `CCBridge-macos-arm64.zip` / `CCBridge-macos-x86_64.zip`：按芯片首次安装或应急恢复；应用内更新自动按架构选择更新包
 - `CCBridge.app.tar.gz`（ARM）、`CCBridge-macos-x86_64.app.tar.gz`（Intel）与各自 `.sig`：签名更新包

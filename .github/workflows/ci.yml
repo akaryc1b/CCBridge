@@ -25,6 +25,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Rust toolchain
         run: rustup toolchain install 1.93.0 --profile minimal --component rustfmt && rustup default 1.93.0
+      - name: Incremental update manifest tests
+        run: python3 tests/update-manifest-test.py
       - name: Format
         run: cargo fmt --all -- --check
       - name: Check release version
@@ -68,23 +70,16 @@ jobs:
           UDB_PACKAGE_ROOT: ${{ runner.temp }}/udb/node_modules/universal-db-mcp
         run: chmod 700 "$CCBRIDGE_TEST_BIN" && python3 tests/database-acceptance.py "$ENGINE"
 
-  macos:
+  macos_arm64:
     needs: linux
-    strategy:
-      matrix:
-        include:
-          - os: macos-15
-            arch: arm64
-          - os: macos-15-intel
-            arch: x86_64
-    runs-on: ${{ matrix.os }}
+    runs-on: macos-15
     timeout-minutes: 45
     env:
       MACOSX_DEPLOYMENT_TARGET: '12.0'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check runner architecture
-        run: test "$(uname -m)" = "${{ matrix.arch }}"
+        run: test "$(uname -m)" = "arm64"
       - name: Rust toolchain
         run: rustup toolchain install 1.93.0 --profile minimal --component rustfmt && rustup default 1.93.0
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -114,7 +109,7 @@ jobs:
         run: chmod 700 dist/ccbridge-linux-x86_64 && sh scripts/package-tauri.sh
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: macos-${{ matrix.arch }}
+          name: macos-arm64
           path: |
             dist-tauri/*.zip
             dist-tauri/*.tar.gz
@@ -123,25 +118,104 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  release:
+  macos_x86_64:
+    needs: linux
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '12.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check runner architecture
+        run: test "$(uname -m)" = "x86_64"
+      - name: Rust toolchain
+        run: rustup toolchain install 1.93.0 --profile minimal --component rustfmt && rustup default 1.93.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-runner
+          path: dist
+      - name: Node and pnpm
+        run: |
+          brew install node@22
+          echo "$(brew --prefix node@22)/bin" >> "$GITHUB_PATH"
+          npm install -g pnpm@10.28.2
+      - name: Build compatibility CLI and integration fixture
+        run: cargo build --locked --release
+      - name: Full SSH and MCP integration tests
+        env:
+          CCBRIDGE_TEST_BIN: ${{ github.workspace }}/target/release/ccbridge
+        run: cargo test --locked
+      - name: Frontend typecheck and production build
+        run: pnpm --dir ui install --frozen-lockfile && pnpm --dir ui test && pnpm --dir ui build
+      - name: Tauri compile
+        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+      - name: Package signed updater
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: chmod 700 dist/ccbridge-linux-x86_64 && sh scripts/package-tauri.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-x86_64
+          path: |
+            dist-tauri/*.zip
+            dist-tauri/*.tar.gz
+            dist-tauri/*.tar.gz.sig
+            dist-tauri/latest-darwin-*.json
+          if-no-files-found: ignore
+          retention-days: 14
+
+  release_arm64:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, macos, databases]
+    needs: [linux, macos_arm64, databases]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
-          pattern: '*'
+          name: macos-arm64
           path: release
-          merge-multiple: true
-      - name: Publish release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: linux-runner
+          path: release
+      - name: Publish available architecture
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
-        run: |
-          python3 scripts/merge-update-manifests.py release/latest.json release/latest-darwin-*.json
-          gh release create "$TAG" --repo "$REPO" --verify-tag --title "CCBridge $TAG" --generate-notes release/CCBridge-macos-arm64.zip release/CCBridge.app.tar.gz release/CCBridge.app.tar.gz.sig release/CCBridge-macos-x86_64.zip release/CCBridge-macos-x86_64.app.tar.gz release/CCBridge-macos-x86_64.app.tar.gz.sig release/latest.json release/ccbridge-linux-x86_64
+        run: sh scripts/publish-architecture.sh release
+
+  release_x86_64:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [linux, macos_x86_64, databases]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    concurrency:
+      group: publish-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: macos-x86_64
+          path: release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: linux-runner
+          path: release
+      - name: Publish available architecture
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: sh scripts/publish-architecture.sh release
