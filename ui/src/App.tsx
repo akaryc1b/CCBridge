@@ -747,6 +747,7 @@ export default function App() {
   const errorEntries = Object.entries(errors).filter(
     ([key, value]) =>
       (!value?.page || value.page === page) &&
+      !(serverEdit && ["save_profile", "connect_ssh"].includes(key)) &&
       !key.startsWith("database_") &&
       !["task_list", "task_status", "project_list"].includes(key),
   );
@@ -2206,6 +2207,15 @@ export default function App() {
             <Field label="Runner 路径">{input("runner")}</Field>
             <Field label="Claude Code 路径">{input("claude")}</Field>
           </details>
+          {(errors.save_profile || errors.connect_ssh) && (
+            <p role="alert" className="text-destructive">
+              {String(
+                (errors.save_profile || errors.connect_ssh)?.message ||
+                  errors.save_profile ||
+                  errors.connect_ssh,
+              )}
+            </p>
+          )}
           <DialogFooter>
             <Button
               variant="outline"
@@ -2216,7 +2226,13 @@ export default function App() {
                     profile,
                     password,
                     storage_ack: storageAck,
-                  }).then(() => toast.success("连接配置已保存")),
+                  }).then((r) => {
+                    if (r) {
+                      setPassword("");
+                      toast.success("连接配置已保存");
+                      setServerEdit(false);
+                    }
+                  }),
                 )
               }
             >
