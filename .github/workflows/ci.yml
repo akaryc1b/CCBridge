@@ -243,7 +243,7 @@ jobs:
 
   release_x86_64:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [linux, macos_x86_64, databases]
+    needs: [linux, macos_x86_64, databases, release_arm64]
     runs-on: ubuntu-22.04
     timeout-minutes: 10
     concurrency:

@@ -23,6 +23,23 @@ impl BackendState {
         }
     }
 }
+/// Validate the exact persisted startup target, never an unsaved UI draft.
+fn validate_auto_target_at(root: &std::path::Path, p: &Profile) -> Result<()> {
+    if !p.remember_password || p.fingerprint.is_empty() {
+        bail!("自动连接需要已保存密码和已确认指纹，请在服务器页设置")
+    }
+    if p.credential_store != "file" {
+        bail!("请先在服务器页将此账号的旧密码迁移到本机保存，再开启自动连接")
+    }
+    let key = format!("dev.ccbridge.desktop.ssh:{}", p.account_key());
+    if !crate::secret_store::load_at(root, &key)?.is_some_and(|s| !s.is_empty()) {
+        bail!("此账号尚未在本机保存密码，请在服务器页保存后再开启自动连接")
+    }
+    Ok(())
+}
+fn auto_target(p: &Profile) -> Value {
+    json!({"user":p.user,"host":p.host,"port":p.port})
+}
 pub type Shared = Arc<BackendState>;
 struct Activity(Shared);
 impl Drop for Activity {
@@ -62,9 +79,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             return Ok(json!({"skipped":true}));
         }
         let p: Profile = read_json(&app_dir()?.join("profile.json"))?;
-        if !p.remember_password || p.fingerprint.is_empty() {
-            bail!("自动连接需要已保存密码和已确认指纹，请在服务器页设置")
-        }
+        validate_auto_target_at(&app_dir()?, &p)?;
         return Box::pin(dispatch(
             state,
             json!({"op":"connect","profile":p,"password":""}),
@@ -205,15 +220,14 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         }
         if v["auto_connect"] == true {
             let p: Profile = read_json(&app_dir()?.join("profile.json"))?;
-            if !p.remember_password || p.fingerprint.is_empty() {
-                bail!("请先保存SSH密码并确认服务器指纹，再开启自动连接")
-            }
+            validate_auto_target_at(&app_dir()?, &p)?;
         }
         write_json(
             &app_dir()?.join("preferences.json"),
             &json!({"auto_connect":v["auto_connect"]==true}),
         )?;
-        return Ok(json!({"saved":true}));
+        let p: Profile = read_json(&app_dir()?.join("profile.json")).unwrap_or_default();
+        return Ok(json!({"saved":true,"auto_target":auto_target(&p)}));
     }
     if op == "clone_progress" {
         return Ok(state.clone_progress.lock().unwrap().clone());
@@ -367,7 +381,24 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             if op == "forget_password" || !p.remember_password {
                 crate::secret_store::forget("dev.ccbridge.desktop.ssh", &account).await?;
                 if op == "forget_password" {
-                    return Ok(json!({"deleted":true}));
+                    p.remember_password = false;
+                    let root = app_dir()?;
+                    let active: Profile = read_json(&root.join("profile.json"))?;
+                    if active.account_key() == account {
+                        write_json(&root.join("profile.json"), &p)?;
+                    }
+                    let mut all: std::collections::BTreeMap<String, Profile> =
+                        read_json(&root.join("profiles.json")).unwrap_or_default();
+                    if let Some(saved) = all.get_mut(&account) {
+                        saved.remember_password = false;
+                    }
+                    write_json(&root.join("profiles.json"), &all)?;
+                    if let Some(c) = state.connection.lock().await.as_mut() {
+                        if c.profile.account_key() == account {
+                            c.profile.remember_password = false;
+                        }
+                    }
+                    return Ok(json!({"deleted":true,"auto_target":auto_target(&p)}));
                 }
             } else if !password.is_empty() {
                 crate::secret_store::set(
@@ -388,6 +419,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             }
         }
         p.save()?;
+        let target = auto_target(&p);
         if let Some(c) = state.connection.lock().await.as_mut() {
             if c.profile.account_key() == p.account_key() {
                 c.profile.name = p.name;
@@ -396,7 +428,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 c.profile.credential_store = p.credential_store;
             }
         }
-        return Ok(json!({"saved":true}));
+        return Ok(json!({"saved":true,"auto_target":target}));
     }
     if op == "inspect_local" {
         return Ok(serde_json::to_value(crate::repository::inspect(
@@ -929,6 +961,29 @@ fn reply_mode<'a>(
 #[cfg(test)]
 mod mode_tests {
     use super::*;
+    #[test]
+    fn startup_requires_actual_local_password_for_exact_account() {
+        let root = std::env::temp_dir().join(format!("ccb-startup-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let mut p = Profile::default();
+        p.user = "startup-test".into();
+        p.host = "test.invalid".into();
+        p.remember_password = true;
+        p.fingerprint = "test-fingerprint".into();
+        p.credential_store = "keychain".into();
+        assert!(validate_auto_target_at(&root, &p).is_err());
+        p.credential_store = "file".into();
+        assert!(validate_auto_target_at(&root, &p).is_err());
+        let key = format!("dev.ccbridge.desktop.ssh:{}", p.account_key());
+        crate::secret_store::update_at(&root, &key, Some("test-only-not-a-real-password")).unwrap();
+        assert!(validate_auto_target_at(&root, &p).is_ok());
+        p.user = "another-account".into();
+        assert!(validate_auto_target_at(&root, &p).is_err());
+        p.user = "startup-test".into();
+        p.fingerprint.clear();
+        assert!(validate_auto_target_at(&root, &p).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[tokio::test]
     async fn mcp_cannot_migrate_or_trigger_gui_auto_connect() {
         let state = std::sync::Arc::new(BackendState::new(None));

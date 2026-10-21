@@ -1,3 +1,4 @@
+import { isConnecting, clearConnectionErrors } from "@/lib/connection";
 import { Workbench } from "@/components/Workbench";
 import { DropdownMenu as Menu } from "radix-ui";
 import { CodeupAuth } from "@/components/CodeupAuth";
@@ -228,6 +229,7 @@ export default function App() {
     localStorage.getItem("ccbridge-theme") || "system",
   );
   const [preferences, setPreferences] = useState<Data>({});
+  const [autoTarget, setAutoTarget] = useState<Data>({});
   const [installLocation, setInstallLocation] = useState<Data>({
     installed: true,
   });
@@ -316,6 +318,7 @@ export default function App() {
     connection.profile?.active_remote_workspace ||
     profile.active_remote_workspace ||
     "";
+  const connecting = isConnecting(busy);
   const request = async (
     command: string,
     args: Data = {},
@@ -331,7 +334,12 @@ export default function App() {
     inflight.current.set(command, (inflight.current.get(command) || 0) + 1);
     setBusy(new Set(inflight.current.keys()));
     try {
-      const data = await invoke(command, { request: args });
+      const data: any = await invoke(command, { request: args });
+      if (data?.auto_target) setAutoTarget(data.auto_target);
+      if (command === "connect_ssh" && data?.connected) {
+        setAutoTarget(data.profile || {});
+        setErrors(clearConnectionErrors);
+      }
       if (requestSequence.current.get(command) === sequence)
         setErrors((e) => {
           const next = { ...e };
@@ -345,7 +353,13 @@ export default function App() {
           ? String((e as Data).message)
           : String(e);
       if (requestSequence.current.get(command) === sequence) {
-        setErrors((old) => ({ ...old, [command]: { page, message } }));
+        setErrors((old) => ({
+          ...old,
+          [command]: {
+            page: command === "auto_connect" ? "servers" : page,
+            message,
+          },
+        }));
         // Render once beside the affected page; callers with inline errors own their feedback.
       }
       throw e;
@@ -578,6 +592,7 @@ export default function App() {
         setSaved(s.profiles || {});
         setVersion(s.version);
         setPreferences(s.preferences || {});
+        setAutoTarget(s.profile || {});
         setStorageConsent(s.local_storage_ack === true);
         setDataDirectory(s.data_directory || "");
         invoke<Data>("codex_configuration_status")
@@ -600,7 +615,8 @@ export default function App() {
             const result = await request("auto_connect");
             if (result?.connected) {
               setConnection(result);
-              setProfile(result.profile);
+              setAutoTarget(result.profile || {});
+              // Do not replace an editor draft while startup connection is in flight.
             }
           } catch {
             /* single attempt; visible page error remains */
@@ -825,7 +841,11 @@ export default function App() {
           <div className="connection-mini">
             <span className={connected ? "dot live" : "dot"} />
             <span>
-              {connected ? `${profile.user}@${profile.host}` : "尚未连接服务器"}
+              {connecting
+                ? "正在连接服务器…"
+                : connected
+                  ? `${connection.profile?.user}@${connection.profile?.host}`
+                  : "尚未连接服务器"}
             </span>
           </div>
           <div className="theme-switch">
@@ -972,7 +992,11 @@ export default function App() {
             page !== "settings" && (
               <div className="notice">
                 <Server size={18} />
-                <span>先连接服务器，才能读取远端项目与任务。</span>
+                <span>
+                  {connecting
+                    ? "正在连接服务器，请稍候…"
+                    : "先连接服务器，才能读取远端项目与任务。"}
+                </span>
                 <Button
                   variant="outline"
                   size="sm"
@@ -1044,7 +1068,7 @@ export default function App() {
                   </div>
                   <Button
                     variant="outline"
-                    disabled={busy.has("connect_ssh")}
+                    disabled={connecting}
                     onClick={() => setServerEdit(true)}
                   >
                     编辑连接
@@ -1064,15 +1088,11 @@ export default function App() {
                     </Button>
                   ) : (
                     <Button
-                      disabled={busy.has("connect_ssh") || !profile.host}
+                      disabled={connecting || !profile.host}
                       onClick={() => safe(connect())}
                     >
-                      {busy.has("connect_ssh") ? (
-                        <Loader2 className="spin" />
-                      ) : (
-                        <Cable />
-                      )}
-                      连接 SSH
+                      {connecting ? <Loader2 className="spin" /> : <Cable />}
+                      {connecting ? "连接中…" : "连接 SSH"}
                     </Button>
                   )}
                 </div>
@@ -1204,7 +1224,7 @@ export default function App() {
                 </Field>
                 <Button
                   variant="outline"
-                  disabled={busy.has("save_profile")}
+                  disabled={connecting || busy.has("save_profile")}
                   onClick={() =>
                     safe(
                       request("save_profile", {
@@ -1955,6 +1975,7 @@ export default function App() {
                   <Switch
                     aria-label="启动时自动连接SSH"
                     checked={preferences.auto_connect === true}
+                    disabled={connecting || busy.has("preferences_save")}
                     onCheckedChange={(v) =>
                       safe(
                         request("preferences_save", { auto_connect: v }).then(
@@ -1973,8 +1994,8 @@ export default function App() {
                   <div>
                     <Label>启动App时自动连接SSH</Label>
                     <p className="hint">
-                      {profile.user && profile.host
-                        ? `${profile.user}@${profile.host} · 需要已保存密码和确认指纹`
+                      {autoTarget.user && autoTarget.host
+                        ? `下次启动连接：${autoTarget.user}@${autoTarget.host}:${autoTarget.port}`
                         : "先保存服务器账号"}
                     </p>
                   </div>
@@ -2323,7 +2344,7 @@ export default function App() {
           <DialogFooter>
             <Button
               variant="outline"
-              disabled={busy.has("save_profile")}
+              disabled={connecting || busy.has("save_profile")}
               onClick={() =>
                 safe(
                   request("save_profile", {
@@ -2354,14 +2375,11 @@ export default function App() {
             </Button>
             <Button
               disabled={
-                busy.has("connect_ssh") ||
-                !profile.host ||
-                !profile.user ||
-                !profile.port
+                connecting || !profile.host || !profile.user || !profile.port
               }
               onClick={() => safe(connect())}
             >
-              {busy.has("connect_ssh") ? "连接中…" : "连接 SSH"}
+              {connecting ? "连接中…" : "连接 SSH"}
             </Button>
           </DialogFooter>
         </DialogContent>

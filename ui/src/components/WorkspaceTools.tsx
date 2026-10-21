@@ -447,7 +447,11 @@ export function BranchDialog({
       });
       setInfo(r);
       setConfirm(false);
-      setMessage(`已切换到 ${r.current}`);
+      setMessage(
+        action === "fast_forward"
+          ? `已快进同步 ${r.current} 到 ${branch}`
+          : `已切换到 ${r.current}`,
+      );
       setBranch("");
     } catch (e) {
       setError(errorText(e));
@@ -550,8 +554,8 @@ export function BranchDialog({
           </p>
         )}
         <p className="hint">
-          不自动
-          stash、reset、合并或推送。切换会改变该仓库之后任务读取的代码；已有进行中任务会阻止操作。
+          不自动 stash、reset
+          或推送。快进同步不会生成合并提交，分叉时拒绝操作；有未提交改动或运行任务时禁止变更。
         </p>
         {message && <p role="status">{message}</p>}
         {error && (
@@ -561,11 +565,29 @@ export function BranchDialog({
         )}
         {confirm && (
           <p>
-            确认在此仓库{action === "switch" ? "切换" : "创建并切换"}到{" "}
-            <strong>{branch}</strong>？
+            确认在此仓库
+            {action === "fast_forward"
+              ? "将当前分支快进同步"
+              : action === "switch"
+                ? "切换"
+                : "创建并切换"}
+            到 <strong>{branch}</strong>？
           </p>
         )}
         <DialogFooter>
+          {remote && action !== "fast_forward" && (
+            <Button
+              variant="outline"
+              disabled={busy || info.dirty}
+              onClick={() => {
+                setAction("fast_forward");
+                setBranch(remote);
+                setConfirm(true);
+              }}
+            >
+              快进同步到 {remote}
+            </Button>
+          )}
           <Button variant="outline" onClick={onClose} disabled={busy}>
             关闭
           </Button>
@@ -581,7 +603,7 @@ export function BranchDialog({
           >
             {busy
               ? "正在执行…"
-              : `${action === "switch" ? "切换到" : "新建并切换到"} ${branch || "分支"}`}
+              : `${action === "fast_forward" ? "确认快进同步到" : action === "switch" ? "切换到" : "新建并切换到"} ${branch || "分支"}`}
           </Button>
         </DialogFooter>
       </DialogContent>

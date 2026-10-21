@@ -251,6 +251,11 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
                 "create" => {
                     git(&p, &["switch", "-c", branch])?;
                 }
+                "fast_forward" => {
+                    let reference = format!("refs/remotes/{branch}");
+                    git(&p, &["show-ref", "--verify", &reference])?;
+                    git(&p, &["merge", "--ff-only", "--", &reference])?;
+                }
                 "track" => {
                     let remote = field(v, "remote")?;
                     if !git(
@@ -399,6 +404,49 @@ mod tests {
         )
         .unwrap();
         assert_eq!(git(&repo, &["branch", "--show-current"]).unwrap(), base);
+        // A source refresh only advances to an existing remote ref; never resets divergence.
+        let before = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        fs::write(repo.join("README"), "remote update").unwrap();
+        git(&repo, &["add", "README"]).unwrap();
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "-qm",
+                "remote",
+            ],
+        )
+        .unwrap();
+        let remote = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        git(&repo, &["update-ref", "refs/remotes/origin/main", &remote]).unwrap();
+        git(&repo, &["reset", "--hard", &before]).unwrap(); // disposable fixture only
+        let update = json!({"op":"branch_change","path":repo,"action":"fast_forward","branch":"origin/main"});
+        rpc_at(&update, &h).unwrap();
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]).unwrap(), remote);
+        assert_eq!(git(&repo, &["branch", "--show-current"]).unwrap(), base);
+        git(&repo, &["reset", "--hard", &before]).unwrap();
+        fs::write(repo.join("README"), "local update").unwrap();
+        git(&repo, &["add", "README"]).unwrap();
+        git(
+            &repo,
+            &[
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "commit",
+                "-qm",
+                "local",
+            ],
+        )
+        .unwrap();
+        let local = git(&repo, &["rev-parse", "HEAD"]).unwrap();
+        assert!(rpc_at(&update, &h).is_err());
+        assert_eq!(git(&repo, &["rev-parse", "HEAD"]).unwrap(), local);
         fs::remove_dir_all(h).unwrap();
     }
 }
