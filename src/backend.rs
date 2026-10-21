@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 pub struct BackendState {
     pub connection: Mutex<Option<ssh::Connection>>,
+    pub clone_progress: std::sync::Mutex<Value>,
     pub gate: std::sync::Mutex<crate::update_gate::UpdateGate>,
     pub writes: Mutex<()>,
 }
@@ -14,6 +15,7 @@ impl BackendState {
     pub fn new(connection: Option<ssh::Connection>) -> Self {
         Self {
             connection: Mutex::new(connection),
+            clone_progress: std::sync::Mutex::new(json!({})),
             gate: Default::default(),
             writes: Mutex::new(()),
         }
@@ -89,6 +91,10 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
         }
         return Ok(state.gate.lock().unwrap().snapshot());
     }
+    if human && op == "clone_into_directory" {
+        *state.clone_progress.lock().unwrap() =
+            json!({"stage":"等待后台执行克隆", "completed":0,"total":0});
+    }
     let writing = (human && op == "repository_match")
         || [
             "cc_diagnostic",
@@ -140,6 +146,9 @@ pub struct Job {
 }
 async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     let op = field(&v, "op")?.to_owned();
+    if op == "clone_progress" {
+        return Ok(state.clone_progress.lock().unwrap().clone());
+    }
     if op == "configure_codex" {
         if !human {
             bail!("只能由人在 App 配置 Codex")
@@ -317,10 +326,17 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             "file_preview" => return c.preview_file(field(&v, "path")?).await,
             "clone_into_directory" => {
                 return c
-                    .clone_into(
+                    .clone_into_progress(
                         field(&v, "path")?,
                         field(&v, "urls")?,
                         v["local_auth"] == true,
+                        Some({
+                            let state = state.clone();
+                            Arc::new(move |stage, completed, total| {
+                                *state.clone_progress.lock().unwrap() =
+                                    json!({"stage":stage,"completed":completed,"total":total});
+                            })
+                        }),
                     )
                     .await;
             }

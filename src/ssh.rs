@@ -316,11 +316,29 @@ impl Connection {
         Ok(json!({"path":path,"text":text}))
     }
     pub async fn clone_into(&self, parent: &str, urls: &str, local_auth: bool) -> Result<Value> {
+        self.clone_into_progress(parent, urls, local_auth, None)
+            .await
+    }
+    pub async fn clone_into_progress(
+        &self,
+        parent: &str,
+        urls: &str,
+        local_auth: bool,
+        progress: Option<std::sync::Arc<dyn Fn(&str, usize, usize) + Send + Sync>>,
+    ) -> Result<Value> {
+        let report = |stage: &str, completed, total| {
+            if let Some(f) = &progress {
+                f(stage, completed, total);
+            }
+        };
+        report("检查目标目录", 0, 0);
         let listing = self.browse(parent, false).await?;
         let parent = listing["path"].as_str().unwrap();
         let plan = crate::provision::plan("workspace", urls)?;
         let mut prepared = vec![];
-        for (name, url) in plan {
+        let total = plan.len();
+        for (index, (name, url)) in plan.into_iter().enumerate() {
+            report(&format!("检查仓库 {name}"), index, total);
             let dest = format!("{parent}/{name}");
             if let Ok(repo) = self
                 .rpc(json!({"op":"repository_inspect","path":dest}))
@@ -341,9 +359,15 @@ impl Connection {
                 continue;
             }
             let (_, err, status) = if local_auth {
+                report(
+                    &format!("{name}：使用本机 Git 认证获取仓库（可能等待钥匙串授权）"),
+                    index,
+                    total,
+                );
                 let u = url.clone();
                 let bundle =
                     tokio::task::spawn_blocking(move || crate::transfer::bundle(&u)).await??;
+                report(&format!("{name}：通过 SSH 传输并导入仓库"), index, total);
                 let cmd =
                     crate::transfer::import_script(&self.environment.home, parent, &name, &url)?;
                 let input = tokio::fs::File::open(&bundle.path).await?;
@@ -353,6 +377,7 @@ impl Connection {
                 drop(bundle);
                 result
             } else {
+                report(&format!("{name}：使用服务器 Git 认证克隆"), index, total);
                 let mut cmd = crate::remote_fs::guard(&self.environment.home, parent)?;
                 cmd += &format!(
                     r#"dest="$path"/{}
@@ -374,6 +399,7 @@ GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false git -c credential.interactive=f
                 .await?;
             prepared.push(json!({"name":name,"path":dest,"state":"cloned","repository":repo}));
         }
+        report("全部仓库处理完成", total, total);
         Ok(json!({"complete":true,"root":parent,"repositories":prepared}))
     }
     pub async fn prepare_repositories(&self, group: &str, urls: &str) -> Result<Value> {

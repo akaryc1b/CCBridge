@@ -52,10 +52,34 @@ fn git(args: &[&str]) -> Result<()> {
     if !status.success() {
         bail!(
             "本机 Git 无法获取仓库：{}",
-            crate::provision::failure(&String::from_utf8_lossy(&errors))
+            local_failure(&String::from_utf8_lossy(&errors))
         )
     }
     Ok(())
+}
+pub fn local_failure(stderr: &str) -> &'static str {
+    let e = stderr.to_ascii_lowercase();
+    if e.contains("25293") || e.contains("keychain") || e.contains("interaction is not allowed") {
+        "macOS 钥匙串没有放行 Git 凭据；请在系统弹窗授权，或在终端用 Git 验证此仓库的认证后重试"
+    } else if [
+        "username",
+        "authentication",
+        "access denied",
+        "403",
+        "401",
+        "repository not found",
+    ]
+    .iter()
+    .any(|s| e.contains(s))
+    {
+        "本机 Git 没有获得此仓库的读取权限；请在本机终端验证仓库访问并配置 Git 凭据助手。SSH 登录密码不能用于 Git 认证"
+    } else if e.contains("resolve host") || e.contains("connect") || e.contains("timed out") {
+        "本机无法连接 Git 服务，请检查本机网络、代理和 DNS 后重试"
+    } else if e.contains("certificate") {
+        "本机无法验证 Git 服务证书，请修复证书链，不要关闭证书验证"
+    } else {
+        "本机 Git 获取仓库失败，请检查 Git 安装、凭据助手、网络及磁盘空间；没有上传密码或覆盖已有仓库"
+    }
 }
 pub fn bundle(url: &str) -> Result<Bundle> {
     let dir = crate::common::app_dir()?
@@ -108,6 +132,13 @@ rm -- "$bundle"
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_errors_identify_the_local_machine() {
+        assert!(local_failure("fatal: could not read Username").contains("本机"));
+        assert!(local_failure("osxkeychain: -25293").contains("钥匙串"));
+        assert!(local_failure("Could not resolve host").contains("本机"));
+        assert!(!local_failure("authentication failed").contains("远端"));
+    }
     #[test]
     fn bundle_contains_repository_not_credentials() {
         let d = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());

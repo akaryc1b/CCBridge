@@ -47,6 +47,7 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Toaster, toast } from "sonner";
+import { Progress as ProgressPrimitive } from "radix-ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -191,7 +192,10 @@ export default function App() {
   const [update, setUpdate] = useState<Data>({}),
     [updatePhase, setUpdatePhase] = useState("idle"),
     [progress, setProgress] = useState(0),
-    [integration, setIntegration] = useState("");
+    [integration, setIntegration] = useState(""),
+    [integrationState, setIntegrationState] = useState("idle"),
+    [cloneProgress, setCloneProgress] = useState<Data>({}),
+    [cloneError, setCloneError] = useState("");
   const drafts = useRef<Record<string, string>>({});
   const messagesRef = useRef<HTMLDivElement>(null),
     following = useRef(true);
@@ -277,6 +281,78 @@ export default function App() {
       setBusy(new Set(inflight.current.keys()));
     }
   };
+  useEffect(() => {
+    if (!busy.has("clone_repository")) return;
+    let active = true;
+    let polling = false;
+    const poll = async () => {
+      if (polling) return;
+      polling = true;
+      try {
+        const p = await invoke<Data>("clone_progress", { request: {} });
+        if (active && p.stage) setCloneProgress(p);
+      } catch {
+        /* The clone request itself reports connection failures. */
+      } finally {
+        polling = false;
+      }
+    };
+    const timer = setInterval(poll, 1000);
+    void poll();
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [busy.has("clone_repository")]);
+  async function configureCodex() {
+    if (integrationState === "saving") return;
+    setIntegrationState("saving");
+    setIntegration("正在备份并写入 Codex MCP 配置…");
+    try {
+      const message = await invoke<string>("configure_codex");
+      setIntegration(message);
+      setIntegrationState("success");
+      toast.success(message);
+    } catch (e) {
+      const message =
+        typeof e === "object" && e !== null && "message" in e
+          ? String((e as Data).message)
+          : String(e);
+      setIntegration(`配置失败：${message}`);
+      setIntegrationState("error");
+      toast.error(`配置失败：${message}`);
+    }
+  }
+  async function cloneRepositories() {
+    setCloneError("");
+    setCloneProgress({ stage: "正在检查连接和目标目录…" });
+    const destination = listedPath;
+    try {
+      const r = await request("clone_repository", {
+        path: destination,
+        urls: cloneUrls,
+        local_auth: localAuth,
+      });
+      if (!r) return;
+      if (r.complete === false)
+        throw new Error(
+          `${r.failed_repository || "仓库"}：${r.error || "克隆失败"}`,
+        );
+      setCloneProgress({
+        stage: `处理完成：${r.repositories?.length || 0} 个仓库（已有仓库保持不变）`,
+      });
+      toast.success("仓库已准备好");
+      await browse(destination);
+    } catch (e) {
+      const message =
+        e instanceof Error
+          ? e.message
+          : typeof e === "object" && e !== null && "message" in e
+            ? String((e as Data).message)
+            : String(e);
+      setCloneError(message);
+    }
+  }
   const safe = (p: Promise<any>) => {
     void p.catch(() => {});
   };
@@ -1480,19 +1556,27 @@ export default function App() {
                     <h3>自动写入 MCP 配置</h3>
                     <p>仅合并 ccbridge 配置，并生成原配置备份。</p>
                     <Button
-                      onClick={() =>
-                        safe(
-                          invoke<string>("configure_codex").then(
-                            setIntegration,
-                          ),
-                        )
-                      }
+                      disabled={integrationState === "saving"}
+                      onClick={() => void configureCodex()}
                     >
                       <Cable size={16} />
-                      配置 Codex MCP
+                      {integrationState === "saving"
+                        ? "正在配置…"
+                        : integrationState === "error"
+                          ? "重试配置 Codex MCP"
+                          : "配置 Codex MCP"}
                     </Button>
                     {integration && (
-                      <p className="success-text">{integration}</p>
+                      <p
+                        role={integrationState === "error" ? "alert" : "status"}
+                        className={
+                          integrationState === "error"
+                            ? "text-destructive"
+                            : "hint"
+                        }
+                      >
+                        {integration}
+                      </p>
                     )}
                   </div>
                 </div>
@@ -1765,45 +1849,76 @@ export default function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={cloneOpen} onOpenChange={setCloneOpen}>
+      <Dialog
+        open={cloneOpen}
+        onOpenChange={(open) => {
+          if (!busy.has("clone_repository")) setCloneOpen(open);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>克隆仓库</DialogTitle>
             <DialogDescription>
-              仓库将克隆到 {path}。每行一个 HTTPS / SSH 地址，已有目录不会覆盖。
+              仓库将克隆到 {path}。每行一个 HTTPS 地址，已有目录不会覆盖。
             </DialogDescription>
           </DialogHeader>
           <Textarea
             value={cloneUrls}
+            disabled={busy.has("clone_repository")}
             onChange={(e) => setCloneUrls(e.target.value)}
             placeholder="https://github.com/owner/repository.git"
           />
           <div className="switch-row">
-            <Switch checked={localAuth} onCheckedChange={setLocalAuth} />
+            <Switch
+              checked={localAuth}
+              onCheckedChange={setLocalAuth}
+              disabled={busy.has("clone_repository")}
+            />
             <Label>使用本机 Git 认证传输（不上传凭据）</Label>
           </div>
+          {(busy.has("clone_repository") ||
+            cloneProgress.stage ||
+            cloneError) && (
+            <div className="space-y-2" aria-live="polite">
+              {busy.has("clone_repository") && (
+                <ProgressPrimitive.Root
+                  value={null}
+                  aria-label="仓库克隆进行中"
+                  className="h-2 w-full overflow-hidden rounded-full bg-primary/15"
+                >
+                  <ProgressPrimitive.Indicator className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
+                </ProgressPrimitive.Root>
+              )}
+              {!cloneError && (
+                <p role="status">
+                  {cloneProgress.stage}
+                  {cloneProgress.total > 0 &&
+                    ` · 已处理 ${cloneProgress.completed}/${cloneProgress.total} 个仓库`}
+                </p>
+              )}
+              {cloneError && (
+                <p role="alert" className="text-destructive">
+                  {cloneError}
+                </p>
+              )}
+              {busy.has("clone_repository") && (
+                <p className="hint">
+                  正在执行，请勿重复提交；本机 Git 认证可能需要系统钥匙串授权。
+                </p>
+              )}
+            </div>
+          )}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCloneOpen(false)}>
+            <Button
+              disabled={busy.has("clone_repository")}
+              variant="outline"
+              onClick={() => setCloneOpen(false)}
+            >
               取消
             </Button>
             <Button
               disabled={!cloneUrls.trim() || busy.has("clone_repository")}
-              onClick={() =>
-                safe(
-                  request("clone_repository", {
-                    path: listedPath,
-                    urls: cloneUrls,
-                    local_auth: localAuth,
-                  }).then((r) => {
-                    if (r?.complete === false) {
-                      toast.error(r.error || "部分仓库克隆失败");
-                      return;
-                    }
-                    setCloneOpen(false);
-                    return browse(path);
-                  }),
-                )
-              }
+              onClick={() => void cloneRepositories()}
             >
               {busy.has("clone_repository") ? "正在克隆…" : "克隆到当前目录"}
             </Button>
