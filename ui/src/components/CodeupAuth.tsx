@@ -33,6 +33,8 @@ export function CodeupAuth({
   url: initialUrl,
   initialScope = "local",
   onSaved,
+  consented = false,
+  onConsent,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -41,6 +43,8 @@ export function CodeupAuth({
   url: string;
   initialScope?: string;
   onSaved?: () => void;
+  consented?: boolean;
+  onConsent?: () => void;
 }) {
   const [storage, setStorage] = useState("keychain"),
     [storageAck, setStorageAck] = useState(false);
@@ -105,6 +109,7 @@ export function CodeupAuth({
           storage_ack: storageAck,
         },
       });
+      if (op === "git_auth_save" && storage === "file") onConsent?.();
       if (op === "git_access") {
         setMessage(r.message || "仓库可以读取");
       } else {
@@ -213,7 +218,7 @@ export function CodeupAuth({
             <SelectItem value="file">本机私有文件</SelectItem>
           </SelectContent>
         </Select>
-        {storage === "file" && (
+        {storage === "file" && !consented && (
           <label className="hint">
             <input
               type="checkbox"
@@ -276,7 +281,7 @@ export function CodeupAuth({
               disabled ||
               !username.trim() ||
               !secret ||
-              (storage === "file" && !storageAck)
+              (storage === "file" && !consented && !storageAck)
             }
             onClick={() => void run("git_auth_save")}
           >

@@ -61,7 +61,7 @@ fn initial_state() -> Result<Value, String> {
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or(json!({}));
     Ok(
-        json!({"preferences":std::fs::read(dir.join("preferences.json")).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok()).unwrap_or(json!({})),"data_directory":dir,"profile":profile,"profiles":profiles,"version":env!("CARGO_PKG_VERSION"),"architecture":std::env::consts::ARCH}),
+        json!({"local_storage_ack":ccbridge::secret_store::consented(),"preferences":std::fs::read(dir.join("preferences.json")).ok().and_then(|b|serde_json::from_slice::<Value>(&b).ok()).unwrap_or(json!({})),"data_directory":dir,"profile":profile,"profiles":profiles,"version":env!("CARGO_PKG_VERSION"),"architecture":std::env::consts::ARCH}),
     )
 }
 #[tauri::command]

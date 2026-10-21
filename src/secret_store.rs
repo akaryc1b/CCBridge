@@ -92,6 +92,28 @@ pub fn load(key: &str) -> Result<Option<String>> {
 pub fn update(key: &str, value: Option<&str>) -> Result<()> {
     update_at(&app_dir()?, key, value)
 }
+fn consented_at(root: &Path) -> bool {
+    read_json::<serde_json::Value>(&root.join("local-storage-consent.json"))
+        .is_ok_and(|v| v["version"] == 1)
+}
+pub fn consented() -> bool {
+    app_dir().is_ok_and(|root| consented_at(&root))
+}
+fn confirm_at(root: &Path, confirmed: bool) -> Result<()> {
+    if consented_at(root) {
+        return Ok(());
+    }
+    if !confirmed {
+        bail!("请先确认本机保存的安全提示")
+    }
+    write_json(
+        &root.join("local-storage-consent.json"),
+        &serde_json::json!({"version":1}),
+    )
+}
+pub fn confirm_consent(confirmed: bool) -> Result<()> {
+    confirm_at(&app_dir()?, confirmed)
+}
 pub fn validate_store(store: &str) -> Result<()> {
     if !["keychain", "file"].contains(&store) {
         bail!("请选择钥匙串或本机保存")
@@ -144,6 +166,17 @@ pub async fn forget(service: &str, key: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn risk_confirmation_is_persistent_and_once() {
+        let root = std::env::temp_dir().join(format!("ccb-consent-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        assert!(!consented_at(&root));
+        assert!(confirm_at(&root, false).is_err());
+        confirm_at(&root, true).unwrap();
+        assert!(consented_at(&root));
+        confirm_at(&root, false).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn private_atomic_scoped_store() {
         let root = std::env::temp_dir().join(format!("ccb-secret-{}", uuid::Uuid::new_v4()));

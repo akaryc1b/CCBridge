@@ -257,8 +257,8 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             c.validate()?
         }
         if op == "git_auth_save" {
-            if v["storage"] == "file" && v["storage_ack"] != true {
-                bail!("请先确认本机保存的安全提示")
+            if v["storage"] == "file" {
+                crate::secret_store::confirm_consent(v["storage_ack"] == true)?;
             }
             return crate::git_auth::save(
                 scope,
@@ -300,11 +300,8 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         }
         let p: Profile = serde_json::from_value(v["profile"].clone())?;
         p.validate()?;
-        if p.credential_store == "file"
-            && v["password"].as_str().is_some_and(|s| !s.is_empty())
-            && v["storage_ack"] != true
-        {
-            bail!("请先确认本机保存的安全提示")
+        if p.credential_store == "file" && v["password"].as_str().is_some_and(|s| !s.is_empty()) {
+            crate::secret_store::confirm_consent(v["storage_ack"] == true)?;
         }
         #[cfg(target_os = "macos")]
         {
@@ -377,11 +374,8 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         }
         let p: Profile = serde_json::from_value(v["profile"].clone())?;
         p.validate()?;
-        if p.credential_store == "file"
-            && v["password"].as_str().is_some_and(|s| !s.is_empty())
-            && v["storage_ack"] != true
-        {
-            bail!("请先确认本机保存的安全提示")
+        if p.credential_store == "file" && v["password"].as_str().is_some_and(|s| !s.is_empty()) {
+            crate::secret_store::confirm_consent(v["storage_ack"] == true)?;
         }
 
         let old = { state.connection.lock().await.take() };

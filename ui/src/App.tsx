@@ -232,6 +232,7 @@ export default function App() {
     installed: true,
   });
   const [storageAck, setStorageAck] = useState(false);
+  const [storageConsent, setStorageConsent] = useState(false);
   const [utilityDialog, setUtilityDialog] = useState("");
   const [draftProject, setDraftProject] = useState("");
   const [fileFilter, setFileFilter] = useState("");
@@ -573,6 +574,7 @@ export default function App() {
         setSaved(s.profiles || {});
         setVersion(s.version);
         setPreferences(s.preferences || {});
+        setStorageConsent(s.local_storage_ack === true);
         setDataDirectory(s.data_directory || "");
         invoke<Data>("codex_configuration_status")
           .then(setMcpStatus)
@@ -1687,21 +1689,29 @@ export default function App() {
                         className="model-select"
                         aria-label="下一轮模型"
                       >
-                        <SelectValue />
+                        <span>
+                          {modelPolicy === "explicit"
+                            ? model.trim() || "指定模型…"
+                            : modelPolicy === "remote_default"
+                              ? "远端配置"
+                              : nextModelLabel(
+                                  !newConversation ? task : undefined,
+                                  profile.model,
+                                )}
+                        </span>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="inherit">
                           {nextModelLabel(
                             !newConversation ? task : undefined,
                             profile.model,
-                          )}
+                          )}{" "}
+                          · {newConversation ? "账号默认配置" : "当前会话配置"}
                         </SelectItem>
                         <SelectItem value="remote_default">
-                          远端默认（实际未上报）
+                          远端配置（不指定模型）
                         </SelectItem>
-                        <SelectItem value="explicit">
-                          {model.trim() || "指定模型…"}
-                        </SelectItem>
+                        <SelectItem value="explicit">指定其他模型…</SelectItem>
                       </SelectContent>
                     </Select>
                     {modelPolicy === "explicit" &&
@@ -2120,6 +2130,8 @@ export default function App() {
         }
         url={cloneUrls.trim().split(/\s+/)[0] || ""}
         initialScope={authScope}
+        consented={storageConsent}
+        onConsent={() => setStorageConsent(true)}
         onSaved={
           cloneOpen && cloneError
             ? () => {
@@ -2212,7 +2224,7 @@ export default function App() {
                   </SelectContent>
                 </Select>
               </Field>
-              {profile.credential_store === "file" && (
+              {profile.credential_store === "file" && !storageConsent && (
                 <label className="storage-warning">
                   <input
                     type="checkbox"
@@ -2251,6 +2263,8 @@ export default function App() {
                   }).then((r) => {
                     if (r) {
                       setPassword("");
+                      if (profile.credential_store === "file")
+                        setStorageConsent(true);
                       toast.success("连接配置已保存");
                       setServerEdit(false);
                     }
