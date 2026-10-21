@@ -1,3 +1,4 @@
+import { containingProject, latestNavigation } from "@/lib/navigation";
 import { Databases } from "@/components/Databases";
 import {
   normalizeTask,
@@ -171,6 +172,7 @@ export default function App() {
   const [projects, setProjects] = useState<Data[]>([]),
     [listing, setListing] = useState<Data>({ entries: [] }),
     [path, setPath] = useState(""),
+    [browsing, setBrowsing] = useState(false),
     [preview, setPreview] = useState(""),
     [cloneOpen, setCloneOpen] = useState(false),
     [cloneUrls, setCloneUrls] = useState(""),
@@ -207,7 +209,8 @@ export default function App() {
     const previous = details[id] || tasks.find((t) => t.task_id === id);
     if (previous) setMode(previous.mode);
   }
-  const inflight = useRef(new Set<string>()),
+  const requestSequence = useRef(new Map<string, number>());
+  const inflight = useRef(new Map<string, number>()),
     selectedRef = useRef(selected);
   selectedRef.current = selected;
   const connected = connection.connected === true,
@@ -238,28 +241,39 @@ export default function App() {
     args: Data = {},
     quiet = false,
   ): Promise<any> => {
-    if (inflight.current.has(command)) return undefined;
-    inflight.current.add(command);
-    setBusy(new Set(inflight.current));
+    if (
+      inflight.current.has(command) &&
+      !["directory_list", "file_preview"].includes(command)
+    )
+      return undefined;
+    const sequence = (requestSequence.current.get(command) || 0) + 1;
+    requestSequence.current.set(command, sequence);
+    inflight.current.set(command, (inflight.current.get(command) || 0) + 1);
+    setBusy(new Set(inflight.current.keys()));
     try {
       const data = await invoke(command, { request: args });
-      setErrors((e) => {
-        const next = { ...e };
-        delete next[command];
-        return next;
-      });
+      if (requestSequence.current.get(command) === sequence)
+        setErrors((e) => {
+          const next = { ...e };
+          delete next[command];
+          return next;
+        });
       return data;
     } catch (e) {
       const message =
         typeof e === "object" && e !== null && "message" in e
           ? String((e as Data).message)
           : String(e);
-      setErrors((old) => ({ ...old, [command]: message }));
-      if (!quiet) toast.error(message);
+      if (requestSequence.current.get(command) === sequence) {
+        setErrors((old) => ({ ...old, [command]: message }));
+        if (!quiet) toast.error(message);
+      }
       throw e;
     } finally {
-      inflight.current.delete(command);
-      setBusy(new Set(inflight.current));
+      const left = (inflight.current.get(command) || 1) - 1;
+      if (left) inflight.current.set(command, left);
+      else inflight.current.delete(command);
+      setBusy(new Set(inflight.current.keys()));
     }
   };
   const safe = (p: Promise<any>) => {
@@ -286,13 +300,43 @@ export default function App() {
     const r = await request("project_list", {}, true);
     if (r) setProjects(r.projects || []);
   }
-  async function browse(p: string) {
-    const r = await request("directory_list", { path: p, hidden: false });
-    if (r) {
-      setListing(r);
-      setPath(r.path);
-    }
+  const browserNavigation = useRef<ReturnType<
+    typeof latestNavigation<Data>
+  > | null>(null);
+  if (!browserNavigation.current)
+    browserNavigation.current = latestNavigation<Data>(
+      (p) => request("directory_list", { path: p, hidden: false }),
+      (r) => {
+        setListing(r);
+        setPath(r.path);
+        setPreview("");
+      },
+      setBrowsing,
+    );
+  const previewGeneration = useRef(0);
+  async function previewFile(p: string) {
+    const id = ++previewGeneration.current;
+    const r = await request("file_preview", { path: p });
+    if (id === previewGeneration.current && r)
+      setPreview(
+        typeof r.text === "string" ? r.text : JSON.stringify(r, null, 2),
+      );
   }
+  async function browse(p: string) {
+    previewGeneration.current++;
+    setPreview("");
+    setPath(p);
+    await browserNavigation.current!(p);
+  }
+  const listedPath = listing.path || "";
+  const browsedProject = containingProject(
+    listedPath,
+    projects
+      .map((p) => ({ path: p.path || p.workspace || "" }))
+      .filter((p) => p.path),
+  );
+  const locationReady =
+    connected && !browsing && !!listedPath && path === listedPath;
   async function fetchTask(id: string) {
     let currentId: string | undefined = id;
     const seen = new Set<string>();
@@ -881,13 +925,18 @@ export default function App() {
                 <div className="stack">
                   {projects.map((p) => (
                     <button
-                      className={`project-item ${(p.path || p.workspace) === currentProject ? "active" : ""}`}
+                      className={`project-item ${(p.path || p.workspace) === browsedProject ? "active" : ""}`}
                       key={p.path || p.workspace}
                       onClick={() => safe(browse(p.path || p.workspace))}
                     >
                       <FolderGit2 size={20} />
                       <div>
-                        <strong>{p.name}</strong>
+                        <strong>
+                          {p.name}
+                          {(p.path || p.workspace) === currentProject && (
+                            <Badge variant="secondary">新任务目录</Badge>
+                          )}
+                        </strong>
                         <small>{p.path || p.workspace}</small>
                       </div>
                       <ChevronRight size={15} />
@@ -910,7 +959,7 @@ export default function App() {
               </Panel>
               <Panel
                 title="远端文件"
-                description="仅浏览当前 SSH 账号 HOME 下的目录。"
+                description={`当前新任务工作目录：${currentProject || "尚未设置"}。浏览文件不会改变已有会话。`}
               >
                 <div className="toolbar">
                   <Input
@@ -936,23 +985,22 @@ export default function App() {
                     <ArrowUp size={16} />
                   </Button>
                 </div>
-                <div className="file-list">
+                <p className="hint" role="status">
+                  {browsing
+                    ? `正在打开：${path}`
+                    : listedPath
+                      ? `当前浏览：${listedPath}`
+                      : "选择项目或输入目录并回车"}
+                </p>
+                <div className="file-list" aria-busy={browsing}>
                   {(listing.entries || []).map((e: Data) => (
                     <button
                       key={e.path}
+                      disabled={!locationReady}
                       onClick={() =>
                         ["directory", "repository"].includes(e.kind)
                           ? safe(browse(e.path))
-                          : safe(
-                              request("file_preview", { path: e.path }).then(
-                                (r) =>
-                                  setPreview(
-                                    typeof r.text === "string"
-                                      ? r.text
-                                      : JSON.stringify(r, null, 2),
-                                  ),
-                              ),
-                            )
+                          : safe(previewFile(e.path))
                       }
                     >
                       {e.kind === "file" ? (
@@ -977,23 +1025,29 @@ export default function App() {
                 <div className="toolbar">
                   <Button
                     variant="outline"
-                    disabled={!connected || !path}
+                    disabled={!locationReady}
                     onClick={() => setCloneOpen(true)}
                   >
                     <Plus size={16} />
                     克隆仓库
                   </Button>
                   <Button
-                    disabled={!connected || !path}
+                    disabled={
+                      !locationReady ||
+                      listedPath === currentProject ||
+                      busy.has("select_workspace")
+                    }
                     onClick={() =>
                       safe(
-                        request("select_workspace", { path }).then(
+                        request("select_workspace", { path: listedPath }).then(
                           refreshConnection,
                         ),
                       )
                     }
                   >
-                    使用此目录
+                    {listedPath === currentProject
+                      ? "已是新任务目录"
+                      : "设为新任务工作目录"}
                   </Button>
                 </div>
                 <div className="register">
@@ -1006,14 +1060,14 @@ export default function App() {
                   <Button
                     variant="outline"
                     disabled={
-                      !path ||
+                      !locationReady ||
                       !folderName.trim() ||
                       busy.has("create_directory")
                     }
                     onClick={() =>
                       safe(
                         request("create_directory", {
-                          path,
+                          path: listedPath,
                           name: folderName,
                         }).then(() => {
                           setFolderName("");
@@ -1033,13 +1087,13 @@ export default function App() {
                   />
                   <Button
                     variant="outline"
-                    disabled={!path || !projectName.trim()}
+                    disabled={!locationReady || !projectName.trim()}
                     onClick={() =>
                       safe(
                         request("project_save", {
                           name: projectName,
-                          path,
-                          workspace: path,
+                          path: listedPath,
+                          workspace: listedPath,
                         }).then(() => {
                           toast.success("项目已注册");
                           return refreshProjects();
@@ -1729,7 +1783,7 @@ export default function App() {
               onClick={() =>
                 safe(
                   request("clone_repository", {
-                    path,
+                    path: listedPath,
                     urls: cloneUrls,
                     local_auth: localAuth,
                   }).then((r) => {
