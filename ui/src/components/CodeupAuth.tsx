@@ -62,17 +62,22 @@ export function CodeupAuth({
     [vpsRemove, setVpsRemove] = useState(false);
   useEffect(() => {
     if (!open) return;
+    let active = true;
     setVpsAck(false);
     setVpsRemove(false);
     setVpsStatus(connected ? { loading: true } : {});
     if (connected)
       invoke<Data>("git_vps_auth_status", { request: {} })
-        .then(setVpsStatus)
-        .catch((e) => setVpsStatus({ error: true, message: errorText(e) }));
+        .then((r) => {
+          if (active) setVpsStatus(r);
+        })
+        .catch((e) => {
+          if (active) setVpsStatus({ error: true, message: errorText(e) });
+        });
+    return () => {
+      active = false;
+    };
   }, [open, account, connected]);
-  useEffect(() => {
-    if (open) setUrl(initialUrl);
-  }, [open, initialUrl]);
   useEffect(() => {
     if (open) {
       setUrl(initialUrl);

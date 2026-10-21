@@ -2186,7 +2186,10 @@ export default function App() {
       <CodeupAuth
         key={`${connection.profile?.host}:${connection.profile?.user}:${connection.profile?.port}`}
         open={authOpen}
-        onOpenChange={setAuthOpen}
+        onOpenChange={(v) => {
+          setAuthOpen(v);
+          if (!v) setAuthUrl("");
+        }}
         connected={connected}
         account={
           connected
