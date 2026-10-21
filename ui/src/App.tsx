@@ -219,6 +219,9 @@ export default function App() {
     [fileOperation, setFileOperation] = useState<Data | null>(null),
     [trashOpen, setTrashOpen] = useState(false),
     [branchesOpen, setBranchesOpen] = useState(false);
+  const [cloneResults, setCloneResults] = useState<Data[]>([]),
+    [cloneElapsed, setCloneElapsed] = useState(0);
+  const cloneRetry = useRef<{ signature: string; urls: string[] } | null>(null);
   const [modelEditing, setModelEditing] = useState(false);
   const [mcpStatus, setMcpStatus] = useState<Data>({});
   const [theme, setTheme] = useState(
@@ -395,13 +398,29 @@ export default function App() {
     setCloneError("");
     setCloneProgress({ stage: "正在检查连接和目标目录…" });
     const destination = listedPath;
+    const signature = JSON.stringify([destination, cloneUrls, localAuth]);
+    const urls =
+      cloneRetry.current?.signature === signature
+        ? cloneRetry.current.urls
+        : Array.from(new Set(cloneUrls.trim().split(/\s+/).filter(Boolean)));
+    const started = Date.now();
+    setCloneElapsed(0);
+    const timer = setInterval(
+      () => setCloneElapsed(Math.floor((Date.now() - started) / 1000)),
+      1000,
+    );
     try {
       const r = await request("clone_repository", {
         path: destination,
-        urls: cloneUrls,
+        urls: urls.join("\n"),
         local_auth: localAuth,
       });
       if (!r) return;
+      setCloneResults(r.repositories || []);
+      cloneRetry.current =
+        r.complete === false
+          ? { signature, urls: urls.slice((r.repositories || []).length) }
+          : null;
       if (r.complete === false)
         throw new Error(
           `${r.failed_repository || "仓库"}：${r.error || "克隆失败"}`,
@@ -419,6 +438,8 @@ export default function App() {
             ? String((e as Data).message)
             : String(e);
       setCloneError(message);
+    } finally {
+      clearInterval(timer);
     }
   }
   const safe = (p: Promise<any>) => {
@@ -748,6 +769,7 @@ export default function App() {
     ([key, value]) =>
       (!value?.page || value.page === page) &&
       !(serverEdit && ["save_profile", "connect_ssh"].includes(key)) &&
+      key !== "clone_repository" &&
       !key.startsWith("database_") &&
       !["task_list", "task_status", "project_list"].includes(key),
   );
@@ -2370,6 +2392,8 @@ export default function App() {
               {!cloneError && (
                 <p role="status">
                   {cloneProgress.stage}
+                  {busy.has("clone_repository") &&
+                    ` · ${Math.floor(cloneElapsed / 60)}:${String(cloneElapsed % 60).padStart(2, "0")}`}
                   {cloneProgress.total > 0 &&
                     ` · 已处理 ${cloneProgress.completed}/${cloneProgress.total} 个仓库`}
                 </p>
@@ -2386,6 +2410,12 @@ export default function App() {
               )}
             </div>
           )}
+          {cloneResults.map((r) => (
+            <p key={r.path} className="hint">
+              {r.name} ·{" "}
+              {r.state === "already_exists" ? "已存在，未改动" : "已克隆"}
+            </p>
+          ))}
           <DialogFooter>
             <Button
               disabled={busy.has("clone_repository")}
