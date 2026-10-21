@@ -286,13 +286,13 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
         )
     }
 }
-fn protected_running(p: &Path) -> Result<()> {
+pub(crate) fn protected_running(p: &Path) -> Result<()> {
     let tasks = crate::runner::dispatch(json!({"op":"list"}))?;
     for t in tasks["tasks"].as_array().into_iter().flatten() {
         if ["queued", "running", "waiting_approval"].contains(&t["state"].as_str().unwrap_or("")) {
             let w = Path::new(t["workspace"].as_str().unwrap_or(""));
             if w.starts_with(p) || p.starts_with(w) {
-                bail!("此仓库有进行中的任务，不能切换分支")
+                bail!("此仓库关联的任务仍在运行，暂不能修改仓库")
             }
         }
     }

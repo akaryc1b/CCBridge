@@ -185,6 +185,9 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "trash_restore",
             "branch_change",
             "branch_fetch",
+            "git_update",
+            "git_vps_auth_install",
+            "git_vps_auth_remove",
             "project_save",
             "set_auto",
             "bind_repository",
@@ -547,6 +550,104 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     drop(guard);
     if c.handle.is_closed() {
         bail!("SSH 已断开，请在 App 重新连接；不要自动重放任务")
+    }
+    if op == "git_vps_auth_test" {
+        if !human {
+            bail!("VPS 认证检测只能在 App 操作")
+        }
+        let mut r = c.git_access(field(&v, "url")?, None).await?;
+        r["message"] = json!("VPS 自身 Git 认证检测通过，未注入 Mac 凭据");
+        return Ok(r);
+    }
+    if [
+        "git_vps_auth_status",
+        "git_vps_auth_test",
+        "git_vps_auth_install",
+        "git_vps_auth_remove",
+    ]
+    .contains(&op.as_str())
+    {
+        if !human {
+            bail!("VPS 认证只能由人在 App 明确确认，不允许 MCP 写入凭据")
+        }
+        if c.probe["runner_version"].as_str() != Some(env!("CARGO_PKG_VERSION")) {
+            bail!("请先更新当前账号 Runner")
+        }
+        if op == "git_vps_auth_status" {
+            return c.rpc(json!({"op":op})).await;
+        }
+        let account = format!("{}@{}:{}", c.profile.user, c.profile.host, c.profile.port);
+        if v["vps_account"] != account {
+            bail!("SSH 账号已变化，请重新打开认证窗口确认")
+        }
+        if op == "git_vps_auth_remove" {
+            return c.rpc(json!({"op":op,"confirm":v["confirm"]})).await;
+        }
+        if v["server_storage_ack"] != true {
+            bail!("请在 App 确认凭据将保存到当前 VPS 账号")
+        }
+        let draft = v["secret"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .map(|secret| crate::git_auth::Credential {
+                username: v["username"].as_str().unwrap_or("").into(),
+                secret: secret.into(),
+            });
+        let cred = crate::git_auth::for_vps(
+            v["scope"].as_str().unwrap_or("local"),
+            &c.profile,
+            field(&v, "url")?,
+            draft,
+        )
+        .await?;
+        return c.rpc(json!({"op":op,"server_storage_ack":true,"username":cred.username,"secret":cred.secret})).await;
+    }
+    if ["git_update_plan", "git_update"].contains(&op.as_str()) {
+        if !human && op == "git_update" && !c.profile.allow_auto {
+            bail!("请先在 App 开启全自动授权，再通过 MCP 更新代码")
+        }
+        if c.probe["runner_version"].as_str() != Some(env!("CARGO_PKG_VERSION")) {
+            bail!("请先在 App 更新当前账号 Runner，再使用 Git 更新")
+        }
+        let path = field(&v, "path")?;
+        let plan = c.rpc(json!({"op":"git_update_plan","path":path})).await?;
+        if op == "git_update_plan" {
+            return Ok(plan);
+        }
+        if let Some(expected) = v["expected"].as_array() {
+            let repos = plan["repositories"].as_array().context("仓库列表无效")?;
+            if expected.len() != repos.len() {
+                bail!("项目内仓库列表已变化，请刷新后重新确认")
+            }
+            for repo in repos {
+                let old = expected
+                    .iter()
+                    .find(|r| r["path"] == repo["path"])
+                    .context("仓库目标已变化，请刷新")?;
+                for key in ["head", "branch", "upstream", "remote"] {
+                    if old[key] != repo[key] {
+                        bail!("仓库分支或提交已变化，请刷新后重新确认")
+                    }
+                }
+            }
+        }
+        let mut results = vec![];
+        for repo in plan["repositories"].as_array().context("仓库列表无效")? {
+            let path = repo["path"].as_str().context("仓库路径无效")?;
+            let result: Result<Value> = async {
+                c.rpc(json!({"op":"git_update_preflight","path":path,"expected":repo}))
+                    .await?;
+                c.git_fetch_remote(path, repo["remote"].as_str().context("未设置远端")?)
+                    .await?;
+                c.rpc(json!({"op":"git_update_apply","path":path,"expected":repo}))
+                    .await
+            }
+            .await;
+            results.push(match result{Ok(r)=>r,Err(e)=>json!({"path":path,"branch":repo["branch"],"state":"failed","message":format!("{e:#}")})});
+        }
+        let failed = results.iter().filter(|r| r["state"] == "failed").count();
+        let updated = results.iter().filter(|r| r["state"] == "updated").count();
+        return Ok(json!({"ok":failed==0,"updated":updated,"failed":failed,"results":results}));
     }
     if [
         "file_create",

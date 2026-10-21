@@ -36,3 +36,6 @@ pub mod git_auth;
 pub mod secret_store;
 
 pub mod install;
+
+pub mod git_update;
+pub mod vps_auth;

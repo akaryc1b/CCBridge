@@ -36,6 +36,15 @@ struct MatchRepository {
     local_repository: String,
 }
 #[derive(Deserialize, JsonSchema)]
+struct GitUpdate {
+    /// Exact absolute REMOTE repository or registered multi-repository project directory. Never use the App default implicitly.
+    path: String,
+    /// true only inspects repositories and upstreams; false fetches and fast-forwards clean repositories. Never stash/reset/push.
+    dry_run: Option<bool>,
+    /// Optional repositories array returned by dry_run. Pins the reviewed branch/head/upstream set.
+    expected: Option<Vec<Value>>,
+}
+#[derive(Deserialize, JsonSchema)]
 struct Id {
     task_id: String,
 }
@@ -103,6 +112,15 @@ impl Bridge {
             local_call(json!({"op":"repository_match","local_repository":p.local_repository}))
                 .await,
         )
+    }
+    #[tool(
+        description = "Inspect or update an explicit REMOTE Git repository/project using App remote Codeup credentials or VPS Git credentials. Fetch the configured upstream then fast-forward only. Refuses dirty, divergent, detached, changed-branch and active-task repositories; never reset/stash/push. Multiple repos return individual results. Local repositories remain managed by Codex local Git tools. Never supply credentials in this tool."
+    )]
+    async fn git_update(
+        &self,
+        Parameters(p): Parameters<GitUpdate>,
+    ) -> std::result::Result<CallToolResult, rmcp::ErrorData> {
+        output(local_call(json!({"op":if p.dry_run.unwrap_or(false){"git_update_plan"}else{"git_update"},"path":p.path,"expected":p.expected})).await)
     }
     #[tool(
         description = "Start remote Claude Code task. Omit local_repository to use the remote workspace selected by the human in the App. Supply it only when matching a specific LOCAL Git repository to its remote clone. Returns task_id immediately. Only remote files are visible; this does not upload local files. Never retry an uncertain start with a different ID: list tasks or reuse the ID."

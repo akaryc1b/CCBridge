@@ -441,14 +441,28 @@ git_auth clone --quiet -- {} "$dest"
         )
     }
     pub async fn git_fetch(&self, path: &str) -> Result<Value> {
+        self.git_fetch_remote(path, "origin").await
+    }
+    pub async fn git_fetch_remote(&self, path: &str, remote: &str) -> Result<Value> {
+        if remote.is_empty() || remote.starts_with('-') || remote.contains(['\n', '\r', '\0']) {
+            bail!("远端名称无效")
+        }
         self.rpc(json!({"op":"branches","path":path})).await?;
         let mut guard = crate::remote_fs::guard(&self.environment.home, path)?;
-        guard += "git -C \"$path\" remote get-url origin\n";
+        guard += &format!(
+            "git -C \"$path\" remote get-url -- {}\n",
+            shell_quote(remote)
+        );
         let (out, _, status) = self.execute(guard, &[]).await?;
         if status != Some(0) {
             bail!("没有可用的 origin 远端")
         }
         let url = String::from_utf8(out)?.trim().to_string();
+        if let Ok(parsed) = url::Url::parse(&url) {
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                bail!("仓库 URL 含内嵌认证，请先改为不含凭据的地址")
+            }
+        }
         let host = url::Url::parse(&url)
             .ok()
             .and_then(|u| u.host_str().map(String::from))
@@ -460,7 +474,7 @@ git_auth clone --quiet -- {} "$dest"
         };
         let (mut cmd, input) = crate::git_auth::remote_prefix(&host, cred.as_ref());
         cmd += &crate::remote_fs::guard(&self.environment.home, path)?;
-        cmd += "git_auth -C \"$path\" fetch origin\n";
+        cmd += &format!("git_auth -C \"$path\" fetch -- {}\n", shell_quote(remote));
         let (_, err, status) = self
             .execute_for(cmd, &input, Duration::from_secs(300))
             .await?;
@@ -469,6 +483,7 @@ git_auth clone --quiet -- {} "$dest"
                 "获取远端分支失败：{}",
                 crate::transfer::local_failure(&String::from_utf8_lossy(&err))
                     .replace("本机", "远端")
+                    + "；请在 Codeup 认证选择‘服务器当前 SSH 账号’，或同步认证到 VPS"
             )
         }
         self.rpc(json!({"op":"branches","path":path})).await

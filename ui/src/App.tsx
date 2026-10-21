@@ -1,3 +1,4 @@
+import { GitUpdate } from "@/components/GitUpdate";
 import { isConnecting, clearConnectionErrors } from "@/lib/connection";
 import { Workbench } from "@/components/Workbench";
 import { DropdownMenu as Menu } from "radix-ui";
@@ -228,6 +229,8 @@ export default function App() {
   const [theme, setTheme] = useState(
     localStorage.getItem("ccbridge-theme") || "system",
   );
+  const [gitUpdateOpen, setGitUpdateOpen] = useState(false);
+  const [authUrl, setAuthUrl] = useState("");
   const [preferences, setPreferences] = useState<Data>({});
   const [autoTarget, setAutoTarget] = useState<Data>({});
   const [installLocation, setInstallLocation] = useState<Data>({
@@ -885,6 +888,14 @@ export default function App() {
             )}
             {page === "projects" && (
               <>
+                <Button
+                  variant="outline"
+                  disabled={!locationReady || connecting}
+                  onClick={() => setGitUpdateOpen(true)}
+                >
+                  <RefreshCw size={15} />
+                  Git 更新
+                </Button>
                 <Button
                   variant="outline"
                   disabled={!locationReady}
@@ -2068,9 +2079,6 @@ export default function App() {
                   <dt>数据目录</dt>
                   <dd>{dataDirectory}</dd>
                 </dl>
-                <Button variant="outline" onClick={() => setPage("updates")}>
-                  检查应用更新
-                </Button>
               </Panel>
             </>
           )}
@@ -2162,6 +2170,19 @@ export default function App() {
           )}
         </DialogContent>
       </Dialog>
+      <GitUpdate
+        open={gitUpdateOpen}
+        path={listedPath}
+        onClose={() => setGitUpdateOpen(false)}
+        onUpdated={() => {
+          void browse(listedPath);
+        }}
+        onAuth={(url) => {
+          setAuthUrl(url);
+          setAuthScope("remote");
+          setAuthOpen(true);
+        }}
+      />
       <CodeupAuth
         key={`${connection.profile?.host}:${connection.profile?.user}:${connection.profile?.port}`}
         open={authOpen}
@@ -2172,7 +2193,7 @@ export default function App() {
             ? `${connection.profile?.user}@${connection.profile?.host}:${connection.profile?.port}`
             : ""
         }
-        url={cloneUrls.trim().split(/\s+/)[0] || ""}
+        url={authUrl || cloneUrls.trim().split(/\s+/)[0] || ""}
         initialScope={authScope}
         consented={storageConsent}
         onConsent={() => setStorageConsent(true)}

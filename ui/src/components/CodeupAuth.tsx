@@ -57,6 +57,22 @@ export function CodeupAuth({
     [message, setMessage] = useState(""),
     [error, setError] = useState(""),
     [forget, setForget] = useState(false);
+  const [vpsStatus, setVpsStatus] = useState<Data>({}),
+    [vpsAck, setVpsAck] = useState(false),
+    [vpsRemove, setVpsRemove] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setVpsAck(false);
+    setVpsRemove(false);
+    setVpsStatus(connected ? { loading: true } : {});
+    if (connected)
+      invoke<Data>("git_vps_auth_status", { request: {} })
+        .then(setVpsStatus)
+        .catch((e) => setVpsStatus({ error: true, message: errorText(e) }));
+  }, [open, account, connected]);
+  useEffect(() => {
+    if (open) setUrl(initialUrl);
+  }, [open, initialUrl]);
   useEffect(() => {
     if (open) {
       setUrl(initialUrl);
@@ -96,7 +112,15 @@ export function CodeupAuth({
     setBusy(op);
     setError("");
     setMessage(
-      op === "git_access" ? "正在用 Git 检测仓库访问…" : "正在保存认证…",
+      op === "git_access"
+        ? "正在用 Git 检测仓库访问…"
+        : op === "git_vps_auth_test"
+          ? "正在检测 VPS 自身认证…"
+          : op === "git_vps_auth_install"
+            ? "正在同步认证到当前 VPS…"
+            : op === "git_vps_auth_remove"
+              ? "正在移除 VPS 认证…"
+              : "正在保存认证…",
     );
     try {
       const r = await invoke<Data>(op, {
@@ -107,6 +131,9 @@ export function CodeupAuth({
           secret,
           storage,
           storage_ack: storageAck,
+          server_storage_ack: vpsAck,
+          vps_account: account,
+          confirm: vpsRemove,
         },
       });
       if (
@@ -114,7 +141,13 @@ export function CodeupAuth({
         storage === "file"
       )
         onConsent?.();
-      if (op === "git_access") {
+      if (op.startsWith("git_vps_auth_")) {
+        if (op !== "git_vps_auth_test") setVpsStatus(r);
+        if (op === "git_vps_auth_install") setSecret("");
+        setVpsAck(false);
+        setVpsRemove(false);
+        setMessage(r.message || "VPS 认证操作完成");
+      } else if (op === "git_access") {
         setMessage(r.message || "仓库可以读取");
       } else {
         setStatus(r);
@@ -164,8 +197,8 @@ export function CodeupAuth({
         </Select>
         <p className="hint">
           {scope === "remote"
-            ? `当前账号：${account || "尚未连接"}。认证按此 SSH 账号隔离保存于本机所选存储，仅在执行时经加密 SSH 提供；不写入远端 Git 配置。`
-            : "认证保存于本机所选存储，仅用于 codeup.aliyun.com。未保存时继续使用原有 Git 凭据助手。"}
+            ? `当前账号：${account || "尚未连接"}。App 档认证保存在 Mac，仅供 App 内 Git 操作；VPS 终端 / Claude 的认证请在下方单独同步。`
+            : "认证保存在 Mac，仅用于 codeup.aliyun.com；未保存时使用本机 Git 凭据助手。可在下方单独授权同步到 VPS。"}
         </p>
         <Badge variant="outline">
           {status.configured
@@ -223,6 +256,81 @@ export function CodeupAuth({
             我理解密码以明文保存在当前用户私有目录，同一用户程序仍可读取。
           </label>
         )}
+        <section className="rounded border p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <Label>VPS 持久认证</Label>
+            <Badge variant="outline">
+              {!connected
+                ? "未连接"
+                : vpsStatus.loading
+                  ? "检测中…"
+                  : vpsStatus.error
+                    ? "检测失败"
+                    : vpsStatus.configured
+                      ? "VPS 已配置"
+                      : "VPS 未配置"}
+            </Badge>
+          </div>
+          <p className="hint">
+            {account || "请先连接 SSH"} ·{" "}
+            {vpsStatus.message || "可在克隆之后随时补同步，不需要重新克隆。"}
+          </p>
+          <p className="hint">
+            同步使用上方输入的令牌；留空则使用所选档已保存认证，本机档还可复用
+            Git 凭据助手。只接入当前 VPS 账号的 Codeup HTTPS，不修改 SSH 登录。
+          </p>
+          <label className="hint flex gap-2">
+            <input
+              type="checkbox"
+              checked={vpsAck}
+              disabled={!!busy || !connected}
+              onChange={(e) => setVpsAck(e.target.checked)}
+            />
+            我同意将该认证以明文保存到此 VPS 账号的私有文件，供普通 Git / Claude
+            使用；同账号程序及服务器管理员可读取。推荐专用最小权限令牌。
+          </label>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="outline"
+              disabled={!!busy || !connected || !vpsAck || !url.trim()}
+              onClick={() => void run("git_vps_auth_install")}
+            >
+              同步到当前 VPS
+            </Button>
+            <Button
+              variant="outline"
+              disabled={!!busy || !connected || !url.trim()}
+              onClick={() => void run("git_vps_auth_test")}
+            >
+              检测 VPS 自身认证
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={!!busy || !connected || !vpsStatus.configured}
+              onClick={() => setVpsRemove(true)}
+            >
+              移除 VPS 认证
+            </Button>
+          </div>
+          {vpsRemove && (
+            <div>
+              <p>
+                只移除此 App 写入的 VPS Codeup 认证，Mac 认证及服务器其他 Git
+                配置保留。
+              </p>
+              <Button
+                variant="destructive"
+                disabled={!!busy}
+                onClick={() => void run("git_vps_auth_remove")}
+              >
+                确认移除 VPS 认证
+              </Button>
+              <Button variant="ghost" onClick={() => setVpsRemove(false)}>
+                取消
+              </Button>
+            </div>
+          )}
+        </section>
         {message && (
           <p role="status" className="flex items-center gap-2">
             {busy ? (

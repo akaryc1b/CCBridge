@@ -1,4 +1,4 @@
-//! Git credential protocol; secrets live in macOS Keychain, never in remote URLs/configs.
+//! Git credential protocol. Mac private-file credentials; remote persistence is a separate human action.
 use crate::common::*;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -187,6 +187,68 @@ pub async fn save(_scope: &str, _p: &Profile, _c: Credential, _store: &str) -> R
 #[cfg(not(target_os = "macos"))]
 pub async fn remove(_scope: &str, _p: &Profile) -> Result<Value> {
     bail!("认证保存仅在 macOS App 内可用")
+}
+/// Only used after a human explicitly asks to synchronize this credential to the current VPS.
+pub async fn for_vps(
+    scope: &str,
+    p: &Profile,
+    url: &str,
+    draft: Option<Credential>,
+) -> Result<Credential> {
+    host(url)?;
+    if let Some(c) = draft {
+        c.validate()?;
+        return Ok(c);
+    }
+    if let Some(c) = load(scope, p).await? {
+        return Ok(c);
+    }
+    if scope != "local" {
+        bail!("App 尚未保存服务器档认证，请输入令牌或选择本机已有认证")
+    }
+    // Ask the configured Git helper, not a shell/keychain export. No returned secret reaches UI/logs.
+    let url = url.to_string();
+    tokio::task::spawn_blocking(move || -> Result<Credential> {
+        use std::io::Write;
+        use std::process::Stdio;
+        let parsed = url::Url::parse(&url)?;
+        let mut child = std::process::Command::new("git")
+            .args(["credential", "fill"])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_ASKPASS", "/usr/bin/false")
+            .env("GCM_INTERACTIVE", "Never")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        child.stdin.take().unwrap().write_all(
+            format!(
+                "protocol=https\nhost=codeup.aliyun.com\npath={}\n\n",
+                parsed.path().trim_start_matches('/')
+            )
+            .as_bytes(),
+        )?;
+        let out = child.wait_with_output()?;
+        if !out.status.success() {
+            bail!("本机 Git 助手没有可用认证，请在 App 输入 Codeup 用户名与令牌")
+        }
+        let text = String::from_utf8(out.stdout)?;
+        let mut c = Credential {
+            username: String::new(),
+            secret: String::new(),
+        };
+        for line in text.lines() {
+            if let Some(v) = line.strip_prefix("username=") {
+                c.username = v.into()
+            }
+            if let Some(v) = line.strip_prefix("password=") {
+                c.secret = v.into()
+            }
+        }
+        c.validate()?;
+        Ok(c)
+    })
+    .await?
 }
 #[cfg(test)]
 mod tests {

@@ -18,11 +18,13 @@ def tool(i,name,arguments={}):
 call(1,'initialize',{'protocolVersion':'2025-06-18','capabilities':{},'clientInfo':{'name':'acceptance','version':'1'}})
 p.stdin.write(json.dumps({'jsonrpc':'2.0','method':'notifications/initialized'})+'\n');p.stdin.flush()
 tools=call(2,'tools/list',{})
-assert len(tools['tools'])==9
+assert len(tools['tools'])==10
+assert 'git_update' in {x['name'] for x in tools['tools']}
 assert tool(3,'connection_status')['connected']
 assert tool(30,'repository_match',{'local_repository':sys.argv[2]})['state']=='matched'
 t=tool(4,'cc_start',{'prompt':'Read README.md','mode':'approval','local_repository':sys.argv[2],'model':'fixture-model-one'})
 assert t['workspace'].endswith('/projects/completely-different-name'),t
+assert tool(31,'git_update',{'path':t['workspace'],'dry_run':True})['repositories']
 finished=tool(40,'cc_result',{'task_id':t['task_id'],'wait_seconds':5})
 assert finished['state']=='completed',finished
 assert finished['model_resolved']=='fixture-model-one',finished

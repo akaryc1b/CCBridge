@@ -55,6 +55,12 @@ pub fn rpc_stdio() -> Result<()> {
 }
 pub fn dispatch(v: Value) -> Result<Value> {
     match field(&v, "op")? {
+        "git_update_plan" | "git_update_preflight" | "git_update_apply" => {
+            crate::git_update::rpc(&v)
+        }
+        "git_vps_auth_status" | "git_vps_auth_install" | "git_vps_auth_remove" => {
+            crate::vps_auth::rpc(&v)
+        }
         "file_create" | "file_mutate" | "trash_list" | "trash_restore" | "branches"
         | "branch_change" => crate::workspace_ops::rpc(&v),
         "project_list" | "project_save" | "project_resolve" => crate::projects::rpc(&v),
