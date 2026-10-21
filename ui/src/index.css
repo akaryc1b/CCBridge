@@ -1480,4 +1480,39 @@ pre,
 .context-menu [role="menuitem"][data-highlighted] {
   background: var(--selection);
 }
-.session-project{position:relative}.session-project>summary{padding-right:32px}.session-project>.group-new{position:absolute;top:8px;right:0;margin:0!important;width:24px!important;padding:0!important}.composer{padding:12px 20px}.composer textarea{min-height:47px;height:47px;max-height:96px;resize:none}.composer-options{margin-bottom:8px}.composer-options [data-slot=select-trigger],.composer-options [data-slot=button]{height:26px}.composer-footer{margin-top:6px}.composer-footer [data-slot=button]{height:28px}
+.session-project {
+  position: relative;
+}
+.session-project > summary {
+  padding-right: 32px;
+}
+.session-project > .group-new {
+  position: absolute;
+  top: 8px;
+  right: 0;
+  margin: 0 !important;
+  width: 24px !important;
+  padding: 0 !important;
+}
+.composer {
+  padding: 12px 20px;
+}
+.composer textarea {
+  min-height: 47px;
+  height: 47px;
+  max-height: 96px;
+  resize: none;
+}
+.composer-options {
+  margin-bottom: 8px;
+}
+.composer-options [data-slot="select-trigger"],
+.composer-options [data-slot="button"] {
+  height: 26px;
+}
+.composer-footer {
+  margin-top: 6px;
+}
+.composer-footer [data-slot="button"] {
+  height: 28px;
+}
