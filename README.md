@@ -152,6 +152,8 @@ sh tests/linux-smoke.sh "$PWD/target/release/ccbridge"
 - `latest.json`：GitHub 更新清单
 - `ccbridge-linux-x86_64`：配套 Runner
 
+构建缓存分为 Linux、ARM、Intel 三组，固定 Rust 1.93.0；缓存 Cargo 下载及依赖编译产物（包含根目录和 Tauri 的 debug/release），不缓存签名密钥或最终安装包。主分支会完成 Tauri release 编译预热并保存缓存，后续标签可恢复主分支缓存；锁文件变化时尽量复用未变化依赖。pnpm 使用锁文件对应的下载缓存，Node 22 由 setup-node 提供，不再每轮通过 Homebrew 安装。首次运行、工具链或依赖发生变化仍需要编译，缓存命中不跳过测试、签名或发布验证。缓存是否精确命中可在各构建任务的 Summary 查看。
+
 使用 Tauri 独立更新签名与 ad-hoc App 签名，**不需要 Developer ID 或 Apple 公证**。GitHub Secrets 中保存 `TAURI_SIGNING_PRIVATE_KEY` 与可选密码。公钥随 App 发布；下载、网络或签名验证失败不替换当前 App。新 App 完全无法启动时，从上一版本 ZIP 应急恢复，而不是依赖失效 App 自己回滚。
 
 CI 不保存 SSH/数据库密码，不连接开发或生产服务器，不自动部署用户 Runner。GUI 登录与真实服务器验收在授权环境完成。维护说明见 [CONTRIBUTING.md](CONTRIBUTING.md)。

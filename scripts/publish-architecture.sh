@@ -38,14 +38,14 @@ ASSETS=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].nam
 if printf '%s\n' "$ASSETS" | grep -qx latest.json; then
   gh release download "$TAG" --repo "$REPO" --pattern latest.json --dir "$DIR/existing" --clobber
 fi
-# Upload binaries first: an advertised updater URL must already exist.
-for file in "$DIR"/*.zip "$DIR"/*.tar.gz "$DIR"/*.sig "$DIR"/ccbridge-linux-x86_64 "$DIR"/latest-darwin-*.json; do
-  [ -f "$file" ] || continue
-  gh release upload "$TAG" "$file" --repo "$REPO" --clobber
-done
 if [ -f "$DIR/existing/latest.json" ]; then
   python3 scripts/merge-update-manifests.py "$DIR/latest.json" "$DIR/existing/latest.json" "$DIR"/latest-darwin-*.json
 else
   python3 scripts/merge-update-manifests.py "$DIR/latest.json" "$DIR"/latest-darwin-*.json
 fi
+# Upload binaries first: an advertised updater URL must already exist.
+for file in "$DIR"/*.zip "$DIR"/*.tar.gz "$DIR"/*.sig "$DIR"/ccbridge-linux-x86_64 "$DIR"/latest-darwin-*.json; do
+  [ -f "$file" ] || continue
+  gh release upload "$TAG" "$file" --repo "$REPO" --clobber
+done
 gh release upload "$TAG" "$DIR/latest.json" --repo "$REPO" --clobber
