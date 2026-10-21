@@ -1516,3 +1516,6 @@ pre,
 .composer-footer [data-slot="button"] {
   height: 28px;
 }
+.session-project > button {
+  color: var(--foreground);
+}

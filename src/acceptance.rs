@@ -604,9 +604,19 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
     {
         let mut saved = p.clone();
         saved.remember_password = true;
+        saved.credential_store = "file".into();
+        assert!(
+            backend::dispatch(
+                shared.clone(),
+                json!({"op":"save_profile","profile":saved,"password":"test-only-password"}),
+                true
+            )
+            .await
+            .is_err()
+        );
         backend::dispatch(
             shared.clone(),
-            json!({"op":"save_profile","profile":saved,"password":"test-only-password"}),
+            json!({"op":"save_profile","profile":saved,"password":"test-only-password","storage_ack":true}),
             true,
         )
         .await?;
@@ -639,7 +649,7 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
             .is_err()
         );
         println!(
-            "PASS explicit profile save / macOS Keychain store-read-delete / no plaintext password in profile"
+            "PASS explicit profile save / one-time local-storage consent / private file store-read-delete / no password in profile"
         );
     }
     assert!(
