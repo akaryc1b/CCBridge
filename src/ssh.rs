@@ -385,11 +385,7 @@ impl Connection {
                 result
             } else {
                 report(&format!("{name}：使用服务器 Git 认证克隆"), index, total);
-                let cred = if crate::git_auth::host(&url).is_ok() {
-                    crate::git_auth::load("remote", &self.profile).await?
-                } else {
-                    None
-                };
+                let cred = self.remote_git_credential(&url).await?;
                 let host = url::Url::parse(&url)?.host_str().unwrap_or("").to_string();
                 let (mut cmd, input) = crate::git_auth::remote_prefix(&host, cred.as_ref());
                 cmd += &crate::remote_fs::guard(&self.environment.home, parent)?;
@@ -440,6 +436,23 @@ git_auth clone --quiet -- {} "$dest"
             json!({"accessible":true,"message":"远端 Git 已通过仓库读取检测","branches":String::from_utf8_lossy(&out).lines().count()}),
         )
     }
+    async fn remote_git_credential(
+        &self,
+        url: &str,
+    ) -> Result<Option<crate::git_auth::Credential>> {
+        if crate::git_auth::host(url).is_err() {
+            return Ok(None);
+        }
+        // A human-enabled VPS credential becomes the default for server Git. Do not shadow it
+        // with an older App copy, and never retry under another identity after auth failure.
+        if self.probe["runner_version"].as_str() == Some(env!("CARGO_PKG_VERSION")) {
+            let status = self.rpc(json!({"op":"git_vps_auth_status"})).await?;
+            if status["configured"] == true {
+                return Ok(None);
+            }
+        }
+        crate::git_auth::load("remote", &self.profile).await
+    }
     pub async fn git_fetch(&self, path: &str) -> Result<Value> {
         self.git_fetch_remote(path, "origin").await
     }
@@ -467,11 +480,7 @@ git_auth clone --quiet -- {} "$dest"
             .ok()
             .and_then(|u| u.host_str().map(String::from))
             .unwrap_or_default();
-        let cred = if crate::git_auth::host(&url).is_ok() {
-            crate::git_auth::load("remote", &self.profile).await?
-        } else {
-            None
-        };
+        let cred = self.remote_git_credential(&url).await?;
         let (mut cmd, input) = crate::git_auth::remote_prefix(&host, cred.as_ref());
         cmd += &crate::remote_fs::guard(&self.environment.home, path)?;
         cmd += &format!("git_auth -C \"$path\" fetch -- {}\n", shell_quote(remote));
