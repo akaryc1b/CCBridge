@@ -81,3 +81,56 @@ describe("readable events", () => {
     ).toBe("读取文件");
   });
 });
+
+import { groupSessions, nextModelLabel } from "./conversation";
+describe("project sessions and visible model", () => {
+  it("groups exact and child workspaces without prefix collisions, with the longest registered path", () => {
+    const projects = [
+      { name: "EHS", path: "/home/u/ehs" },
+      { name: "前端", path: "/home/u/ehs/web" },
+    ];
+    const groups = groupSessions(
+      [
+        {
+          task_id: "1",
+          session_id: "s",
+          created_at: 1,
+          workspace: "/home/u/ehs/api",
+        },
+        {
+          task_id: "2",
+          session_id: "s",
+          created_at: 2,
+          workspace: "/home/u/ehs/api",
+        },
+        { task_id: "3", created_at: 3, workspace: "/home/u/ehs/web/src" },
+        { task_id: "4", created_at: 4, workspace: "/home/u/ehs-other" },
+        {
+          task_id: "5",
+          created_at: 1,
+          updated_at: 8,
+          workspace: "/home/u/ehs",
+        },
+      ],
+      projects,
+    );
+    expect(groups[0].name).toBe("EHS");
+    expect(groups[0].sessions.map((t) => t.task_id)).toEqual(["5", "2"]);
+    expect(groups.find((g) => g.name === "前端")?.sessions[0].task_id).toBe(
+      "3",
+    );
+    expect(groups.find((g) => g.path === "/home/u/ehs-other")?.registered).toBe(
+      false,
+    );
+  });
+  it("shows configured model directly, remote default remains explicitly unconfirmed", () => {
+    expect(
+      nextModelLabel({ model_requested: "claude-opus-5-5" }, "sonnet"),
+    ).toBe("claude-opus-5-5");
+    expect(nextModelLabel(undefined, "sonnet")).toBe("sonnet");
+    expect(nextModelLabel({}, "sonnet")).toBe("模型待确认（远端默认）");
+    expect(
+      nextModelLabel({ model_resolved: "claude-opus-5-5" }, "sonnet"),
+    ).toBe("claude-opus-5-5（远端默认）");
+  });
+});

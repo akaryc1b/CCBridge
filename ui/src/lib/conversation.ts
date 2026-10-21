@@ -67,3 +67,61 @@ export function eventLabel(event: RecordValue): string {
     return event.subtype === "init" ? "会话初始化" : "运行状态";
   return event.type === "result" ? "本轮结果" : "运行事件";
 }
+
+/** Most-specific registered project owns its subdirectories; unrelated paths stay separate. */
+export function groupSessions(tasks: RecordValue[], projects: RecordValue[]) {
+  const groups = new Map<
+    string,
+    { path: string; name: string; registered: boolean; sessions: RecordValue[] }
+  >();
+  for (const t of latestSessions(tasks)) {
+    const workspace = String(t.workspace || "").replace(/\/$/, "");
+    const project = projects
+      .filter(
+        (p) =>
+          workspace === p.path ||
+          workspace.startsWith(p.path.replace(/\/$/, "") + "/"),
+      )
+      .sort((a, b) => b.path.length - a.path.length)[0];
+    const path = project?.path || workspace;
+    if (!groups.has(path))
+      groups.set(path, {
+        path,
+        name:
+          project?.name ||
+          (workspace
+            ? `其他目录 · ${workspace.split("/").pop()}`
+            : "未记录项目"),
+        registered: !!project,
+        sessions: [],
+      });
+    groups.get(path)!.sessions.push(t);
+  }
+  return [...groups.values()]
+    .map((g) => ({
+      ...g,
+      sessions: g.sessions.sort(
+        (a, b) =>
+          (b.updated_at || b.created_at || 0) -
+          (a.updated_at || a.created_at || 0),
+      ),
+    }))
+    .sort(
+      (a, b) =>
+        Math.max(...b.sessions.map((t) => t.updated_at || t.created_at || 0)) -
+        Math.max(...a.sessions.map((t) => t.updated_at || t.created_at || 0)),
+    );
+}
+
+/** A concrete configured name, never an invented resolution of a remote default. */
+export function nextModelLabel(
+  task: RecordValue | undefined,
+  serverModel: string,
+) {
+  if (!task) return serverModel?.trim() || "模型待确认（远端默认）";
+  const requested = task.model_requested || task.model;
+  if (requested) return requested;
+  return task.model_resolved
+    ? `${task.model_resolved}（远端默认）`
+    : "模型待确认（远端默认）";
+}

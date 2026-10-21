@@ -2,7 +2,8 @@ import { Databases } from "@/components/Databases";
 import {
   normalizeTask,
   conversationTurns,
-  latestSessions,
+  groupSessions,
+  nextModelLabel,
   displayModel,
   eventText,
   eventLabel,
@@ -1066,23 +1067,39 @@ export default function App() {
                     <RefreshCw size={15} />
                   </Button>
                 </div>
-                {latestSessions(tasks).map((t) => (
-                  <button
-                    className={selected === t.task_id ? "active" : ""}
-                    key={t.task_id}
-                    onClick={() => {
-                      switchConversation(t.task_id);
-                    }}
+                {groupSessions(tasks, projects).map((group) => (
+                  <details
+                    className="session-project"
+                    key={group.path || "__unknown"}
+                    open
                   >
-                    <strong>
-                      {t.prompt?.slice(0, 40) || t.task_id.slice(0, 8)}
-                    </strong>
-                    <span>
-                      <i className={`dot ${active(t) ? "live" : ""}`} />
-                      {statusLabels[t.state] || t.state}
-                    </span>
-                    <small>{t.workspace}</small>
-                  </button>
+                    <summary>
+                      <FolderGit2 size={15} />
+                      <span>{group.name}</span>
+                      <Badge variant="secondary">{group.sessions.length}</Badge>
+                    </summary>
+                    <div className="session-project-path" title={group.path}>
+                      {group.path}
+                    </div>
+                    {group.sessions.map((t) => (
+                      <button
+                        className={selected === t.task_id ? "active" : ""}
+                        key={t.task_id}
+                        onClick={() => switchConversation(t.task_id)}
+                      >
+                        <strong>
+                          {t.prompt?.slice(0, 40) || t.task_id.slice(0, 8)}
+                        </strong>
+                        <span>
+                          <i className={`dot ${active(t) ? "live" : ""}`} />
+                          {statusLabels[t.state] || t.state}
+                        </span>
+                        {t.workspace !== group.path && (
+                          <small>{t.workspace}</small>
+                        )}
+                      </button>
+                    ))}
+                  </details>
                 ))}
                 {!tasks.length && <p className="empty">还没有远端任务</p>}
               </aside>
@@ -1280,17 +1297,25 @@ export default function App() {
                       </SelectContent>
                     </Select>
                     <Select value={modelPolicy} onValueChange={setModelPolicy}>
-                      <SelectTrigger className="w-44">
+                      <SelectTrigger
+                        className="min-w-64 max-w-full"
+                        aria-label="下一轮模型"
+                      >
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value="inherit">
-                          {task ? "沿用上轮模型" : "服务器默认模型"}
+                          {nextModelLabel(
+                            !newConversation ? task : undefined,
+                            profile.model,
+                          )}
                         </SelectItem>
                         <SelectItem value="remote_default">
-                          远端默认模型
+                          远端配置（模型待确认）
                         </SelectItem>
-                        <SelectItem value="explicit">指定模型…</SelectItem>
+                        <SelectItem value="explicit">
+                          {model.trim() || "指定模型…"}
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                     {modelPolicy === "explicit" && (
