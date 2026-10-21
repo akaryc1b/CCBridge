@@ -249,7 +249,8 @@ pub async fn local_call(mut v: Value) -> Result<Value> {
     stream.write_all(&bytes).await?;
     let mut line = String::new();
     tokio::time::timeout(
-        std::time::Duration::from_secs(75),
+        // Git may fetch several repositories. Keep the request below the configured 960s MCP timeout.
+        std::time::Duration::from_secs(if v["op"] == "git_update" { 900 } else { 75 }),
         BufReader::new(stream)
             .take(8 * 1024 * 1024)
             .read_line(&mut line),
