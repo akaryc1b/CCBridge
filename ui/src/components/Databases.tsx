@@ -532,6 +532,11 @@ export function Databases({
             onClick={() =>
               void run(async () => {
                 await request("database_save", { connection: form });
+                setChecks((previous) => {
+                  const next = { ...previous };
+                  delete next[form.id];
+                  return next;
+                });
                 setForm(empty);
                 setEditing(false);
                 await load();

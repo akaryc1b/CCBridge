@@ -23,6 +23,7 @@ import {
   nextModelLabel,
   displayModel,
   eventText,
+  taskFailure,
   eventLabel,
 } from "@/lib/conversation";
 import {
@@ -1660,7 +1661,9 @@ export default function App() {
                                 {statusLabels[turn.state] || turn.state}
                               </span>
                             </div>
-                            {turn.result ? (
+                            {taskFailure(turn) ? (
+                              <InlineAlert>{taskFailure(turn)}</InlineAlert>
+                            ) : turn.result ? (
                               <Markdown
                                 text={
                                   typeof turn.result === "string"
@@ -1686,7 +1689,7 @@ export default function App() {
                                   : "无文本输出"}
                               </p>
                             )}
-                            {turn.error && (
+                            {turn.error && !taskFailure(turn) && (
                               <div className="inline-error">
                                 <p>
                                   {/^[\u4e00-\u9fff]/.test(turn.error)

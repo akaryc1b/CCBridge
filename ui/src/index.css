@@ -1636,7 +1636,20 @@ small {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
+}
+.dialog-body > * {
+  flex-shrink: 0;
+}
+.dialog-body .field {
+  margin: 0;
+}
+.dialog-body .status-row {
+  margin-top: 0;
+  min-height: 36px;
+}
+.dialog-body .form-two .field {
+  min-width: 0;
 }
 .git-update-dialog {
   width: 720px !important;
@@ -1852,7 +1865,8 @@ small {
   font-size: 12px !important;
   color: var(--primary);
 }
-.projectrow {
+ .projectrow {
+  padding: 0;
   border-bottom: 1px solid var(--line);
   border-radius: 0;
   box-shadow: none;
