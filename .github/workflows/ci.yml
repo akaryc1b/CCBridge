@@ -124,7 +124,7 @@ jobs:
           CCBRIDGE_TEST_BIN: ${{ github.workspace }}/target/release/ccbridge
         run: cargo test --locked
       - name: Frontend typecheck and production build
-        run: pnpm --dir ui install --frozen-lockfile && pnpm --dir ui test && pnpm --dir ui build
+        run: pnpm --dir ui install --frozen-lockfile && pnpm --dir ui lint:ui && pnpm --dir ui test && pnpm --dir ui build
       - name: Tauri release build and cache warmup
         if: "!startsWith(github.ref, 'refs/tags/')"
         run: cd src-tauri && ../ui/node_modules/.bin/tauri build --no-bundle
@@ -192,7 +192,7 @@ jobs:
           CCBRIDGE_TEST_BIN: ${{ github.workspace }}/target/release/ccbridge
         run: cargo test --locked
       - name: Frontend typecheck and production build
-        run: pnpm --dir ui install --frozen-lockfile && pnpm --dir ui test && pnpm --dir ui build
+        run: pnpm --dir ui install --frozen-lockfile && pnpm --dir ui lint:ui && pnpm --dir ui test && pnpm --dir ui build
       - name: Tauri release build and cache warmup
         if: "!startsWith(github.ref, 'refs/tags/')"
         run: cd src-tauri && ../ui/node_modules/.bin/tauri build --no-bundle

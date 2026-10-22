@@ -26,10 +26,10 @@ case "$path/" in "$home/"*) ;; *) printf 'CCBRIDGE_OUTSIDE_HOME' >&2; exit 42;; 
 }
 pub fn list_script(home: &str, path: &str, hidden: bool) -> Result<String> {
     let mut s = guard(home, path)?;
-    s += r#"printf 'CCBRIDGE_FS_V1\000%s\000' "$path"
+    s += r#"printf 'CCBRIDGE_FS_V2\000%s\000' "$path"
 if [ -e "$path/.git" ]; then
  branch=$(git -C "$path" symbolic-ref --short HEAD 2>/dev/null || printf 'detached HEAD')
- printf 'repository_root\000%s\000' "$branch"
+ printf 'repository_root\000%s\000\000\000\000' "$branch"
 fi
 count=0
 "#;
@@ -41,28 +41,33 @@ count=0
     s += &format!("for entry in {glob}; do\n");
     s += r#"[ -e "$entry" ] || [ -L "$entry" ] || continue
 count=$((count+1))
-if [ "$count" -gt 1000 ]; then printf 'truncated\000\000'; break; fi
+if [ "$count" -gt 1000 ]; then printf 'truncated\000\000\000\000\000'; break; fi
 name=${entry##*/}
 if [ -L "$entry" ]; then kind=symlink
 elif [ -d "$entry" ]; then
  if [ -e "$entry/.git" ]; then kind=repository; else kind=directory; fi
 elif [ -f "$entry" ]; then kind=file
 else kind=other; fi
-printf '%s\000%s\000' "$kind" "$name"
+branch=''
+if [ "$kind" = repository ]; then branch=$(git -C "$entry" symbolic-ref --short HEAD 2>/dev/null || printf 'HEAD'); fi
+meta=$(stat -c '%Y %s' -- "$entry" 2>/dev/null || stat -f '%m %z' "$entry" 2>/dev/null || printf '0 0')
+modified=${meta%% *}; size=${meta#* }
+printf '%s\000%s\000%s\000%s\000%s\000' "$kind" "$name" "$branch" "$modified" "$size"
 done
 "#;
     Ok(s)
 }
 pub fn parse_list(out: &[u8]) -> Result<Value> {
     let a: Vec<&[u8]> = out.split(|b| *b == 0).collect();
-    if a.len() < 3 || a[0] != b"CCBRIDGE_FS_V1" {
+    if a.len() < 3 || (a[0] != b"CCBRIDGE_FS_V1" && a[0] != b"CCBRIDGE_FS_V2") {
         bail!("远端目录列表格式无效")
     }
     let path = std::str::from_utf8(a[1])?;
     let mut entries = Vec::new();
     let mut truncated = false;
     let mut branch = None;
-    for pair in a[2..].chunks(2) {
+    let stride = if a[0] == b"CCBRIDGE_FS_V2" { 5 } else { 2 };
+    for pair in a[2..].chunks(stride) {
         if pair.len() < 2 {
             break;
         }
@@ -79,7 +84,14 @@ pub fn parse_list(out: &[u8]) -> Result<Value> {
         if name.is_empty() {
             continue;
         }
-        entries.push(json!({"name":name,"path":format!("{path}/{name}"),"kind":kind}));
+        let mut entry = json!({"name":name,"path":format!("{path}/{name}"),"kind":kind});
+        if stride == 5 && pair.len() == 5 {
+            entry["branch"] = json!(String::from_utf8_lossy(pair[2]));
+            entry["modified_at"] =
+                json!(String::from_utf8_lossy(pair[3]).parse::<u64>().unwrap_or(0));
+            entry["size"] = json!(String::from_utf8_lossy(pair[4]).parse::<u64>().unwrap_or(0));
+        }
+        entries.push(entry);
     }
     entries.sort_by_key(|v| {
         (

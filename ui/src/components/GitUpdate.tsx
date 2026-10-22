@@ -1,8 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { RefreshCw, Loader2 } from "lucide-react";
+import {
+  RefreshCw,
+  CheckCircle2,
+  Clock,
+  Loader2,
+  AlertCircle,
+  Copy,
+} from "lucide-react";
 import { Button } from "./ui/button";
-import { Badge } from "./ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -12,149 +18,258 @@ import {
   DialogFooter,
 } from "./ui/dialog";
 import { errorText } from "./CodeupAuth";
+import { useOperation } from "@/lib/useOperation";
+import { OperationBar, InlineAlert } from "./common/Feedback";
 type D = Record<string, any>;
 export function GitUpdate({
   open,
   path,
+  connectionId,
   onClose,
   onUpdated,
   onAuth,
+  onOperation,
 }: {
   open: boolean;
   path: string;
+  connectionId: string;
   onClose: () => void;
   onUpdated: () => void;
   onAuth: (url: string) => void;
+  onOperation?: (op: D) => void;
 }) {
   const [plan, setPlan] = useState<D[]>([]),
-    [results, setResults] = useState<D[]>([]),
-    [busy, setBusy] = useState(false),
+    [result, setResult] = useState<D[]>([]),
+    [checking, setChecking] = useState(false),
+    [starting, setStarting] = useState(false),
+    [id, setId] = useState<string>(),
     [error, setError] = useState("");
-  async function inspect() {
-    setBusy(true);
+  const scope = useRef(0);
+  const { snap, error: pollError } = useOperation(
+    "git_update",
+    path,
+    connectionId,
+    open || !!id,
+    id,
+  );
+  const running = starting || snap?.state === "running";
+  useEffect(() => {
+    scope.current++;
+    setId(undefined);
+    setPlan([]);
+    setResult([]);
     setError("");
-    setResults([]);
+  }, [path, connectionId]);
+  useEffect(() => {
+    if (snap) {
+      onOperation?.(snap);
+      if (snap.result?.results) setResult(snap.result.results);
+    }
+  }, [snap]);
+  async function inspect() {
+    const seq = scope.current;
+    setChecking(true);
+    setError("");
     try {
       const r = await invoke<D>("git_update_plan", { request: { path } });
-      setPlan(r.repositories || []);
+      if (seq === scope.current) setPlan(r.repositories || []);
+      return r.repositories || [];
     } catch (e) {
-      setError(errorText(e));
-      setPlan([]);
+      if (seq === scope.current) setError(errorText(e));
+      return null;
     } finally {
-      setBusy(false);
+      if (seq === scope.current) setChecking(false);
     }
   }
   useEffect(() => {
-    if (open) void inspect();
-  }, [open, path]);
-  async function update() {
-    setBusy(true);
+    if (open && !running) void inspect();
+  }, [open, path, connectionId]);
+  async function update(only?: string[]) {
+    if (running) return;
+    setStarting(true);
     setError("");
-    setResults([]);
+    const seq = scope.current;
+    const target = path;
+    let expected = plan;
+    if (only) {
+      expected = await inspect();
+      if (!expected) {
+        setStarting(false);
+        return;
+      }
+    }
+    const opid = crypto.randomUUID();
+    setId(opid);
+    setResult([]);
     try {
       const r = await invoke<D>("git_update", {
-        request: { path, expected: plan },
+        request: {
+          path: target,
+          expected,
+          operation_id: opid,
+          ...(only ? { only } : {}),
+        },
       });
-      setResults(r.results || []);
+      if (seq !== scope.current) return;
+      setResult(r.results || []);
       onUpdated();
-      const current = await invoke<D>("git_update_plan", { request: { path } });
-      setPlan(current.repositories || []);
     } catch (e) {
-      setError(errorText(e));
+      if (seq === scope.current) setError(errorText(e));
     } finally {
-      setBusy(false);
+      if (seq === scope.current) setStarting(false);
     }
   }
-  const authNeeded = results.some((r) =>
-    /认证|Codeup|令牌|凭据/.test(r.message || ""),
+  const rows = plan.map((r) => ({
+    ...r,
+    ...(snap?.items || []).find((x: D) => x.path === r.path),
+    ...result.find((x) => x.path === r.path),
+  }));
+  const failed = rows.filter(
+    (r) => r.state === "failed" && ["auth", "network"].includes(r.code),
   );
+  const unknown = snap?.state === "unknown";
   return (
     <Dialog
       open={open}
       onOpenChange={(v) => {
-        if (!v && !busy) onClose();
+        if (!v) onClose();
       }}
     >
-      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+      <DialogContent className="git-update-dialog">
         <DialogHeader>
           <DialogTitle>
-            <RefreshCw className="inline" size={18} /> Git 更新
+            <RefreshCw size={18} />
+            Git 更新
           </DialogTitle>
-          <DialogDescription className="break-all">{path}</DialogDescription>
-        </DialogHeader>
-        <p className="hint">
-          获取各仓库当前跟踪分支并快进更新。不切分支、不推送；未提交改动、分叉或运行中的任务会阻止对应仓库。
-        </p>
-        {plan.map((r) => (
-          <div key={r.path} className="rounded border p-3">
-            <div className="flex items-center justify-between">
-              <strong>{r.name}</strong>
-              <Badge variant="outline">{r.branch || "未检出分支"}</Badge>
-            </div>
-            <p className="hint break-all">
-              {r.upstream ? `跟踪 ${r.upstream}` : "未设置跟踪分支"} ·{" "}
-              {r.head?.slice(0, 7)}
-            </p>
-            {r.blocked && <p className="text-destructive">{r.blocked}</p>}
-          </div>
-        ))}
-        {busy && (
-          <p role="status" className="flex items-center gap-2">
-            <Loader2 size={16} className="animate-spin" />
-            正在检查 / 更新，请勿重复提交…
-          </p>
-        )}
-        {results.map((r) => (
-          <div key={r.path} className="rounded border p-3">
-            <strong>{r.path.split("/").pop()}</strong>
-            <p
-              role="status"
-              className={r.state === "failed" ? "text-destructive" : ""}
+          <DialogDescription title={path}>
+            {path.split("/").pop()} · {plan.length} 个仓库{" "}
+            <Button
+              variant="ghost"
+              size="icon"
+              aria-label="复制目录"
+              onClick={() => void navigator.clipboard.writeText(path)}
             >
-              {r.message}
+              <Copy size={13} />
+            </Button>
+          </DialogDescription>
+        </DialogHeader>
+        <div className="dialog-body">
+          <OperationBar operation={snap} />
+          {checking && !snap && (
+            <p role="status">
+              <Loader2 size={14} className="spin" />
+              检查仓库…
             </p>
-            {r.before && (
-              <p className="hint">
-                {r.before.slice(0, 7)} → {r.after?.slice(0, 7)}
-              </p>
-            )}
+          )}
+          <div className="repo-list">
+            {rows.map((r) => {
+              const current = running && snap?.current_path === r.path;
+              const blocked =
+                (r.blocked && !r.state) ||
+                ["dirty", "no_upstream"].includes(r.code);
+              const message = blocked
+                ? `跳过 · ${r.blocked || r.message}`
+                : r.state === "updated"
+                  ? "已快进"
+                  : r.state === "unchanged"
+                    ? "已是最新"
+                    : r.state === "ahead"
+                      ? "本地领先"
+                      : r.state === "failed"
+                        ? r.message
+                        : current
+                          ? "处理中"
+                          : running
+                            ? "等待"
+                            : "可检查更新";
+              const Icon =
+                r.state === "failed"
+                  ? AlertCircle
+                  : r.state
+                    ? CheckCircle2
+                    : current
+                      ? Loader2
+                      : Clock;
+              return (
+                <div className="repo-item" key={r.path}>
+                  <Icon
+                    size={17}
+                    className={
+                      current
+                        ? "spin"
+                        : r.state === "failed"
+                          ? "text-destructive"
+                          : "muted"
+                    }
+                  />
+                  <div className="grow">
+                    <strong>{r.name || r.path.split("/").pop()}</strong>
+                    <small>
+                      {r.branch || "分离 HEAD"} ← {r.upstream || "无上游"}
+                    </small>
+                    {r.before && r.after && r.before !== r.after && (
+                      <code>
+                        {r.before.slice(0, 7)} → {r.after.slice(0, 7)}
+                      </code>
+                    )}
+                    <span
+                      className={
+                        r.state === "failed" ? "text-destructive" : "muted"
+                      }
+                    >
+                      {message}
+                    </span>
+                  </div>
+                  {r.state === "failed" &&
+                    r.code === "auth" &&
+                    r.url &&
+                    !blocked && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onAuth(r.url)}
+                      >
+                        修复认证
+                      </Button>
+                    )}
+                </div>
+              );
+            })}
           </div>
-        ))}
-        {error && (
-          <p role="alert" className="text-destructive">
-            {error}
-          </p>
-        )}
-        {authNeeded && (
-          <Button
-            variant="outline"
-            onClick={() =>
-              onAuth(
-                plan.find((r) => r.url?.includes("codeup.aliyun.com"))?.url ||
-                  "",
-              )
-            }
-          >
-            配置 Codeup 认证 / 同步到 VPS
-          </Button>
-        )}
+          {(error || pollError) && (
+            <InlineAlert>{error || pollError}</InlineAlert>
+          )}
+        </div>
         <DialogFooter>
-          <Button variant="outline" disabled={busy} onClick={onClose}>
+          <span className="muted grow">{running ? "后台继续执行" : ""}</span>
+          <Button variant="outline" onClick={onClose}>
             关闭
           </Button>
-          <Button
-            variant="outline"
-            disabled={busy}
-            onClick={() => void inspect()}
-          >
-            刷新状态
-          </Button>
-          <Button
-            disabled={busy || !plan.some((r) => !r.blocked)}
-            onClick={() => void update()}
-          >
-            {busy ? "更新中…" : "获取并快进更新"}
-          </Button>
+          {!running && (
+            <>
+              {(result.length > 0 || unknown) && (
+                <Button
+                  variant="outline"
+                  disabled={checking}
+                  onClick={() => void inspect()}
+                >
+                  刷新
+                </Button>
+              )}
+              <Button
+                disabled={checking || !plan.some((r) => !r.blocked) || unknown}
+                onClick={() =>
+                  void update(
+                    failed.length ? failed.map((r) => r.path) : undefined,
+                  )
+                }
+              >
+                {failed.length
+                  ? "重试失败项"
+                  : `快进更新 ${plan.filter((r) => !r.blocked).length} 个仓库`}
+              </Button>
+            </>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

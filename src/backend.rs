@@ -7,6 +7,7 @@ use tokio::sync::Mutex;
 
 pub struct BackendState {
     pub connection: Mutex<Option<ssh::Connection>>,
+    pub operations: crate::operations::Store,
     pub clone_progress: std::sync::Mutex<Value>,
     pub gate: std::sync::Mutex<crate::update_gate::UpdateGate>,
     pub writes: Mutex<()>,
@@ -16,6 +17,7 @@ impl BackendState {
     pub fn new(connection: Option<ssh::Connection>) -> Self {
         Self {
             connection: Mutex::new(connection),
+            operations: Default::default(),
             clone_progress: std::sync::Mutex::new(json!({})),
             gate: Default::default(),
             writes: Mutex::new(()),
@@ -48,7 +50,8 @@ impl Drop for Activity {
     }
 }
 pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
-    let op = field(&v, "op")?;
+    let operation_name = field(&v, "op")?.to_owned();
+    let op = operation_name.as_str();
     if op == "prepare_install" {
         if !human {
             bail!("安装只能由人在App操作")
@@ -207,7 +210,59 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
     } else {
         None
     };
-    dispatch_inner(state.clone(), v, human).await
+    let mut v = v;
+    let tracked = [
+        "git_update",
+        "clone_into_directory",
+        "branch_fetch",
+        "install_runner",
+    ]
+    .contains(&op);
+    let operation = if tracked {
+        let c = state
+            .connection
+            .lock()
+            .await
+            .clone()
+            .context("请先连接 SSH")?;
+        let id = v["operation_id"]
+            .as_str()
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        uuid::Uuid::parse_str(&id).context("操作标识无效")?;
+        if !crate::operations::snapshot(
+            &state.operations,
+            &c.profile.account_key(),
+            &c.connection_id,
+            Some(&id),
+            None,
+            None,
+        )
+        .is_null()
+        {
+            bail!("此操作已发起，请查询原操作结果")
+        }
+        v["operation_id"] = json!(id);
+        Some(crate::operations::Operation::begin(
+            state.operations.clone(),
+            id,
+            op,
+            &c.profile.account_key(),
+            &c.connection_id,
+            v["path"].as_str().unwrap_or(""),
+            human,
+        ))
+    } else {
+        None
+    };
+    let mut result = dispatch_inner(state.clone(), v, human).await;
+    if let Some(o) = operation {
+        o.finish(&result);
+        if let Ok(r) = &mut result {
+            r["operation_id"] = json!(o.id);
+        }
+    }
+    result
 }
 
 pub struct Job {
@@ -533,7 +588,11 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     }
     if op == "connection_status" {
         return Ok(match guard.as_ref() {
-            Some(c) => c.info(),
+            Some(c) => {
+                let mut r = c.info();
+                r["operations"] = json!({"git_update":crate::operations::snapshot(&state.operations,&c.profile.account_key(),&c.connection_id,None,Some("git_update"),None)});
+                r
+            }
             None => {
                 #[cfg(target_os = "macos")]
                 let waiting = crate::credentials::pending();
@@ -550,6 +609,19 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     drop(guard);
     if c.handle.is_closed() {
         bail!("SSH 已断开，请在 App 重新连接；不要自动重放任务")
+    }
+    if op == "operation_progress" {
+        if !human {
+            bail!("操作快照仅供 App 查询")
+        }
+        return Ok(crate::operations::snapshot(
+            &state.operations,
+            &c.profile.account_key(),
+            &c.connection_id,
+            v["operation_id"].as_str(),
+            v["kind"].as_str(),
+            v["path"].as_str(),
+        ));
     }
     if op == "git_vps_auth_test" {
         if !human {
@@ -607,6 +679,12 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         .await?;
         return c.rpc(json!({"op":op,"server_storage_ack":true,"username":cred.username,"secret":cred.secret})).await;
     }
+    let operation = v["operation_id"]
+        .as_str()
+        .map(|id| crate::operations::Operation {
+            store: state.operations.clone(),
+            id: id.into(),
+        });
     if ["git_update_plan", "git_update"].contains(&op.as_str()) {
         if !human && op == "git_update" && !c.profile.allow_auto {
             bail!("请先在 App 开启全自动授权，再通过 MCP 更新代码")
@@ -636,19 +714,64 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 }
             }
         }
+        let repos = plan["repositories"].as_array().context("仓库列表无效")?;
+        let only = v["only"].as_array();
+        if let Some(only) = only {
+            if only.is_empty() || only.iter().any(|p| !repos.iter().any(|r| r["path"] == *p)) {
+                bail!("重试范围已变化，请刷新")
+            }
+        }
+        let selected: Vec<_> = repos
+            .iter()
+            .filter(|r| only.is_none_or(|a| a.contains(&r["path"])))
+            .collect();
+        if let Some(o) = &operation {
+            o.patch(json!({"total":selected.len(),"items":selected}));
+        }
         let mut results = vec![];
-        for repo in plan["repositories"].as_array().context("仓库列表无效")? {
+        for (i, repo) in selected.iter().enumerate() {
             let path = repo["path"].as_str().context("仓库路径无效")?;
+            if let Some(o) = &operation {
+                o.patch(json!({"name":repo["name"],"current_path":path,"phase":"checking","objects":null,"bytes":null}));
+            }
             let result: Result<Value> = async {
                 c.rpc(json!({"op":"git_update_preflight","path":path,"expected":repo}))
                     .await?;
-                c.git_fetch_remote(path, repo["remote"].as_str().context("未设置远端")?)
-                    .await?;
+                if let Some(o) = &operation {
+                    o.patch(json!({"phase":"fetch"}));
+                }
+                let cb = operation.clone().map(|o| {
+                    Arc::new(move |p: Value| o.patch(p)) as Arc<dyn Fn(Value) + Send + Sync>
+                });
+                c.git_fetch_remote_progress(
+                    path,
+                    repo["remote"].as_str().context("未设置远端")?,
+                    cb,
+                )
+                .await?;
+                if let Some(o) = &operation {
+                    o.patch(json!({"phase":"apply"}));
+                }
                 c.rpc(json!({"op":"git_update_apply","path":path,"expected":repo}))
                     .await
             }
             .await;
-            results.push(match result{Ok(r)=>r,Err(e)=>json!({"path":path,"branch":repo["branch"],"state":"failed","message":format!("{e:#}")})});
+            let mut r = match result {
+                Ok(r) => r,
+                Err(e) => {
+                    json!({"path":path,"branch":repo["branch"],"state":"failed","code":error_code(&e),"message":crate::common::error_summary(&format!("{e:#}"))})
+                }
+            };
+            r["url"] = repo["url"].clone();
+            r["name"] = repo["name"].clone();
+            r["upstream"] = repo["upstream"].clone();
+            if let Some(o) = &operation {
+                o.item(i, r.clone());
+            }
+            results.push(r);
+            if c.handle.is_closed() {
+                bail!("SSH已断开，更新结果未确认，请重新连接后检查仓库")
+            }
         }
         let failed = results.iter().filter(|r| r["state"] == "failed").count();
         let updated = results.iter().filter(|r| r["state"] == "updated").count();
@@ -685,7 +808,15 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         let mut req = v.clone();
         req["protected"] = json!([c.profile.active_remote_workspace, c.profile.workspace]);
         if op == "branch_fetch" {
-            return c.git_fetch(field(&v, "path")?).await;
+            if let Some(o) = &operation {
+                o.patch(json!({"phase":"fetch"}));
+            }
+            let cb = operation
+                .clone()
+                .map(|o| Arc::new(move |p: Value| o.patch(p)) as Arc<dyn Fn(Value) + Send + Sync>);
+            return c
+                .git_fetch_remote_progress(field(&v, "path")?, "origin", cb)
+                .await;
         }
         return c.rpc(req).await;
     }
@@ -710,7 +841,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             "file_preview" => return c.preview_file(field(&v, "path")?).await,
             "clone_into_directory" => {
                 return c
-                    .clone_into_progress(
+                    .clone_observed(
                         field(&v, "path")?,
                         field(&v, "urls")?,
                         v["local_auth"] == true,
@@ -721,6 +852,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                                     json!({"stage":stage,"completed":completed,"total":total});
                             })
                         }),
+                        operation.clone(),
                     )
                     .await;
             }
@@ -789,7 +921,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if !human {
             bail!("只能由用户在 App 安装 Runner")
         }
-        let r = c.install().await;
+        let r = c.install_observed(operation.clone()).await;
         *state.connection.lock().await = Some(c);
         return r;
     }

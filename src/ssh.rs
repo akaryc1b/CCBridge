@@ -32,6 +32,7 @@ pub struct RemoteEnvironment {
 }
 #[derive(Clone)]
 pub struct Connection {
+    pub connection_id: String,
     pub handle: Arc<client::Handle<HostCheck>>,
     pub profile: Profile,
     pub probe: Value,
@@ -85,6 +86,7 @@ pub async fn connect(p: Profile, password: String) -> Result<Connection> {
         )
     }
     let mut conn = Connection {
+        connection_id: uuid::Uuid::new_v4().to_string(),
         handle: Arc::new(handle),
         profile: p,
         probe: Value::Null,
@@ -155,7 +157,7 @@ impl Connection {
         }
     }
     pub fn info(&self) -> Value {
-        json!({"app_version":env!("CARGO_PKG_VERSION"),"bridge_protocol":1,"bridge_capabilities":["client_activity_lease","update_drain","models_v1"],"connected":!self.handle.is_closed(),"profile":self.profile,"probe":self.probe,"environment":self.environment,"resolved_paths":{"runner":self.runner_path,"claude":self.claude_path,"state":format!("{}/.local/state/ccbridge",self.environment.home)}})
+        json!({"connection_id":self.connection_id,"app_version":env!("CARGO_PKG_VERSION"),"bridge_protocol":1,"bridge_capabilities":["client_activity_lease","update_drain","models_v1"],"connected":!self.handle.is_closed(),"profile":self.profile,"probe":self.probe,"environment":self.environment,"resolved_paths":{"runner":self.runner_path,"claude":self.claude_path,"state":format!("{}/.local/state/ccbridge",self.environment.home)}})
     }
     pub fn permits_workspace(&self, path: &str) -> bool {
         (!self.profile.workspace.is_empty() && path == self.profile.workspace)
@@ -246,6 +248,15 @@ impl Connection {
         input: R,
         duration: Duration,
     ) -> Result<(Vec<u8>, Vec<u8>, Option<u32>)> {
+        self.execute_streaming(command, input, duration, None).await
+    }
+    async fn execute_streaming<R: tokio::io::AsyncRead + Unpin>(
+        &self,
+        command: String,
+        input: R,
+        duration: Duration,
+        progress: Option<Arc<dyn Fn(Value) + Send + Sync>>,
+    ) -> Result<(Vec<u8>, Vec<u8>, Option<u32>)> {
         tokio::time::timeout(duration, async {
             let mut channel = self.handle.channel_open_session().await?;
             channel.exec(true, command).await?;
@@ -254,10 +265,32 @@ impl Connection {
             let mut stdout = vec![];
             let mut stderr = vec![];
             let mut exit = None;
+            let mut progress_line = Vec::new();
             while let Some(msg) = channel.wait().await {
                 match msg {
                     ChannelMsg::Data { data } => stdout.extend_from_slice(&data),
-                    ChannelMsg::ExtendedData { data, .. } => stderr.extend_from_slice(&data),
+                    ChannelMsg::ExtendedData { data, .. } => {
+                        stderr.extend_from_slice(&data);
+                        if progress.is_some() {
+                            for byte in data.iter() {
+                                if *byte == b'\r' || *byte == b'\n' {
+                                    if let Some(v) = crate::operations::git_progress(
+                                        &String::from_utf8_lossy(&progress_line),
+                                    ) {
+                                        if let Some(f) = &progress {
+                                            f(v)
+                                        }
+                                    }
+                                    progress_line.clear();
+                                } else if progress_line.len() < 2048 {
+                                    progress_line.push(*byte);
+                                }
+                            }
+                        }
+                        if progress.is_some() && stderr.len() > 65536 {
+                            stderr.drain(..stderr.len() - 65536);
+                        }
+                    }
                     ChannelMsg::ExitStatus { exit_status } => exit = Some(exit_status),
                     _ => {}
                 }
@@ -326,6 +359,17 @@ impl Connection {
         local_auth: bool,
         progress: Option<std::sync::Arc<dyn Fn(&str, usize, usize) + Send + Sync>>,
     ) -> Result<Value> {
+        self.clone_observed(parent, urls, local_auth, progress, None)
+            .await
+    }
+    pub async fn clone_observed(
+        &self,
+        parent: &str,
+        urls: &str,
+        local_auth: bool,
+        progress: Option<Arc<dyn Fn(&str, usize, usize) + Send + Sync>>,
+        operation: Option<crate::operations::Operation>,
+    ) -> Result<Value> {
         let report = |stage: &str, completed, total| {
             if let Some(f) = &progress {
                 f(stage, completed, total);
@@ -340,6 +384,9 @@ impl Connection {
         for (index, (name, url)) in plan.into_iter().enumerate() {
             report(&format!("检查仓库 {name}"), index, total);
             let dest = format!("{parent}/{name}");
+            if let Some(o) = &operation {
+                o.patch(json!({"total":total,"processed":index,"name":name,"phase":"checking","objects":null,"bytes":null}));
+            }
             if let Ok(repo) = self
                 .rpc(json!({"op":"repository_inspect","path":dest}))
                 .await
@@ -356,6 +403,9 @@ impl Connection {
                 prepared.push(
                     json!({"name":name,"path":dest,"state":"already_exists","repository":repo}),
                 );
+                if let Some(o) = &operation {
+                    o.patch(json!({"processed":index+1,"items":prepared}));
+                }
                 continue;
             }
             let (_, err, status) = if local_auth {
@@ -370,6 +420,9 @@ impl Connection {
                 } else {
                     None
                 };
+                if let Some(o) = &operation {
+                    o.patch(json!({"phase":"fetch","name":name}));
+                }
                 let bundle = tokio::task::spawn_blocking(move || {
                     crate::transfer::bundle_with_auth(&u, cred.as_ref())
                 })
@@ -378,6 +431,16 @@ impl Connection {
                 let cmd =
                     crate::transfer::import_script(&self.environment.home, parent, &name, &url)?;
                 let input = tokio::fs::File::open(&bundle.path).await?;
+                let total_bytes = input.metadata().await?.len();
+                if let Some(o) = &operation {
+                    o.patch(json!({"phase":"upload","bytes":{"received":0,"total":total_bytes}}));
+                }
+                let input = CountedReader {
+                    inner: input,
+                    received: 0,
+                    total: total_bytes,
+                    operation: operation.clone(),
+                };
                 let result = self
                     .execute_reader(cmd, input, Duration::from_secs(1800))
                     .await?;
@@ -392,15 +455,24 @@ impl Connection {
                 cmd += &format!(
                     r#"dest="$path"/{}
 if [ -e "$dest" ] || [ -L "$dest" ]; then printf CCBRIDGE_ALREADY_EXISTS >&2; exit 43; fi
-git_auth clone --quiet -- {} "$dest"
+git_auth clone --progress -- {} "$dest"
 "#,
                     shell_quote(&name),
                     shell_quote(&url)
                 );
-                self.execute_for(cmd, &input, Duration::from_secs(600))
+                if let Some(o) = &operation {
+                    o.patch(json!({"phase":"fetch"}));
+                }
+                let cb = operation.clone().map(|o| {
+                    Arc::new(move |p: Value| o.patch(p)) as Arc<dyn Fn(Value) + Send + Sync>
+                });
+                self.execute_streaming(cmd, input.as_slice(), Duration::from_secs(600), cb)
                     .await?
             };
             if status != Some(0) {
+                if let Some(o) = &operation {
+                    o.patch(json!({"processed":index+1,"items":prepared}));
+                }
                 return Ok(
                     json!({"complete":false,"root":parent,"repositories":prepared,"error":crate::provision::failure(&String::from_utf8_lossy(&err)),"failed_repository":name}),
                 );
@@ -409,6 +481,9 @@ git_auth clone --quiet -- {} "$dest"
                 .rpc(json!({"op":"repository_inspect","path":dest}))
                 .await?;
             prepared.push(json!({"name":name,"path":dest,"state":"cloned","repository":repo}));
+            if let Some(o) = &operation {
+                o.patch(json!({"processed":index+1,"items":prepared}));
+            }
         }
         report("全部仓库处理完成", total, total);
         Ok(json!({"complete":true,"root":parent,"repositories":prepared}))
@@ -457,6 +532,14 @@ git_auth clone --quiet -- {} "$dest"
         self.git_fetch_remote(path, "origin").await
     }
     pub async fn git_fetch_remote(&self, path: &str, remote: &str) -> Result<Value> {
+        self.git_fetch_remote_progress(path, remote, None).await
+    }
+    pub async fn git_fetch_remote_progress(
+        &self,
+        path: &str,
+        remote: &str,
+        progress: Option<Arc<dyn Fn(Value) + Send + Sync>>,
+    ) -> Result<Value> {
         if remote.is_empty() || remote.starts_with('-') || remote.contains(['\n', '\r', '\0']) {
             bail!("远端名称无效")
         }
@@ -483,17 +566,36 @@ git_auth clone --quiet -- {} "$dest"
         let cred = self.remote_git_credential(&url).await?;
         let (mut cmd, input) = crate::git_auth::remote_prefix(&host, cred.as_ref());
         cmd += &crate::remote_fs::guard(&self.environment.home, path)?;
-        cmd += &format!("git_auth -C \"$path\" fetch -- {}\n", shell_quote(remote));
+        cmd += "export LC_ALL=C\n";
+        cmd += &format!(
+            "git_auth -C \"$path\" fetch --progress -- {}\n",
+            shell_quote(remote)
+        );
         let (_, err, status) = self
-            .execute_for(cmd, &input, Duration::from_secs(300))
+            .execute_streaming(cmd, input.as_slice(), Duration::from_secs(300), progress)
             .await?;
         if status != Some(0) {
-            bail!(
-                "获取远端分支失败：{}",
-                crate::transfer::local_failure(&String::from_utf8_lossy(&err))
-                    .replace("本机", "远端")
-                    + "；请在 Codeup 认证选择‘服务器当前 SSH 账号’，或同步认证到 VPS"
-            )
+            let raw = String::from_utf8_lossy(&err).to_ascii_lowercase();
+            let code = if [
+                "authentication",
+                "username",
+                "access denied",
+                "403",
+                "401",
+                "repository not found",
+                "terminal prompts disabled",
+            ]
+            .iter()
+            .any(|s| raw.contains(s))
+            {
+                "auth"
+            } else {
+                "network"
+            };
+            return Err(coded(
+                code,
+                crate::transfer::local_failure(&raw).replace("本机", "远端"),
+            ));
         }
         self.rpc(json!({"op":"branches","path":path})).await
     }
@@ -538,6 +640,12 @@ git_auth clone --quiet -- {} "$dest"
         Ok(json!({"complete":true,"root":root,"repositories":prepared}))
     }
     pub async fn install(&mut self) -> Result<Value> {
+        self.install_observed(None).await
+    }
+    pub async fn install_observed(
+        &mut self,
+        operation: Option<crate::operations::Operation>,
+    ) -> Result<Value> {
         // Recheck the live executable before uploading: repeated clicks are a no-op.
         self.refresh().await;
         if self.probe["runner_version"].as_str() == Some(env!("CARGO_PKG_VERSION")) {
@@ -606,11 +714,20 @@ git_auth clone --quiet -- {} "$dest"
             shell_quote(&tmp),
             shell_quote(&self.runner_path)
         );
+        if let Some(o) = &operation {
+            o.patch(json!({"phase":"upload","name":"Runner"}));
+        }
         let (_, err, code) = self.execute(command, &bytes).await?;
         if code != Some(0) {
             bail!("Runner 安装失败: {}", String::from_utf8_lossy(&err))
         }
+        if let Some(o) = &operation {
+            o.patch(json!({"phase":"verify","name":"Runner"}));
+        }
         self.refresh().await;
+        if self.probe["runner_version"].as_str() != Some(env!("CARGO_PKG_VERSION")) {
+            bail!("Runner已上传但版本校验未通过，请重新检测")
+        }
         Ok(json!({"installed":true,"arch":arch,"path":self.runner_path,"probe":self.probe}))
     }
     pub async fn rpc(&self, v: Value) -> Result<Value> {
@@ -635,5 +752,29 @@ git_auth clone --quiet -- {} "$dest"
             serde_json::from_slice(&stdout)
                 .context("远端不是有效 Runner JSON 响应；检查路径和 shell 启动输出")?,
         )
+    }
+}
+
+struct CountedReader<R> {
+    inner: R,
+    received: u64,
+    total: u64,
+    operation: Option<crate::operations::Operation>,
+}
+impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for CountedReader<R> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let before = buf.filled().len();
+        let r = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+        if let std::task::Poll::Ready(Ok(())) = &r {
+            self.received += (buf.filled().len() - before) as u64;
+            if let Some(o) = &self.operation {
+                o.patch(json!({"phase":if self.received>=self.total{"import"}else{"upload"},"bytes":{"received":self.received,"total":self.total}}));
+            }
+        }
+        r
     }
 }

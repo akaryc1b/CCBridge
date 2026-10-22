@@ -35,8 +35,8 @@ export function latestSessions(tasks: RecordValue[]) {
 }
 export function displayModel(task: RecordValue) {
   return {
-    requested: task.model_requested || task.model || "远端默认模型",
-    actual: task.model_resolved || "实际模型尚未上报",
+    requested: task.model_requested || task.model || "远端默认",
+    actual: task.model_resolved || (["running","queued"].includes(task.state)?"等待上报":"未上报"),
   };
 }
 
@@ -118,10 +118,10 @@ export function nextModelLabel(
   task: RecordValue | undefined,
   serverModel: string,
 ) {
-  if (!task) return serverModel?.trim() || "模型待确认（远端默认）";
+  if (!task) return serverModel?.trim() || "远端默认";
   const requested = task.model_requested || task.model;
   if (requested) return requested;
   return task.model_resolved
     ? `${task.model_resolved}（远端默认）`
-    : "模型待确认（远端默认）";
+    : "远端默认";
 }

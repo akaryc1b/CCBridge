@@ -1,3 +1,5 @@
+import { DropdownMenu as Menu } from "radix-ui";
+import { MoreHorizontal } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -130,14 +132,12 @@ export function Databases({
         <Card>
           <CardHeader>
             <CardTitle>数据库连接</CardTitle>
-            <CardDescription>
-              连接保存在当前 SSH
-              账号下。每个项目可以映射多个连接，同一连接也可供多个项目使用。
-            </CardDescription>
+            <CardDescription></CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-wrap gap-3">
               <Button
+                variant="outline"
                 disabled={!connected || busy}
                 onClick={() =>
                   void run(async () => {
@@ -147,7 +147,7 @@ export function Databases({
                   })
                 }
               >
-                探测远端 MCP 环境
+                重新探测
               </Button>
               <Button
                 disabled={!connected || busy}
@@ -171,12 +171,9 @@ export function Databases({
               </Button>
             </div>
             {runtime.candidates?.map((c: Data) => (
-              <div
-                key={c.package_root}
-                className="rounded-lg border p-3 space-y-1"
-              >
+              <div key={c.package_root} className="runtime-result">
                 <Badge variant={c.compatible ? "secondary" : "outline"}>
-                  {c.compatible ? "运行文件已找到" : "版本暂不兼容"}
+                  {c.compatible ? "运行文件已找到" : "版本未验证"}
                 </Badge>
                 <p className="break-all">{c.package_root}</p>
                 <p className="hint">
@@ -187,7 +184,6 @@ export function Databases({
             {runtime.registered?.map((r: Data) => (
               <p key={r.name} className="hint">
                 已发现 Claude MCP：{r.name} · {r.command}
-                （仅识别运行环境，不继承共享凭据与权限）
               </p>
             ))}
             {notice && (
@@ -196,14 +192,12 @@ export function Databases({
               </p>
             )}
             {data.connections.length === 0 && (
-              <p className="hint">
-                还没有连接。探测只查找软件，不会自动读取共享数据库凭据或连接业务数据库。
-              </p>
+              <p className="hint">还没有数据库连接</p>
             )}
             {data.connections.map((d: Data) => (
               <div
                 key={d.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-lg border p-4"
+                className="flex flex-wrap items-center justify-between gap-3 db-connection-row"
               >
                 <div>
                   <strong>{d.name}</strong>{" "}
@@ -214,12 +208,19 @@ export function Databases({
                     {d.kind} · {d.host}:{d.port} / {d.database}
                   </p>
                   <p className="hint">
-                    {d.password_saved ? "已保存密码" : "未保存密码"} · 只读 safe
-                    · {(d.used_by || []).length} 个项目引用
+                    只读 · 被 {(d.used_by || []).length} 个项目使用
+                    {!d.password_saved ? " · 未保存密码" : ""}
                   </p>
                   {checks[d.id] && (
                     <p role="status" className="hint">
-                      {Object.values(checks[d.id]).join(" · ")}
+                      <span className="db-checks">
+                        {Object.entries(checks[d.id]).map(([key, value]) => (
+                          <span key={key}>
+                            {key === "mcp" ? "MCP 握手" : "数据库连接"}：
+                            {String(value)}
+                          </span>
+                        ))}
+                      </span>
                     </p>
                   )}
                 </div>
@@ -227,58 +228,73 @@ export function Databases({
                   <Button
                     variant="outline"
                     disabled={busy}
-                    onClick={() => {
-                      setForm({ ...d, password: "" });
-                      setEditing(true);
-                    }}
-                  >
-                    编辑
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={busy}
                     onClick={() =>
                       void run(async () => {
-                        const r = await request("database_protocol_test", {
-                          id: d.id,
-                        });
-                        setChecks((p) => ({
-                          ...p,
-                          [d.id]: {
-                            ...p[d.id],
-                            mcp: `MCP：${r.notice}（${new Date().toLocaleTimeString()}）`,
-                          },
-                        }));
+                        for (const [command, key] of [
+                          ["database_protocol_test", "mcp"],
+                          ["database_test", "database"],
+                        ]) {
+                          setChecks((p) => ({
+                            ...p,
+                            [d.id]: { ...p[d.id], [key]: "检测中…" },
+                          }));
+                          try {
+                            const r = await request(command, { id: d.id });
+                            setChecks((p) => ({
+                              ...p,
+                              [d.id]: {
+                                ...p[d.id],
+                                [key]: `${r.notice || "已完成"} · ${new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`,
+                              },
+                            }));
+                          } catch (e: any) {
+                            setChecks((p) => ({
+                              ...p,
+                              [d.id]: {
+                                ...p[d.id],
+                                [key]: e?.message || String(e),
+                              },
+                            }));
+                          }
+                        }
                       })
                     }
                   >
-                    检查 MCP 握手
+                    测试
                   </Button>
-                  <Button
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() =>
-                      void run(async () => {
-                        const r = await request("database_test", { id: d.id });
-                        setChecks((p) => ({
-                          ...p,
-                          [d.id]: {
-                            ...p[d.id],
-                            database: `数据库：${r.notice}（${new Date().toLocaleTimeString()}）`,
-                          },
-                        }));
-                      })
-                    }
-                  >
-                    测试数据库连接
-                  </Button>
-                  <Button
-                    variant="outline"
-                    disabled={busy || (d.used_by || []).length > 0}
-                    onClick={() => setRemoving(d)}
-                  >
-                    删除
-                  </Button>
+                  <Menu.Root>
+                    <Menu.Trigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`${d.name}的操作`}
+                        disabled={busy}
+                      >
+                        <MoreHorizontal size={16} />
+                      </Button>
+                    </Menu.Trigger>
+                    <Menu.Portal>
+                      <Menu.Content className="context-menu">
+                        <Menu.Item
+                          onSelect={() => {
+                            setForm({ ...d, password: "" });
+                            setEditing(true);
+                          }}
+                        >
+                          编辑
+                        </Menu.Item>
+                        <Menu.Item
+                          disabled={(d.used_by || []).length > 0}
+                          title={
+                            (d.used_by || []).length ? "此连接仍被项目引用" : ""
+                          }
+                          onSelect={() => setRemoving(d)}
+                        >
+                          删除
+                        </Menu.Item>
+                      </Menu.Content>
+                    </Menu.Portal>
+                  </Menu.Root>
                 </div>
               </div>
             ))}
@@ -289,9 +305,7 @@ export function Databases({
         <Card>
           <CardHeader>
             <CardTitle>项目数据库映射</CardTitle>
-            <CardDescription>
-              按准确项目目录匹配，不继承父目录或其他项目。变更仅对新会话生效；续聊保留原连接快照。
-            </CardDescription>
+            <CardDescription>仅对新会话生效</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <Label>配置项目</Label>
@@ -327,6 +341,7 @@ export function Databases({
                     )
                   }
                 />
+                <code className="muted">db_{b.alias || "用途"}</code>
                 <Select
                   value={b.connection_id || undefined}
                   disabled={busy}
@@ -364,10 +379,7 @@ export function Databases({
                 </Button>
               </div>
             ))}
-            <p className="hint">
-              用途别名使用英文字母、数字、下划线，例如
-              business_dev、workflow、reporting。Claude 将看到 db_用途别名。
-            </p>
+            <p className="hint"></p>
             <div className="flex gap-3">
               <Button
                 variant="outline"
@@ -390,9 +402,7 @@ export function Databases({
                     await request("database_bind", { workspace, bindings });
                     await load();
                     await refreshProjects();
-                    setNotice(
-                      "项目映射已保存；已有会话保持原配置，新会话使用新映射。",
-                    );
+                    setNotice("已保存，新会话生效");
                   })
                 }
               >
@@ -417,8 +427,7 @@ export function Databases({
           <DialogHeader>
             <DialogTitle>删除连接配置</DialogTitle>
             <DialogDescription>
-              删除“{removing?.name}
-              ”的连接配置，不会删除数据库或业务数据。被项目引用的连接不能删除。
+              删除连接配置「{removing?.name}」？数据库本身不受影响。
             </DialogDescription>
           </DialogHeader>
           <div className="flex justify-end gap-3">
@@ -430,6 +439,7 @@ export function Databases({
               取消
             </Button>
             <Button
+              variant="destructive"
               disabled={busy}
               onClick={() =>
                 void run(async () => {
@@ -439,7 +449,7 @@ export function Databases({
                 })
               }
             >
-              确认删除配置
+              删除
             </Button>
           </div>
           {error && (
@@ -461,10 +471,7 @@ export function Databases({
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{form.id ? "编辑连接" : "新增数据库连接"}</DialogTitle>
-            <DialogDescription>
-              固定只读 safe，建议使用数据库本身仅有 SELECT
-              权限的账号。密码不显示在列表、模型指令或 MCP 启动参数中。
-            </DialogDescription>
+            <DialogDescription>建议使用只读（SELECT）账号</DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4">
             {field("name", "连接名称")}
@@ -512,10 +519,7 @@ export function Databases({
             <div className="space-y-3 pt-3">
               {field("node", "Node 绝对路径")}
               {field("package_root", "universal-db-mcp 安装目录")}
-              <p className="hint">
-                可先在页面探测。当前适配 universal-db-mcp
-                2.14.0；发现其他版本时明确提示，不自动改服务器依赖。
-              </p>
+              <p className="hint"></p>
             </div>
           </details>
           {error && (
@@ -531,9 +535,7 @@ export function Databases({
                 setForm(empty);
                 setEditing(false);
                 await load();
-                setNotice(
-                  "连接已保存，尚未测试数据库。请添加项目映射后开启新会话。",
-                );
+                setNotice("已保存（未测试）");
               })
             }
           >

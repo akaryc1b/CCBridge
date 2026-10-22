@@ -1,3 +1,6 @@
+import { time } from "@/lib/format";
+import { OperationBar } from "./common/Feedback";
+import { useOperation } from "@/lib/useOperation";
 import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DropdownMenu, ContextMenu } from "radix-ui";
@@ -8,6 +11,7 @@ import {
   Pencil,
   FolderInput,
   RefreshCw,
+  Folder,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -167,11 +171,7 @@ export function FileOperation({
             }
           : undefined,
       );
-      await onDone().catch(() =>
-        toast.error(
-          "操作已完成，但目录刷新失败；请重新连接后刷新，不要重复执行",
-        ),
-      );
+      await onDone().catch(() => toast.error("已完成，列表未刷新"));
       onClose();
     } catch (e) {
       setError(errorText(e));
@@ -194,7 +194,7 @@ export function FileOperation({
                 {
                   create: "新建文件",
                   rename: "重命名",
-                  move: "移动文件或文件夹",
+                  move: "移动",
                   trash: "移入回收区",
                 } as Record<string, string>
               )[action]
@@ -218,7 +218,7 @@ export function FileOperation({
         )}
         {action === "move" && (
           <>
-            <Label htmlFor="move-destination">目标文件夹（保留原名称）</Label>
+            <Label htmlFor="move-destination">移动到</Label>
             <div className="flex gap-2">
               <Input
                 id="move-destination"
@@ -259,25 +259,26 @@ export function FileOperation({
                       className="flex w-full justify-start"
                       variant="ghost"
                       key={f.path}
+                      disabled={
+                        f.path === entry.path ||
+                        f.path.startsWith(entry.path + "/")
+                      }
                       onClick={() => void browse(f.path)}
                     >
-                      📁 {f.name}
+                      <Folder size={15} /> {f.name}
                     </Button>
                   ))}
               </div>
             )}
-            <p className="hint">不会覆盖同名目标；不能移动到自身或子目录。</p>
           </>
         )}
         {action === "trash" && (
           <p>
-            将此项移入当前账号的 CCBridge
-            回收区，文件夹包含其全部内容。可在“回收区”恢复；不永久删除。
+            将「{entry.name}」移入回收区
+            {entry.kind !== "file" ? "（含全部内容）" : ""}，可恢复。
           </p>
         )}
-        <p className="hint">
-          进行中的任务、已注册项目根目录和当前工作区受到保护。
-        </p>
+
         {error && (
           <p role="alert" className="text-destructive">
             {error}
@@ -296,11 +297,7 @@ export function FileOperation({
             }
             onClick={() => void submit()}
           >
-            {busy
-              ? "正在处理…"
-              : action === "trash"
-                ? "确认移入回收区"
-                : "确认"}
+            {busy ? "正在处理…" : action === "trash" ? "移入回收区" : "确认"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -359,9 +356,9 @@ export function TrashDialog({
     >
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>当前账号回收区</DialogTitle>
-          <DialogDescription>
-            恢复到原路径，不覆盖已有同名文件。这里不提供永久删除。
+          <DialogTitle>回收区</DialogTitle>
+          <DialogDescription className="sr-only">
+            恢复已移入回收区的文件
           </DialogDescription>
         </DialogHeader>
         <Button
@@ -370,7 +367,7 @@ export function TrashDialog({
           onClick={() => void refresh()}
         >
           <RefreshCw size={15} />
-          加载 / 刷新
+          刷新
         </Button>
         {error && (
           <p role="alert" className="text-destructive">
@@ -379,15 +376,17 @@ export function TrashDialog({
         )}
         <div className="max-h-96 space-y-3 overflow-auto">
           {items.map((i) => (
-            <div
-              key={i.id}
-              className="flex items-center gap-3 rounded border p-3"
-            >
+            <div key={i.id} className="flex items-center gap-3 border-b py-3">
               <div className="min-w-0 flex-1">
                 <strong>{i.name}</strong>
                 <p className="hint break-all">{i.original}</p>
+                <small>{i.deleted_at ? time(i.deleted_at) : ""}</small>
               </div>
-              <Button disabled={busy} onClick={() => void restore(i.id)}>
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => void restore(i.id)}
+              >
                 恢复
               </Button>
             </div>
@@ -472,26 +471,26 @@ export function BranchDialog({
             <GitBranch className="inline" size={18} /> Git 分支
           </DialogTitle>
           <DialogDescription className="break-all">
-            {path} · 请先打开一个 Git 仓库根目录
+            <span title={path}>{path.split("/").pop()}</span>
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" disabled={busy} onClick={() => void load()}>
-            读取 / 刷新分支
+            刷新
           </Button>
           <Button
             variant="outline"
             disabled={busy}
             onClick={() => void load("branch_fetch")}
           >
-            获取远端分支（fetch）
+            获取远端
           </Button>
         </div>
         {info.current && (
           <p>
             当前分支：<Badge>{info.current}</Badge>{" "}
             {info.dirty && (
-              <Badge variant="destructive">有未提交改动，禁止切换</Badge>
+              <Badge variant="destructive">有未提交改动，无法切换</Badge>
             )}
           </p>
         )}
@@ -555,10 +554,7 @@ export function BranchDialog({
                 : `从当前 ${info.current || "HEAD"} 新建 ${branch}`}
           </p>
         )}
-        <p className="hint">
-          不自动 stash、reset
-          或推送。快进同步不会生成合并提交，分叉时拒绝操作；有未提交改动或运行任务时禁止变更。
-        </p>
+
         {message && <p role="status">{message}</p>}
         {error && (
           <p role="alert" className="text-destructive">

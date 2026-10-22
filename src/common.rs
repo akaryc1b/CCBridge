@@ -126,12 +126,35 @@ pub fn error_summary(raw: &str) -> String {
         "操作失败，请展开诊断详情查看原因。".into()
     }
 }
+#[derive(Debug)]
+pub struct CodedError {
+    pub code: String,
+    pub message: String,
+}
+impl std::fmt::Display for CodedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+impl std::error::Error for CodedError {}
+pub fn coded(code: &str, message: impl Into<String>) -> anyhow::Error {
+    CodedError {
+        code: code.into(),
+        message: message.into(),
+    }
+    .into()
+}
+pub fn error_code(e: &anyhow::Error) -> &str {
+    e.downcast_ref::<CodedError>()
+        .map(|e| e.code.as_str())
+        .unwrap_or("operation_failed")
+}
 pub fn envelope(r: Result<Value>) -> Value {
     match r {
         Ok(v) => json!({"ok":true,"data":v}),
         Err(e) => {
             let raw = format!("{e:#}");
-            json!({"ok":false,"error":raw,"error_detail":{"code":"operation_failed","message_zh":error_summary(&raw),"diagnostic":raw,"retryable":false}})
+            json!({"ok":false,"error":raw,"error_detail":{"code":error_code(&e),"message_zh":error_summary(&raw),"diagnostic":raw,"retryable":false}})
         }
     }
 }
@@ -139,7 +162,12 @@ pub fn unwrap(v: Value) -> Result<Value> {
     if v["ok"] == true {
         Ok(v["data"].clone())
     } else {
-        bail!("{}", v["error"].as_str().unwrap_or("服务返回了无效响应"))
+        Err(coded(
+            v["error_detail"]["code"]
+                .as_str()
+                .unwrap_or("operation_failed"),
+            v["error"].as_str().unwrap_or("服务返回了无效响应"),
+        ))
     }
 }
 

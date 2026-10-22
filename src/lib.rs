@@ -39,3 +39,6 @@ pub mod install;
 
 pub mod git_update;
 pub mod vps_auth;
+
+#[cfg(feature = "bridge")]
+pub mod operations;

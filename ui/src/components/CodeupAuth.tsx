@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { KeyRound, MoreHorizontal, Loader2 } from "lucide-react";
+import { DropdownMenu as Menu } from "radix-ui";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
-import { Badge } from "./ui/badge";
 import {
   Dialog,
   DialogContent,
@@ -12,14 +13,8 @@ import {
   DialogDescription,
   DialogFooter,
 } from "./ui/dialog";
-import {
-  Select,
-  SelectTrigger,
-  SelectValue,
-  SelectContent,
-  SelectItem,
-} from "./ui/select";
-import { Loader2, ShieldCheck } from "lucide-react";
+import { StatusRow, InlineAlert } from "./common/Feedback";
+import { Confirm } from "./common/Confirm";
 type Data = Record<string, any>;
 export const errorText = (e: unknown) =>
   typeof e === "object" && e !== null && "message" in e
@@ -46,357 +41,410 @@ export function CodeupAuth({
   consented?: boolean;
   onConsent?: () => void;
 }) {
-  const [storage, setStorage] = useState("file"),
-    [storageAck, setStorageAck] = useState(false);
   const [scope, setScope] = useState(initialScope),
     [url, setUrl] = useState(initialUrl),
     [username, setUsername] = useState(""),
     [secret, setSecret] = useState(""),
-    [status, setStatus] = useState<Data>({}),
+    [status, setStatus] = useState<Data>({ loading: true }),
+    [vps, setVps] = useState<Data>({}),
+    [access, setAccess] = useState<Data>({}),
+    [vpsAccess, setVpsAccess] = useState<Data>({}),
     [busy, setBusy] = useState(""),
-    [message, setMessage] = useState(""),
     [error, setError] = useState(""),
-    [forget, setForget] = useState(false);
-  const [vpsStatus, setVpsStatus] = useState<Data>({}),
-    [vpsAck, setVpsAck] = useState(false),
-    [vpsRemove, setVpsRemove] = useState(false);
-  useEffect(() => {
-    if (!open) return;
-    let active = true;
-    setVpsAck(false);
-    setVpsRemove(false);
-    setVpsStatus(connected ? { loading: true } : {});
-    if (connected)
-      invoke<Data>("git_vps_auth_status", { request: {} })
-        .then((r) => {
-          if (active) setVpsStatus(r);
-        })
-        .catch((e) => {
-          if (active) setVpsStatus({ error: true, message: errorText(e) });
-        });
-    return () => {
-      active = false;
-    };
-  }, [open, account, connected]);
+    [confirmation, setConfirmation] = useState<Data | null>(null);
+  const generation = useRef(0);
+  const runLock = useRef(false);
   useEffect(() => {
     if (open) {
       setUrl(initialUrl);
       setScope(initialScope);
       setSecret("");
-      setMessage("");
       setError("");
+      setConfirmation(null);
     }
   }, [open, initialUrl, initialScope]);
   useEffect(() => {
-    if (!open) return;
-    let active = true;
-    setStatus({});
+    const seq = ++generation.current;
+    setStatus({ loading: true });
     setUsername("");
     setSecret("");
-    setMessage("");
+    setAccess({});
+    setVpsAccess({});
     setError("");
-    if (scope === "remote" && !connected) return;
+    setConfirmation(null);
+    if (!open) return;
+    if (scope === "remote" && !connected) {
+      setStatus({});
+      return;
+    }
     invoke<Data>("git_auth_status", { request: { scope } })
       .then((r) => {
-        if (active) {
+        if (seq === generation.current) {
           setStatus(r);
-          setStorage("file");
-          setStorageAck(false);
           setUsername(r.username || "");
         }
       })
       .catch((e) => {
-        if (active) setError(errorText(e));
+        if (seq === generation.current) setStatus({ error: errorText(e) });
       });
+    if (connected)
+      invoke<Data>("git_vps_auth_status", { request: {} })
+        .then((r) => {
+          if (seq === generation.current) setVps(r);
+        })
+        .catch((e) => {
+          if (seq === generation.current) setVps({ error: errorText(e) });
+        });
+    else setVps({});
     return () => {
-      active = false;
+      generation.current++;
     };
   }, [open, scope, account, connected]);
-  async function run(op: string) {
-    if (busy) return;
+  useEffect(() => {
+    setAccess({});
+    setVpsAccess({});
+    setConfirmation(null);
+  }, [url, username, secret]);
+  const request = () => ({
+    scope,
+    url,
+    username,
+    secret,
+    storage: "file",
+    vps_account: account,
+  });
+  async function run(op: string, req: Data = request()) {
+    if (runLock.current) return;
+    runLock.current = true;
+    const seq = generation.current;
     setBusy(op);
     setError("");
-    setMessage(
-      op === "git_access"
-        ? "正在用 Git 检测仓库访问…"
-        : op === "git_vps_auth_test"
-          ? "正在检测 VPS 自身认证…"
-          : op === "git_vps_auth_install"
-            ? "正在同步认证到当前 VPS…"
-            : op === "git_vps_auth_remove"
-              ? "正在移除 VPS 认证…"
-              : "正在保存认证…",
-    );
+    if (op === "git_access") setAccess({ testing: true });
+    if (op === "git_vps_auth_test") setVpsAccess({ testing: true });
     try {
-      const r = await invoke<Data>(op, {
-        request: {
-          scope,
-          url,
-          username,
-          secret,
-          storage,
-          storage_ack: storageAck,
-          server_storage_ack: vpsAck,
-          vps_account: account,
-          confirm: vpsRemove,
-        },
-      });
-      if (
-        ["git_auth_save", "git_auth_migrate"].includes(op) &&
-        storage === "file"
-      )
-        onConsent?.();
-      if (op.startsWith("git_vps_auth_")) {
-        if (op !== "git_vps_auth_test") setVpsStatus(r);
-        if (op === "git_vps_auth_install") setSecret("");
-        setVpsAck(false);
-        setVpsRemove(false);
-        setMessage(r.message || "VPS 认证操作完成");
-      } else if (op === "git_access") {
-        setMessage(r.message || "仓库可以读取");
+      const r = await invoke<Data>(op, { request: req });
+      if (seq !== generation.current) return;
+      const checked = {
+        ok: true,
+        time: new Date().toLocaleTimeString("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      };
+      if (op === "git_access") setAccess(checked);
+      else if (op === "git_vps_auth_test") setVpsAccess(checked);
+      else if (op.startsWith("git_vps_auth_")) {
+        setVps(r);
+        setVpsAccess({});
+        setSecret("");
       } else {
         setStatus(r);
         setSecret("");
-        setMessage(
-          op === "git_auth_remove"
-            ? "已忘记 App 保存的认证；系统原有 Git 凭据助手不受影响"
-            : "认证已保存，可检测访问或直接克隆",
-        );
+        setAccess({});
+        if (["git_auth_save", "git_auth_migrate"].includes(op)) {
+          onConsent?.();
+          if (onSaved) {
+            onOpenChange(false);
+            onSaved();
+          }
+        }
       }
-      setForget(false);
-      if (["git_auth_save", "git_auth_migrate"].includes(op) && onSaved) {
-        onOpenChange(false);
-        onSaved();
-      }
+      setConfirmation(null);
     } catch (e) {
-      setMessage("");
-      setError(errorText(e));
+      if (seq !== generation.current) return;
+      const text = errorText(e);
+      if (op === "git_access") setAccess({ error: text });
+      else if (op === "git_vps_auth_test") setVpsAccess({ error: text });
+      else setError(text);
     } finally {
-      setBusy("");
+      runLock.current = false;
+      if (seq === generation.current) setBusy("");
     }
   }
-  const disabled = !!busy || (scope === "remote" && !connected);
+  function confirm(op: string) {
+    setError("");
+    if ((op === "git_auth_save" || op === "git_auth_migrate") && consented) {
+      void run(op);
+      return;
+    }
+    setConfirmation({ op, request: request() });
+  }
+  const disabled =
+    !!busy || status.loading === true || (scope === "remote" && !connected);
+  const testText = (a: Data) =>
+    a.testing
+      ? "检测中…"
+      : a.error
+        ? "访问失败"
+        : a.ok
+          ? `通过 · ${a.time}`
+          : "未检测";
+  const effective =
+    scope === "remote" && vps.configured
+      ? "VPS 凭据"
+      : status.configured
+        ? "App 已保存"
+        : scope === "local"
+          ? "本机 Git 凭据助手"
+          : "服务器 Git 凭据助手";
+  const isVps = confirmation?.op === "git_vps_auth_install";
+  const isRemove = confirmation?.op?.includes("remove");
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(v) => {
-        if (!busy) onOpenChange(v);
-      }}
-    >
-      <DialogContent className="max-h-[85vh] max-w-xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>Codeup 认证与访问检测</DialogTitle>
-          <DialogDescription>
-            HTTPS 用户名与密码 / 访问令牌。无需到终端配置，不使用 SSH 登录密码。
-          </DialogDescription>
-        </DialogHeader>
-        <Label>在哪里执行 Git</Label>
-        <Select value={scope} onValueChange={setScope} disabled={!!busy}>
-          <SelectTrigger className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="local">本机获取，再通过 SSH 传仓库</SelectItem>
-            <SelectItem value="remote">服务器当前 SSH 账号直接获取</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="hint">
-          {scope === "remote"
-            ? `当前账号：${account || "尚未连接"}。App 档认证保存在 Mac，仅供 App 内 Git 操作；VPS 终端 / Claude 的认证请在下方单独同步。`
-            : "认证保存在 Mac，仅用于 codeup.aliyun.com；未保存时使用本机 Git 凭据助手。可在下方单独授权同步到 VPS。"}
-        </p>
-        <Badge variant="outline">
-          {status.configured
-            ? `App 已保存：${status.username}`
-            : "App 尚未保存认证 · 可先检测现有 Git 凭据"}
-        </Badge>
-        <Label htmlFor="codeup-url">Codeup 仓库 HTTPS 地址</Label>
-        <Input
-          id="codeup-url"
-          value={url}
-          onChange={(e) => setUrl(e.target.value)}
-          disabled={disabled}
-          placeholder="https://codeup.aliyun.com/组织/仓库.git"
-        />
-        <Label htmlFor="codeup-user">Codeup HTTPS 克隆用户名</Label>
-        <Input
-          id="codeup-user"
-          value={username}
-          onChange={(e) => setUsername(e.target.value)}
-          disabled={disabled}
-          autoComplete="off"
-        />
-        <Label htmlFor="codeup-secret">HTTPS 密码 / 访问令牌</Label>
-        <Input
-          id="codeup-secret"
-          type="password"
-          value={secret}
-          onChange={(e) => setSecret(e.target.value)}
-          disabled={disabled}
-          autoComplete="new-password"
-          placeholder={
-            status.configured
-              ? "留空使用已保存认证；填写则更新"
-              : "请输入 Codeup 的 HTTPS 密码或访问令牌"
-          }
-        />
-        <p className="hint">
-          检测只读取远端引用，不克隆、不推送。填写但未保存的凭据也可直接检测；不会显示或回填已保存的令牌。
-        </p>
-        {status.configured && status.storage !== "file" && (
-          <Button
-            disabled={disabled || (!consented && !storageAck)}
-            onClick={() => void run("git_auth_migrate")}
-          >
-            迁移此作用域已保存的认证
-          </Button>
-        )}
-        {storage === "file" && !consented && (
-          <label className="hint">
-            <input
-              type="checkbox"
-              checked={storageAck}
-              onChange={(e) => setStorageAck(e.target.checked)}
-            />{" "}
-            我理解密码以明文保存在当前用户私有目录，同一用户程序仍可读取。
-          </label>
-        )}
-        <section className="rounded border p-3 space-y-3">
-          <div className="flex items-center justify-between">
-            <Label>VPS 持久认证</Label>
-            <Badge variant="outline">
-              {!connected
-                ? "未连接"
-                : vpsStatus.loading
-                  ? "检测中…"
-                  : vpsStatus.error
-                    ? "检测失败"
-                    : vpsStatus.configured
-                      ? "VPS 已配置"
-                      : "未由 App 配置"}
-            </Badge>
-          </div>
-          <p className="hint">
-            {account || "请先连接 SSH"} ·{" "}
-            {vpsStatus.message || "可在克隆之后随时补同步，不需要重新克隆。"}
-          </p>
-          <p className="hint">
-            同步使用上方输入的令牌；留空则使用所选档已保存认证，本机档还可复用
-            Git 凭据助手。只接入当前 VPS 账号的 Codeup HTTPS，不修改 SSH 登录。
-          </p>
-          <label className="hint flex gap-2">
-            <input
-              type="checkbox"
-              checked={vpsAck}
-              disabled={!!busy || !connected}
-              onChange={(e) => setVpsAck(e.target.checked)}
-            />
-            我同意将该认证以明文保存到此 VPS 账号的私有文件，供普通 Git / Claude
-            使用；同账号程序及服务器管理员可读取。推荐专用最小权限令牌。
-          </label>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              variant="outline"
-              disabled={!!busy || !connected || !vpsAck || !url.trim()}
-              onClick={() => void run("git_vps_auth_install")}
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={(v) => {
+          if (!busy) onOpenChange(v);
+        }}
+      >
+        <DialogContent className="codeup-dialog">
+          <DialogHeader>
+            <DialogTitle>Codeup 认证</DialogTitle>
+            <DialogDescription className="sr-only">
+              本机与服务器 Codeup 凭据
+            </DialogDescription>
+          </DialogHeader>
+          <div className="dialog-body">
+            <div className="segmented">
+              {[
+                ["local", "本机获取"],
+                ["remote", "服务器获取"],
+              ].map(([v, l]) => (
+                <button
+                  disabled={!!busy}
+                  className={scope === v ? "chosen" : ""}
+                  key={v}
+                  onClick={() => setScope(v)}
+                >
+                  {l}
+                </button>
+              ))}
+            </div>
+            <div className="field">
+              <Label htmlFor="codeup-url">仓库地址</Label>
+              <Input
+                id="codeup-url"
+                value={url}
+                disabled={disabled}
+                onChange={(e) => setUrl(e.target.value)}
+                placeholder="https://codeup.aliyun.com/组织/仓库.git"
+              />
+            </div>
+            <StatusRow label="当前来源">
+              {status.loading ? (
+                "读取中…"
+              ) : status.error ? (
+                <span className="text-destructive">{status.error}</span>
+              ) : (
+                effective
+              )}
+            </StatusRow>
+            {!(scope === "remote" && vps.configured) && (
+              <StatusRow
+                label="仓库访问"
+                action={
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={disabled || !url.trim()}
+                    onClick={() => void run("git_access")}
+                  >
+                    检测
+                  </Button>
+                }
+              >
+                <span className={access.error ? "text-destructive" : "muted"}>
+                  {testText(access)}
+                </span>
+              </StatusRow>
+            )}
+            {access.error && <InlineAlert>{access.error}</InlineAlert>}
+            <div className="form-two">
+              <div className="field">
+                <Label htmlFor="codeup-user">用户名</Label>
+                <Input
+                  id="codeup-user"
+                  value={username}
+                  disabled={disabled}
+                  autoComplete="off"
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="留空复用现有认证"
+                />
+              </div>
+              <div className="field">
+                <Label htmlFor="codeup-secret">密码或令牌</Label>
+                <Input
+                  id="codeup-secret"
+                  type="password"
+                  value={secret}
+                  disabled={disabled}
+                  autoComplete="new-password"
+                  onChange={(e) => setSecret(e.target.value)}
+                  placeholder={
+                    status.configured ? "已保存，留空不变" : "未填写"
+                  }
+                />
+              </div>
+            </div>
+            <StatusRow
+              label="App 凭据"
+              action={
+                <Menu.Root>
+                  <Menu.Trigger asChild>
+                    <Button
+                      aria-label="App凭据操作"
+                      variant="ghost"
+                      size="icon"
+                      disabled={disabled || !status.configured}
+                    >
+                      <MoreHorizontal size={16} />
+                    </Button>
+                  </Menu.Trigger>
+                  <Menu.Portal>
+                    <Menu.Content className="context-menu">
+                      {status.storage !== "file" && (
+                        <Menu.Item onSelect={() => confirm("git_auth_migrate")}>
+                          迁移到本机文件
+                        </Menu.Item>
+                      )}
+                      <Menu.Item onSelect={() => confirm("git_auth_remove")}>
+                        移除 App 凭据
+                      </Menu.Item>
+                    </Menu.Content>
+                  </Menu.Portal>
+                </Menu.Root>
+              }
             >
-              同步到当前 VPS
-            </Button>
-            <Button
-              variant="outline"
-              disabled={!!busy || !connected || !url.trim()}
-              onClick={() => void run("git_vps_auth_test")}
+              {status.configured
+                ? `已保存 · ${status.username || ""}`
+                : "未保存"}
+            </StatusRow>
+            <div className="section-title auth-vps-title">
+              <h3>当前 VPS</h3>
+              <span className="muted">{account || "未连接"}</span>
+            </div>
+            <StatusRow
+              label="凭据"
+              action={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!!busy || !connected || !vps.configured}
+                  onClick={() => confirm("git_vps_auth_remove")}
+                >
+                  移除…
+                </Button>
+              }
             >
-              检测 VPS 自身认证
-            </Button>
+              {!connected ? (
+                "未连接"
+              ) : vps.error ? (
+                <span className="text-destructive">读取失败</span>
+              ) : vps.configured ? (
+                "已写入"
+              ) : (
+                "未由 App 写入"
+              )}
+            </StatusRow>
+            {vps.error && <InlineAlert>{vps.error}</InlineAlert>}
+            <StatusRow
+              label="仓库访问"
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={!!busy || !connected || !url.trim()}
+                  onClick={() => void run("git_vps_auth_test")}
+                >
+                  检测
+                </Button>
+              }
+            >
+              <span className={vpsAccess.error ? "text-destructive" : "muted"}>
+                {testText(vpsAccess)}
+              </span>
+            </StatusRow>
+            {vpsAccess.error && <InlineAlert>{vpsAccess.error}</InlineAlert>}
             <Button
               variant="ghost"
-              disabled={!!busy || !connected || !vpsStatus.configured}
-              onClick={() => setVpsRemove(true)}
+              className="auth-write"
+              disabled={!!busy || !connected || !url.trim()}
+              onClick={() => confirm("git_vps_auth_install")}
             >
-              移除 VPS 认证
+              <KeyRound size={14} />
+              {vps.configured ? "更新 VPS 凭据…" : "写入 VPS…"}
             </Button>
-          </div>
-          {vpsRemove && (
-            <div>
-              <p>
-                只移除此 App 写入的 VPS Codeup 认证，Mac 认证及服务器其他 Git
-                配置保留。
+            {busy && (
+              <p role="status" className="muted flex items-center gap-2">
+                <Loader2 size={14} className="spin" />
+                {busy.includes("test") || busy === "git_access"
+                  ? "检测中…"
+                  : "保存中…"}
               </p>
-              <Button
-                variant="destructive"
-                disabled={!!busy}
-                onClick={() => void run("git_vps_auth_remove")}
-              >
-                确认移除 VPS 认证
-              </Button>
-              <Button variant="ghost" onClick={() => setVpsRemove(false)}>
-                取消
-              </Button>
-            </div>
-          )}
-        </section>
-        {message && (
-          <p role="status" className="flex items-center gap-2">
-            {busy ? (
-              <Loader2 size={16} className="animate-spin" />
-            ) : (
-              <ShieldCheck size={16} />
-            )}{" "}
-            {message}
-          </p>
-        )}
-        {error && (
-          <p role="alert" className="text-destructive">
-            {error}
-          </p>
-        )}
-        {forget && (
-          <div className="rounded border p-3">
-            <p>
-              忘记 App 为{scope === "local" ? "本机" : account}保存的 Codeup
-              认证？之后仍可重新输入保存。
-            </p>
-            <Button
-              variant="destructive"
-              disabled={disabled}
-              onClick={() => void run("git_auth_remove")}
-            >
-              确认忘记认证
-            </Button>
-            <Button variant="ghost" onClick={() => setForget(false)}>
-              取消
-            </Button>
+            )}
+            {error && <InlineAlert>{error}</InlineAlert>}
           </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={!!busy}
+              onClick={() => onOpenChange(false)}
+            >
+              关闭
+            </Button>
+            <Button
+              disabled={disabled || !username.trim() || !secret}
+              onClick={() => confirm("git_auth_save")}
+            >
+              {onSaved ? "保存并重试克隆" : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Confirm
+        open={!!confirmation}
+        title={isVps ? "写入 VPS 凭据" : isRemove ? "移除凭据" : "本机保存"}
+        action={isVps ? "写入 VPS" : isRemove ? "移除" : "保存"}
+        destructive={!!isRemove}
+        busy={!!busy}
+        onCancel={() => setConfirmation(null)}
+        onConfirm={() => {
+          const c = confirmation;
+          if (c)
+            void run(c.op, {
+              ...c.request,
+              storage_ack: true,
+              server_storage_ack: isVps,
+              confirm: isRemove,
+            });
+        }}
+      >
+        {isVps ? (
+          <>
+            <strong>{confirmation?.request.vps_account}</strong>
+            <p>
+              凭据将明文保存在此 VPS
+              账号的私有文件中，同账号程序和服务器管理员可读取。
+            </p>
+            <code>~/.local/share/ccbridge/codeup-auth</code>
+            <p className="muted">
+              来源：{confirmation?.request.secret ? "输入的令牌" : effective}
+            </p>
+          </>
+        ) : isRemove ? (
+          <p>
+            移除
+            {confirmation?.op === "git_vps_auth_remove"
+              ? ` ${account} 上由 CCBridge 写入的 VPS 凭据`
+              : " App 保存的凭据"}
+            ？
+          </p>
+        ) : (
+          <p>
+            凭据将明文保存在本机当前用户目录，同一用户运行的程序可读取。此提示只确认一次。
+          </p>
         )}
-        <DialogFooter>
-          <Button
-            variant="ghost"
-            disabled={disabled || !status.configured}
-            onClick={() => setForget(true)}
-          >
-            忘记认证
-          </Button>
-          <Button
-            variant="outline"
-            disabled={disabled || !url.trim()}
-            onClick={() => void run("git_access")}
-          >
-            检测仓库访问
-          </Button>
-          <Button
-            disabled={
-              disabled ||
-              !username.trim() ||
-              !secret ||
-              (storage === "file" && !consented && !storageAck)
-            }
-            onClick={() => void run("git_auth_save")}
-          >
-            {onSaved ? "保存并重试克隆" : "保存认证"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      </Confirm>
+    </>
   );
 }

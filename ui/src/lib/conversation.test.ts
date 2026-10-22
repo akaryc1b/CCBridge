@@ -35,7 +35,7 @@ describe("conversation state", () => {
     expect(
       displayModel({ model: "opus", result: { modelUsage: { other: {} } } })
         .actual,
-    ).toBe("实际模型尚未上报");
+    ).toBe("未上报");
   });
   it("terminates a corrupted ancestry cycle", () => {
     const a = { task_id: "a", reply_to: "b" },
@@ -128,9 +128,11 @@ describe("project sessions and visible model", () => {
       nextModelLabel({ model_requested: "claude-opus-5-5" }, "sonnet"),
     ).toBe("claude-opus-5-5");
     expect(nextModelLabel(undefined, "sonnet")).toBe("sonnet");
-    expect(nextModelLabel({}, "sonnet")).toBe("模型待确认（远端默认）");
+    expect(nextModelLabel({}, "sonnet")).toBe("远端默认");
     expect(
       nextModelLabel({ model_resolved: "claude-opus-5-5" }, "sonnet"),
     ).toBe("claude-opus-5-5（远端默认）");
   });
 });
+
+it('distinguishes waiting from unreported models without guessing',()=>{expect(displayModel({state:'running',model:'opus'}).actual).toBe('等待上报');expect(displayModel({state:'completed',model:'opus'}).actual).toBe('未上报')});

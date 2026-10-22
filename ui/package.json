@@ -1,14 +1,15 @@
 {
   "name": "ccbridge-ui",
   "private": true,
-  "version": "0.8.6",
+  "version": "0.9.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
     "tauri": "tauri",
     "test": "vitest run",
-    "format": "prettier --write src"
+    "format": "prettier --write src",
+    "lint:ui": "node scripts/ui-lint.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.4",

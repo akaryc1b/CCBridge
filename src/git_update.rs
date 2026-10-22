@@ -100,12 +100,19 @@ pub fn rpc_at(v: &Value, home: &Path) -> Result<Value> {
             crate::workspace_ops::protected_running(&p)?;
             let r = repo(&p)?;
             if r["blocked"] != "" {
-                bail!("{}", r["blocked"].as_str().unwrap_or("无法更新"))
+                return Err(coded(
+                    if r["dirty"] == true {
+                        "dirty"
+                    } else {
+                        "no_upstream"
+                    },
+                    r["blocked"].as_str().unwrap_or("无法更新"),
+                ));
             }
             for key in ["head", "branch", "upstream", "remote"] {
                 if let Some(expected) = v["expected"][key].as_str() {
                     if r[key] != expected {
-                        bail!("仓库的分支或提交已变化，请刷新后重新更新")
+                        return Err(coded("stale", "仓库的分支或提交已变化，请刷新"));
                     }
                 }
             }
@@ -127,7 +134,7 @@ pub fn rpc_at(v: &Value, home: &Path) -> Result<Value> {
                 );
             }
             if git(&p, &["merge-base", "--is-ancestor", head, &target]).is_err() {
-                bail!("本地与远端已分叉，不能快进；请人工处理，不会 reset 或 stash")
+                return Err(coded("diverged", "已分叉，需手动处理"));
             }
             git(&p, &["merge", "--ff-only", "--", upstream])?;
             Ok(

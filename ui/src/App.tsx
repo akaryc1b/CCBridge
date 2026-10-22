@@ -1,3 +1,7 @@
+import { OperationBar, InlineAlert } from "@/components/common/Feedback";
+import { Confirm } from "@/components/common/Confirm";
+import { useOperation } from "@/lib/useOperation";
+import { time, elapsed, bytes } from "@/lib/format";
 import { GitUpdate } from "@/components/GitUpdate";
 import { isConnecting, clearConnectionErrors } from "@/lib/connection";
 import { Workbench } from "@/components/Workbench";
@@ -230,6 +234,20 @@ export default function App() {
     localStorage.getItem("ccbridge-theme") || "system",
   );
   const [gitUpdateOpen, setGitUpdateOpen] = useState(false);
+  const [gitOperation, setGitOperation] = useState<Data | null>(null);
+  const [cloneId, setCloneId] = useState<string>();
+  const [updateTransfer, setUpdateTransfer] = useState<Data>({});
+  const [localConfirm, setLocalConfirm] = useState<null | { action: string }>(
+    null,
+  );
+  const [previewName, setPreviewName] = useState("");
+  const [tick, setTick] = useState(Date.now());
+  useEffect(() => {
+    if (!tasks.some(active)) return;
+    const t = setInterval(() => setTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [tasks.some(active)]);
+
   const [authUrl, setAuthUrl] = useState("");
   const [preferences, setPreferences] = useState<Data>({});
   const [autoTarget, setAutoTarget] = useState<Data>({});
@@ -317,10 +335,20 @@ export default function App() {
     if (following.current && messagesRef.current)
       messagesRef.current.scrollTop = messagesRef.current.scrollHeight;
   }, [selected, transcriptRevision]);
+  useEffect(() => {
+    setGitOperation(connection.operations?.git_update || null);
+  }, [connection.connection_id, connection.operations?.git_update?.revision]);
   const currentProject =
     connection.profile?.active_remote_workspace ||
     profile.active_remote_workspace ||
     "";
+  const cloneOperation = useOperation(
+    "clone_into_directory",
+    cloneProgress.path || path,
+    connection.connection_id || "",
+    !!cloneId || cloneOpen,
+    cloneId,
+  );
   const connecting = isConnecting(busy);
   const request = async (
     command: string,
@@ -331,7 +359,7 @@ export default function App() {
       inflight.current.has(command) &&
       !["directory_list", "file_preview"].includes(command)
     )
-      return undefined;
+      throw new Error("该操作正在进行，请查看当前状态");
     const sequence = (requestSequence.current.get(command) || 0) + 1;
     requestSequence.current.set(command, sequence);
     inflight.current.set(command, (inflight.current.get(command) || 0) + 1);
@@ -373,36 +401,13 @@ export default function App() {
       setBusy(new Set(inflight.current.keys()));
     }
   };
-  useEffect(() => {
-    if (!busy.has("clone_repository")) return;
-    let active = true;
-    let polling = false;
-    const poll = async () => {
-      if (polling) return;
-      polling = true;
-      try {
-        const p = await invoke<Data>("clone_progress", { request: {} });
-        if (active && p.stage) setCloneProgress(p);
-      } catch {
-        /* The clone request itself reports connection failures. */
-      } finally {
-        polling = false;
-      }
-    };
-    const timer = setInterval(poll, 1000);
-    void poll();
-    return () => {
-      active = false;
-      clearInterval(timer);
-    };
-  }, [busy.has("clone_repository")]);
   async function configureCodex() {
     if (integrationState === "saving") return;
     setIntegrationState("saving");
-    setIntegration("正在备份并写入 Codex MCP 配置…");
+    setIntegration("");
     try {
       const message = await invoke<string>("configure_codex");
-      setIntegration(message);
+      setIntegration("已写入 · 需在 Codex 重新加载");
       setIntegrationState("success");
       invoke<Data>("codex_configuration_status")
         .then(setMcpStatus)
@@ -412,13 +417,15 @@ export default function App() {
         typeof e === "object" && e !== null && "message" in e
           ? String((e as Data).message)
           : String(e);
-      setIntegration(`配置失败：${message}`);
+      setIntegration(`写入失败：${message}`);
       setIntegrationState("error");
     }
   }
   async function cloneRepositories() {
     setCloneError("");
-    setCloneProgress({ stage: "正在检查连接和目标目录…" });
+    setCloneProgress({ stage: "检查目录", path: listedPath });
+    const operationId = crypto.randomUUID();
+    setCloneId(operationId);
     const destination = listedPath;
     const signature = JSON.stringify([destination, cloneUrls, localAuth]);
     const urls =
@@ -436,6 +443,7 @@ export default function App() {
         path: destination,
         urls: urls.join("\n"),
         local_auth: localAuth,
+        operation_id: operationId,
       });
       if (!r) return;
       setCloneResults(r.repositories || []);
@@ -448,9 +456,9 @@ export default function App() {
           `${r.failed_repository || "仓库"}：${r.error || "克隆失败"}`,
         );
       setCloneProgress({
-        stage: `处理完成：${r.repositories?.length || 0} 个仓库（已有仓库保持不变）`,
+        stage: `已处理 ${r.repositories?.length || 0} 个仓库`,
       });
-      toast.success("仓库已准备好");
+
       await browse(destination);
     } catch (e) {
       const message =
@@ -460,6 +468,7 @@ export default function App() {
             ? String((e as Data).message)
             : String(e);
       setCloneError(message);
+      setCloneId(undefined);
     } finally {
       clearInterval(timer);
     }
@@ -646,13 +655,14 @@ export default function App() {
   useEffect(() => {
     if (!isTauri()) return;
     let cleanup: (() => void) | undefined;
-    listen<Data>("update-progress", (e) =>
+    listen<Data>("update-progress", (e) => {
+      setUpdateTransfer(e.payload);
       setProgress(
         e.payload.total
           ? Math.round((e.payload.downloaded / e.payload.total) * 100)
           : 0,
-      ),
-    )
+      );
+    })
       .then((f) => (cleanup = f))
       .catch((e) => toast.error(String(e)));
     return () => cleanup?.();
@@ -663,7 +673,10 @@ export default function App() {
     let disposed = false;
     listen<Data>("backend-event", (e) => {
       if (e.payload.response?.ok === false)
-        setErrors((x) => ({ ...x, backend: e.payload.response.error }));
+        setErrors((x) => ({
+          ...x,
+          backend: { page: "servers", message: e.payload.response.error },
+        }));
     }).then((f) => {
       if (disposed) f();
       else cleanup = f;
@@ -693,12 +706,56 @@ export default function App() {
           }
         : { ...p, [key]: value },
     );
-  async function connect() {
+  async function saveServer(ack = storageAck) {
+    if (password && !storageConsent && !ack) {
+      setLocalConfirm({ action: "save" });
+      return;
+    }
+    const r = await request("save_profile", {
+      profile,
+      password,
+      storage_ack: ack,
+    });
+    if (r) {
+      setPassword("");
+      setSaved((x) => ({
+        ...x,
+        [JSON.stringify([profile.host, profile.port, profile.user])]: profile,
+      }));
+      if (ack) setStorageConsent(true);
+      setServerEdit(false);
+    }
+  }
+  async function migrateServer(ack = storageAck) {
+    if (!storageConsent && !ack) {
+      setLocalConfirm({ action: "migrate" });
+      return;
+    }
+    const r = await request("migrate_password", {
+      account_key: JSON.stringify([profile.host, profile.port, profile.user]),
+      storage_ack: ack,
+    });
+    if (r) {
+      setProfile(r.profile);
+      setStorageConsent(true);
+      setPassword("");
+      setSaved((x) => ({
+        ...x,
+        [JSON.stringify([profile.host, profile.port, profile.user])]: r.profile,
+      }));
+      setServerEdit(false);
+    }
+  }
+  async function connect(nextProfile = profile, ack = storageAck) {
+    if (password && !storageConsent && !ack) {
+      setLocalConfirm({ action: "connect" });
+      return;
+    }
     try {
       const c = await request("connect_ssh", {
-        profile,
+        profile: nextProfile,
         password,
-        storage_ack: storageAck,
+        storage_ack: ack,
       });
       if (c) {
         setPassword("");
@@ -710,7 +767,7 @@ export default function App() {
           [JSON.stringify([stored.host, stored.port, stored.user])]: stored,
         }));
         setServerEdit(false);
-        toast.success("SSH 已连接");
+        if (ack) setStorageConsent(true);
       }
     } catch (e) {
       const message =
@@ -845,10 +902,10 @@ export default function App() {
             <span className={connected ? "dot live" : "dot"} />
             <span>
               {connecting
-                ? "正在连接服务器…"
+                ? "连接中…"
                 : connected
                   ? `${connection.profile?.user}@${connection.profile?.host}`
-                  : "尚未连接服务器"}
+                  : "未连接"}
             </span>
           </div>
           <div className="theme-switch">
@@ -880,6 +937,29 @@ export default function App() {
         <header>
           <h1>{pages.find((p) => p[0] === page)?.[1]}</h1>
           <div className="page-actions">
+            {gitOperation?.state === "running" && (
+              <Button
+                className="op-chip"
+                variant="ghost"
+                onClick={() => {
+                  setPage("projects");
+                  safe(browse(gitOperation.path));
+                  setGitUpdateOpen(true);
+                }}
+              >
+                Git 更新 {gitOperation.processed}/{gitOperation.total || "…"}
+              </Button>
+            )}
+            {cloneOperation.snap?.state === "running" && (
+              <Button
+                className="op-chip"
+                variant="ghost"
+                onClick={() => setCloneOpen(true)}
+              >
+                克隆 {cloneOperation.snap.processed}/
+                {cloneOperation.snap.total || "…"}
+              </Button>
+            )}
             {(page === "overview" || page === "chat") && (
               <Button onClick={() => startDraft(currentProject)}>
                 <Plus size={15} />
@@ -954,11 +1034,14 @@ export default function App() {
                           safe(
                             request("select_workspace", {
                               path: listedPath,
-                            }).then(refreshConnection),
+                            }).then(async () => {
+                              await refreshConnection();
+                              toast.success("已设为 MCP 默认项目");
+                            }),
                           )
                         }
                       >
-                        设为MCP默认项目
+                        设为 MCP 默认项目
                       </Menu.Item>
                       <Menu.Item onSelect={() => setTrashOpen(true)}>
                         回收区
@@ -969,7 +1052,7 @@ export default function App() {
                           setAuthOpen(true);
                         }}
                       >
-                        Codeup认证
+                        Codeup 认证
                       </Menu.Item>
                     </Menu.Content>
                   </Menu.Portal>
@@ -993,7 +1076,7 @@ export default function App() {
                   )
                 }
               >
-                安装到Applications并重新打开
+                移到“应用程序”并重新打开
               </Button>
             </div>
           )}
@@ -1003,17 +1086,15 @@ export default function App() {
             page !== "settings" && (
               <div className="notice">
                 <Server size={18} />
-                <span>
-                  {connecting
-                    ? "正在连接服务器，请稍候…"
-                    : "先连接服务器，才能读取远端项目与任务。"}
-                </span>
+                <span>{connecting ? "连接中…" : "未连接"}</span>
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setPage("servers")}
+                  onClick={() =>
+                    profile.host ? safe(connect()) : setServerEdit(true)
+                  }
                 >
-                  前往连接
+                  连接服务器
                 </Button>
               </div>
             )}
@@ -1069,12 +1150,10 @@ export default function App() {
                       {profile.name ||
                         (profile.host
                           ? `${profile.user}@${profile.host}`
-                          : "添加你的服务器")}
+                          : "还没有服务器")}
                     </h3>
                     <p className="muted">
-                      {profile.host
-                        ? `端口 ${profile.port} · 当前账号隔离`
-                        : "使用账号密码连接，不需要共享同事的凭据"}
+                      {profile.host ? `端口 ${profile.port}` : ""}
                     </p>
                   </div>
                   <Button
@@ -1160,21 +1239,18 @@ export default function App() {
                       {runner.runner_version
                         ? `已安装 ${runner.runner_version}`
                         : connected
-                          ? "尚未检测到"
-                          : "连接后检测"}{" "}
+                          ? "未检测到"
+                          : "未连接"}{" "}
                       · App {version}
                     </p>
-                    <code>
-                      {connection.resolved_paths?.runner ||
-                        "自动使用远端 HOME/.local/bin/ccbridge"}
-                    </code>
+                    <code>{connection.resolved_paths?.runner || ""}</code>
                   </div>
                   <Badge variant="outline">
                     {runner.runner_version === version
-                      ? "已是最新版本"
+                      ? "已安装"
                       : runner.runner_version
-                        ? "可检查更新"
-                        : "待检测"}
+                        ? `需更新到 ${version}`
+                        : "未检测"}
                   </Badge>
                   <Button
                     variant="outline"
@@ -1184,7 +1260,7 @@ export default function App() {
                     }
                   >
                     <RefreshCw size={15} />
-                    重新检测
+                    检测
                   </Button>
                   <Button
                     disabled={
@@ -1195,7 +1271,7 @@ export default function App() {
                     onClick={() =>
                       safe(
                         request("install_runner").then(() => {
-                          toast.success("Runner 已就绪");
+                          toast.success("Runner 已安装");
                           return refreshConnection();
                         }),
                       )
@@ -1219,19 +1295,13 @@ export default function App() {
                     <p className="muted">
                       {runner.claude_version ||
                         runner.claude_error ||
-                        "使用远端已安装并登录的 Claude Code"}
+                        "未检测到"}
                     </p>
-                    <code>
-                      {connection.resolved_paths?.claude ||
-                        "自动探测可执行文件"}
-                    </code>
+                    <code>{connection.resolved_paths?.claude || ""}</code>
                   </div>
                 </div>
-                <Field
-                  label="服务器默认模型"
-                  hint="留空沿用远端 Claude 设置。修改后保存；已存在的对话保留各轮模型。"
-                >
-                  {input("model", "text", "例如 sonnet、opus 或完整模型 ID")}
+                <Field label="新会话默认模型">
+                  {input("model", "text", "远端默认")}
                 </Field>
                 <Button
                   variant="outline"
@@ -1242,11 +1312,11 @@ export default function App() {
                         profile,
                         password,
                         storage_ack: storageAck,
-                      }).then(() => toast.success("默认模型已保存")),
+                      }).then(() => toast.success("已保存")),
                     )
                   }
                 >
-                  保存默认模型
+                  保存为新会话默认
                 </Button>
               </Panel>
             </>
@@ -1327,7 +1397,8 @@ export default function App() {
                 <div className="file-list" aria-busy={browsing}>
                   <div className="file-head">
                     <span>名称</span>
-                    <span>类型</span>
+                    <span>分支</span>
+                    <span>最近修改</span>
                   </div>
                   {(listing.entries || [])
                     .filter((e: Data) =>
@@ -1383,6 +1454,10 @@ export default function App() {
                                   : "文件夹"}
                             </small>
                           </button>
+                          <span className="file-branch">{e.branch || "—"}</span>
+                          <span className="file-modified">
+                            {e.modified_at ? time(e.modified_at) : "—"}
+                          </span>
                           <FileActions
                             entry={e}
                             disabled={!locationReady}
@@ -1396,7 +1471,7 @@ export default function App() {
                   {!listing.entries?.length && (
                     <p className="empty">
                       {browsing
-                        ? "正在打开…"
+                        ? "加载中…"
                         : listedPath
                           ? "空文件夹"
                           : "选择项目或输入目录"}
@@ -1406,7 +1481,6 @@ export default function App() {
                 <div className="file-status">
                   {listing.entries?.length || 0}项
                   {listing.truncated ? " · 仅显示前1000项" : ""}
-                  <span>服务器文件</span>
                 </div>
               </section>
             </div>
@@ -1485,9 +1559,7 @@ export default function App() {
                                 {statusLabels[t.state] || t.state} ·{" "}
                               </>
                             )}
-                            {new Date(
-                              (t.updated_at || t.created_at) * 1000,
-                            ).toLocaleDateString()}
+                            {time(t.updated_at || t.created_at)}
                           </span>
                           {t.workspace !== group.path && (
                             <small>{t.workspace}</small>
@@ -1496,7 +1568,7 @@ export default function App() {
                       ))}
                   </details>
                 ))}
-                {!tasks.length && <p className="empty">还没有远端任务</p>}
+                {!tasks.length && <p className="empty">还没有会话</p>}
               </aside>
               <section className="conversation">
                 <div className="conversation-heading">
@@ -1516,7 +1588,7 @@ export default function App() {
                   </div>
                   {task && !newConversation && (
                     <Badge variant="outline">
-                      {task.mode === "automatic" ? "全自动" : "审批模式"}
+                      {task.mode === "automatic" ? "全自动" : "审批"}
                     </Badge>
                   )}
                 </div>
@@ -1533,7 +1605,7 @@ export default function App() {
                 )}
                 {task?.database_snapshot?.changed && (
                   <div className="notice">
-                    项目连接已变更；续聊仍使用原快照。要使用新映射或新凭据，请新建对话。
+                    项目数据库配置已更改，本会话仍使用旧配置。
                   </div>
                 )}
                 <div
@@ -1574,7 +1646,7 @@ export default function App() {
                                 text={
                                   typeof turn.result === "string"
                                     ? turn.result
-                                    : turn.result?.result || "本轮没有文本结果"
+                                    : turn.result?.result || "无文本输出"
                                 }
                               />
                             ) : (turn.events || []).some((e: Data) =>
@@ -1590,9 +1662,9 @@ export default function App() {
                               </>
                             ) : (
                               <p className="muted">
-                                {active(task)
-                                  ? "正在执行；状态每 5 秒更新，不会重复派发任务。"
-                                  : "本轮没有文本结果。"}
+                                {active(turn)
+                                  ? `执行中${turn.started_at || turn.created_at ? " · " + elapsed(tick - (turn.started_at || turn.created_at) * 1000) : ""}`
+                                  : "无文本输出"}
                               </p>
                             )}
                             {turn.error && (
@@ -1600,19 +1672,17 @@ export default function App() {
                                 <p>
                                   {/^[\u4e00-\u9fff]/.test(turn.error)
                                     ? turn.error.split("\n")[0]
-                                    : "本轮执行失败，请展开诊断查看原因。"}
+                                    : "执行失败"}
                                 </p>
                                 <details>
-                                  <summary>诊断详情</summary>
+                                  <summary>原始错误</summary>
                                   <pre>{turn.error}</pre>
                                 </details>
                               </div>
                             )}
                             {(turn.events || []).length > 0 && (
                               <details>
-                                <summary>
-                                  运行记录 · {turn.events.length} 条
-                                </summary>
+                                <summary>{turn.events.length} 个步骤</summary>
                                 {turn.events.map((e: Data, i: number) => (
                                   <details key={i}>
                                     <summary>{eventLabel(e)}</summary>
@@ -1651,7 +1721,12 @@ export default function App() {
                         <ShieldCheck />
                         <div>
                           <strong>需要确认 · {a.tool_name}</strong>
-                          <pre>{JSON.stringify(a.input, null, 2)}</pre>
+                          <pre>
+                            {a.input?.command ||
+                              a.input?.file_path ||
+                              a.input?.path ||
+                              JSON.stringify(a.input, null, 2)}
+                          </pre>
                           <div className="toolbar">
                             <Button
                               disabled={busy.has("task_approve")}
@@ -1665,7 +1740,7 @@ export default function App() {
                                 )
                               }
                             >
-                              允许本次
+                              允许
                             </Button>
                             <Button
                               variant="outline"
@@ -1722,7 +1797,7 @@ export default function App() {
                         >
                           全自动
                         </SelectItem>
-                        <SelectItem value="approval">审批模式</SelectItem>
+                        <SelectItem value="approval">审批</SelectItem>
                       </SelectContent>
                     </Select>
                     <Select
@@ -1800,7 +1875,7 @@ export default function App() {
                     }}
                   />
                   <div className="composer-footer">
-                    <span>Shift ↵ 换行</span>
+                    <span></span>
                     <div>
                       {task && active(task) && (
                         <Button
@@ -1840,6 +1915,7 @@ export default function App() {
           )}
           {page === "databases" && (
             <Databases
+              key={connection.connection_id || "offline"}
               connected={connected}
               projects={projects}
               currentProject={currentProject}
@@ -1860,9 +1936,7 @@ export default function App() {
                   onClick={() => void configureCodex()}
                 >
                   <Cable size={16} />
-                  {integrationState === "saving"
-                    ? "正在配置…"
-                    : "自动写入MCP配置"}
+                  {integrationState === "saving" ? "正在配置…" : "写入配置"}
                 </Button>
                 <Button
                   variant="outline"
@@ -1890,21 +1964,11 @@ export default function App() {
                   {integration}
                 </p>
               )}
-              <details>
-                <summary>查看配置片段</summary>
-                <pre>{`[mcp_servers.ccbridge]\ncommand = "/Applications/CCBridge.app/Contents/MacOS/ccbridge"\nargs = ["mcp"]\ntool_timeout_sec = 960`}</pre>
-              </details>
-              <p className="hint">
-                写入后在Codex重新加载MCP。配置已保存不代表当前会话已加载工具。
-              </p>
             </Panel>
           )}
           {page === "updates" && (
             <>
-              <Panel
-                title="CCBridge 更新"
-                description="GitHub Releases · 更新包在安装前验证发布签名。"
-              >
+              <Panel title="CCBridge 更新">
                 <div className="update-hero">
                   <span className="brand-icon">
                     <Terminal size={27} />
@@ -1913,17 +1977,17 @@ export default function App() {
                     <h2>CCBridge {version}</h2>
                     <p className="muted">{architecture}</p>
                   </div>
-                  <Badge variant="outline">稳定通道</Badge>
+                  <Badge variant="outline"></Badge>
                 </div>
                 <div className="update-status">
                   {
                     {
-                      idle: "检查是否有新版本",
+                      idle: "未检查",
                       checking: "正在检查 GitHub…",
                       current: "你正在使用最新版本",
                       available: `发现新版本 ${update.version || ""}`,
-                      downloading: "正在下载并验证签名…",
-                      verified: "签名验证通过，更新已就绪",
+                      downloading: "下载中…",
+                      verified: "签名验证通过",
                       installing: "正在排空活动并安装…",
                       failed: "更新未完成，当前 App 保持可用",
                     }[updatePhase]
@@ -1935,7 +1999,17 @@ export default function App() {
                     <Markdown text={update.body} />
                   </details>
                 )}
-                {updatePhase === "downloading" && <Progress value={progress} />}
+                {updatePhase === "downloading" && (
+                  <div role="status">
+                    {updateTransfer.total > 0 && <Progress value={progress} />}
+                    <p className="hint">
+                      已下载 {bytes(updateTransfer.downloaded || 0)}
+                      {updateTransfer.total
+                        ? ` / ${bytes(updateTransfer.total)} · ${progress}%`
+                        : ""}
+                    </p>
+                  </div>
+                )}
                 <div className="toolbar">
                   <Button
                     variant="outline"
@@ -1972,10 +2046,6 @@ export default function App() {
                     </Button>
                   )}
                 </div>
-                <p className="hint">
-                  运行中的任务、审批、克隆或 MCP
-                  等待会阻止安装。请先完成活动，再安装；不会强制中断远端任务。
-                </p>
               </Panel>
             </>
           )}
@@ -1992,11 +2062,6 @@ export default function App() {
                         request("preferences_save", { auto_connect: v }).then(
                           () => {
                             setPreferences({ auto_connect: v });
-                            toast.success(
-                              v
-                                ? "已开启：下次启动连接上次账号"
-                                : "已关闭自动连接",
-                            );
                           },
                         ),
                       )
@@ -2007,7 +2072,7 @@ export default function App() {
                     <p className="hint">
                       {autoTarget.user && autoTarget.host
                         ? `下次启动连接：${autoTarget.user}@${autoTarget.host}:${autoTarget.port}`
-                        : "先保存服务器账号"}
+                        : "需要先保存一个服务器账号"}
                     </p>
                   </div>
                 </div>
@@ -2047,7 +2112,7 @@ export default function App() {
                 </p>
                 <div className="toolbar">
                   <Button variant="outline" onClick={() => setServerEdit(true)}>
-                    管理SSH密码
+                    管理 SSH 密码
                   </Button>
                   <Button
                     variant="outline"
@@ -2056,7 +2121,7 @@ export default function App() {
                       setAuthOpen(true);
                     }}
                   >
-                    本机Codeup
+                    本机 Codeup
                   </Button>
                   <Button
                     variant="outline"
@@ -2066,7 +2131,7 @@ export default function App() {
                       setAuthOpen(true);
                     }}
                   >
-                    服务器Codeup
+                    服务器 Codeup
                   </Button>
                 </div>
               </Panel>
@@ -2099,7 +2164,7 @@ export default function App() {
             </DialogTitle>
             <DialogDescription>
               {utilityDialog === "draft-project"
-                ? "仅用于此草稿，不改变MCP默认项目"
+                ? "仅本次新任务使用"
                 : listedPath || "先选择远端目录"}
             </DialogDescription>
           </DialogHeader>
@@ -2173,18 +2238,21 @@ export default function App() {
       <GitUpdate
         open={gitUpdateOpen}
         path={listedPath}
+        connectionId={connection.connection_id || ""}
+        onOperation={setGitOperation}
         onClose={() => setGitUpdateOpen(false)}
         onUpdated={() => {
           void browse(listedPath);
         }}
         onAuth={(url) => {
+          setGitUpdateOpen(false);
           setAuthUrl(url);
           setAuthScope("remote");
           setAuthOpen(true);
         }}
       />
       <CodeupAuth
-        key={`${connection.profile?.host}:${connection.profile?.user}:${connection.profile?.port}`}
+        key={connection.connection_id || "offline"}
         open={authOpen}
         onOpenChange={(v) => {
           setAuthOpen(v);
@@ -2230,6 +2298,28 @@ export default function App() {
         onClose={() => setBranchesOpen(false)}
         path={listedPath}
       />
+      <Confirm
+        open={!!localConfirm}
+        title="本机保存密码"
+        action={localConfirm?.action === "connect" ? "保存并连接" : "保存"}
+        onCancel={() => setLocalConfirm(null)}
+        onConfirm={() => {
+          const a = localConfirm?.action;
+          setLocalConfirm(null);
+          setStorageAck(true);
+          safe(
+            a === "connect"
+              ? connect(profile, true)
+              : a === "migrate"
+                ? migrateServer(true)
+                : saveServer(true),
+          );
+        }}
+      >
+        <p>
+          密码将明文保存在本机当前用户目录，同一用户运行的程序可读取。此提示只确认一次。
+        </p>
+      </Confirm>
       <Toaster
         theme={theme === "system" ? "system" : (theme as "light" | "dark")}
         richColors
@@ -2239,7 +2329,7 @@ export default function App() {
         <DialogContent className="server-dialog">
           <DialogHeader>
             <DialogTitle>SSH 服务器</DialogTitle>
-            <DialogDescription>保存你的SSH账号。</DialogDescription>
+            <DialogDescription></DialogDescription>
           </DialogHeader>
           <Field label="连接名称（可选）">
             {input("name", "text", "例如：我的开发服务器")}
@@ -2251,18 +2341,12 @@ export default function App() {
             <Field label="SSH 端口">{input("port", "number")}</Field>
             <Field label="用户名">{input("user")}</Field>
           </div>
-          <Field
-            label="密码"
-            hint={
-              profile.remember_password
-                ? "已保存，留空即可"
-                : "只在本次连接中使用"
-            }
-          >
+          <Field label="密码">
             <Input
               type="password"
               value={password}
               autoComplete="off"
+              placeholder={profile.remember_password ? "已保存，留空不变" : ""}
               onChange={(e) => setPassword(e.target.value)}
             />
           </Field>
@@ -2273,23 +2357,8 @@ export default function App() {
             />
             <Label>记住密码</Label>
           </div>
-          {profile.remember_password && (
-            <>
-              <p className="hint">密码保存在本机，仅当前Mac账号可访问。</p>
-              {profile.credential_store === "file" && !storageConsent && (
-                <label className="storage-warning">
-                  <input
-                    type="checkbox"
-                    checked={storageAck}
-                    onChange={(e) => setStorageAck(e.target.checked)}
-                  />
-                  我了解：本机保存不会弹钥匙串授权，但当前Mac账号下的其他程序可能读取密码。
-                </label>
-              )}
-            </>
-          )}
           <details>
-            <summary>高级设置 · 通常留空</summary>
+            <summary>高级</summary>
             <Field label="Runner 路径">{input("runner")}</Field>
             <Field label="Claude Code 路径">{input("claude")}</Field>
           </details>
@@ -2319,81 +2388,22 @@ export default function App() {
             ) && (
               <div className="migration">
                 <Button
-                  disabled={
-                    busy.has("migrate_password") ||
-                    (!storageConsent && !storageAck)
-                  }
+                  disabled={busy.has("migrate_password")}
                   variant="outline"
-                  onClick={() =>
-                    safe(
-                      request("migrate_password", {
-                        account_key: JSON.stringify([
-                          profile.host,
-                          profile.port,
-                          profile.user,
-                        ]),
-                        storage_ack: storageAck,
-                      }).then((r) => {
-                        if (r) {
-                          setProfile({
-                            ...r.profile,
-                            credential_store: "file",
-                          });
-                          setStorageConsent(true);
-                          setPassword("");
-                          setSaved((x) => ({
-                            ...x,
-                            [JSON.stringify([
-                              r.profile.host,
-                              r.profile.port,
-                              r.profile.user,
-                            ])]: r.profile,
-                          }));
-                          toast.success(r.message);
-                          setServerEdit(false);
-                        }
-                      }),
-                    )
-                  }
+                  onClick={() => safe(migrateServer())}
                 >
                   {busy.has("migrate_password")
                     ? "正在迁移…"
                     : "迁移此账号已保存的密码"}
                 </Button>
-                <p className="hint">
-                  只读取此账号的钥匙串密码并保存到本机，原副本保留；macOS可能要求一次授权。
-                </p>
+                <p className="hint">可能弹出钥匙串授权</p>
               </div>
             )}
           <DialogFooter>
             <Button
               variant="outline"
               disabled={connecting || busy.has("save_profile")}
-              onClick={() =>
-                safe(
-                  request("save_profile", {
-                    profile,
-                    password,
-                    storage_ack: storageAck,
-                  }).then((r) => {
-                    if (r) {
-                      setPassword("");
-                      setSaved((x) => ({
-                        ...x,
-                        [JSON.stringify([
-                          profile.host,
-                          profile.port,
-                          profile.user,
-                        ])]: profile,
-                      }));
-                      if (profile.credential_store === "file")
-                        setStorageConsent(true);
-                      toast.success("连接配置已保存");
-                      setServerEdit(false);
-                    }
-                  }),
-                )
-              }
+              onClick={() => safe(saveServer())}
             >
               保存配置
             </Button>
@@ -2431,7 +2441,7 @@ export default function App() {
                 )
               }
             >
-              确认允许全自动
+              允许全自动
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2440,9 +2450,7 @@ export default function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>确认 SSH 主机身份</DialogTitle>
-            <DialogDescription>
-              请通过可信渠道核对服务器指纹。确认后才会保存并重新连接。
-            </DialogDescription>
+            <DialogDescription>核对指纹后再信任</DialogDescription>
           </DialogHeader>
           <pre>{hostKey}</pre>
           <DialogFooter>
@@ -2458,11 +2466,11 @@ export default function App() {
                 if (fingerprint) {
                   patch("fingerprint", fingerprint);
                   setHostKey("");
-                  toast.info("已填入指纹，请再次连接确认。");
+                  safe(connect({ ...profile, fingerprint }));
                 }
               }}
             >
-              信任此指纹
+              信任并连接
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2470,21 +2478,24 @@ export default function App() {
       <Dialog
         open={cloneOpen}
         onOpenChange={(open) => {
-          if (!busy.has("clone_repository")) setCloneOpen(open);
+          setCloneOpen(open);
         }}
       >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>克隆仓库</DialogTitle>
             <DialogDescription>
-              仓库将克隆到 {path}。每行一个 HTTPS 地址，已有目录不会覆盖。
+              克隆到{" "}
+              {cloneOperation.snap?.state === "running"
+                ? cloneOperation.snap.path.split("/").pop()
+                : listedPath.split("/").pop()}
             </DialogDescription>
           </DialogHeader>
           <Textarea
             value={cloneUrls}
             disabled={busy.has("clone_repository")}
             onChange={(e) => setCloneUrls(e.target.value)}
-            placeholder="https://github.com/owner/repository.git"
+            placeholder="每行一个 HTTPS 地址"
           />
           <Label>获取方式</Label>
           <Select
@@ -2496,8 +2507,8 @@ export default function App() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="local">本机获取，再通过SSH传输</SelectItem>
-              <SelectItem value="remote">服务器直接获取</SelectItem>
+              <SelectItem value="local">本机获取</SelectItem>
+              <SelectItem value="remote">服务器获取</SelectItem>
             </SelectContent>
           </Select>
           <Button
@@ -2508,42 +2519,10 @@ export default function App() {
               setAuthOpen(true);
             }}
           >
-            配置 Codeup 认证 / 检测仓库访问
+            认证
           </Button>
-          {(busy.has("clone_repository") ||
-            cloneProgress.stage ||
-            cloneError) && (
-            <div className="space-y-2" aria-live="polite">
-              {busy.has("clone_repository") && (
-                <ProgressPrimitive.Root
-                  value={null}
-                  aria-label="仓库克隆进行中"
-                  className="h-2 w-full overflow-hidden rounded-full bg-primary/15"
-                >
-                  <ProgressPrimitive.Indicator className="h-full w-1/3 animate-pulse rounded-full bg-primary" />
-                </ProgressPrimitive.Root>
-              )}
-              {!cloneError && (
-                <p role="status">
-                  {cloneProgress.stage}
-                  {busy.has("clone_repository") &&
-                    ` · ${Math.floor(cloneElapsed / 60)}:${String(cloneElapsed % 60).padStart(2, "0")}`}
-                  {cloneProgress.total > 0 &&
-                    ` · 已处理 ${cloneProgress.completed}/${cloneProgress.total} 个仓库`}
-                </p>
-              )}
-              {cloneError && (
-                <p role="alert" className="text-destructive">
-                  {cloneError}
-                </p>
-              )}
-              {busy.has("clone_repository") && (
-                <p className="hint">
-                  正在执行，请勿重复提交；本机 Git 认证可能需要系统钥匙串授权。
-                </p>
-              )}
-            </div>
-          )}
+          <OperationBar operation={cloneOperation.snap} />
+          {cloneError && <InlineAlert>{cloneError}</InlineAlert>}
           {cloneResults.map((r) => (
             <p key={r.path} className="hint">
               {r.name} ·{" "}
@@ -2551,18 +2530,14 @@ export default function App() {
             </p>
           ))}
           <DialogFooter>
-            <Button
-              disabled={busy.has("clone_repository")}
-              variant="outline"
-              onClick={() => setCloneOpen(false)}
-            >
+            <Button variant="outline" onClick={() => setCloneOpen(false)}>
               取消
             </Button>
             <Button
               disabled={!cloneUrls.trim() || busy.has("clone_repository")}
               onClick={() => void cloneRepositories()}
             >
-              {busy.has("clone_repository") ? "正在克隆…" : "克隆到当前目录"}
+              {busy.has("clone_repository") ? "进行中…" : "克隆"}
             </Button>
           </DialogFooter>
         </DialogContent>
