@@ -159,5 +159,5 @@ it("renders rate limits as an actionable state without inventing a reset time", 
         },
       ],
     }),
-  ).toContain("12:30");
+  ).toContain(new Date(1792643400 * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }));
 });
