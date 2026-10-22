@@ -74,6 +74,19 @@ export function RemoteModelSelect({
     </Select>
   );
 }
+export function quotaReset(w: Record<string, any>): number | null {
+  if (
+    typeof w.resets_at === "number" &&
+    Number.isFinite(w.resets_at) &&
+    w.resets_at > 0
+  )
+    return w.resets_at;
+  if (typeof w.resets_at_iso === "string") {
+    const ms = Date.parse(w.resets_at_iso);
+    if (Number.isFinite(ms)) return ms / 1000;
+  }
+  return null;
+}
 export function ClaudeUsage({
   connected,
   data,
@@ -86,9 +99,6 @@ export function ClaudeUsage({
   refresh: () => void;
 }) {
   const windows = data.windows || {};
-  const observed = Object.values(windows)
-    .map((w: any) => w.observed_at)
-    .filter(Boolean) as number[];
   return (
     <section className="claude-usage">
       <div className="section-heading">
@@ -106,14 +116,41 @@ export function ClaudeUsage({
       {!supported && (
         <p className="hint">{connected ? "更新 Runner 后获取" : "未连接"}</p>
       )}
+      {supported && data.state === "not_applicable" && (
+        <p className="hint">当前登录方式不提供订阅额度。</p>
+      )}
       {supported &&
-        (["five_hour", "seven_day"] as const).map((key) => {
+        data.state !== "not_applicable" &&
+        (
+          [
+            "five_hour",
+            "seven_day",
+            ...(
+              [
+                "seven_day_opus",
+                "seven_day_sonnet",
+                "seven_day_oauth_apps",
+              ] as const
+            ).filter((key) => windows[key]),
+          ] as const
+        ).map((key) => {
           const w = windows[key];
-          const expired = w && w.resets_at <= Date.now() / 1000;
+          const reset = w ? quotaReset(w) : null;
+          const expired = reset !== null && reset <= Date.now() / 1000;
           return (
             <StatusRow
               key={key}
-              label={key === "five_hour" ? "5 小时" : "每周"}
+              label={
+                key === "five_hour"
+                  ? "5 小时"
+                  : key === "seven_day_opus"
+                    ? "每周 · Opus"
+                    : key === "seven_day_oauth_apps"
+                      ? "每周 · 第三方应用"
+                      : key === "seven_day_sonnet"
+                        ? "每周 · Sonnet"
+                        : "每周"
+              }
             >
               {!supported ? (
                 <span className="muted">更新 Runner 后获取</span>
@@ -123,24 +160,50 @@ export function ClaudeUsage({
                     ? "读取中…"
                     : data.error
                       ? "读取失败"
-                      : "未上报"}
+                      : data.state === "unrecognized"
+                        ? "上报格式不支持"
+                        : data.state === "unavailable"
+                          ? "Claude 未返回额度"
+                          : "暂无额度数据"}
                 </span>
               ) : expired ? (
                 <span className="muted">已到恢复时间 · 等待上报</span>
               ) : (
                 <div className="quota-value">
                   <span>
-                    {Math.round(w.used_percentage)}% 已用 · {time(w.resets_at)}{" "}
-                    恢复
+                    {Math.round(w.used_percentage)}% 已用
+                    {reset !== null ? ` · ${time(reset)} 恢复` : ""}
                   </span>
                   <Progress value={w.used_percentage} />
+                  {data.live === false && w.observed_at && (
+                    <small className="muted">
+                      上报于 {time(w.observed_at)}
+                    </small>
+                  )}
                 </div>
               )}
             </StatusRow>
           );
         })}
-      {supported && observed.length > 0 && (
-        <p className="hint">最近上报 · {time(Math.min(...observed))}</p>
+      {supported && data.state !== "not_applicable" && (
+        <p className="hint">
+          {data.account_state === "not_applicable"
+            ? "Claude 未提供账户额度，当前为会话历史。"
+            : data.account_state === "unavailable"
+              ? "账户查询暂无数据，当前为会话历史。"
+              : data.source === "claude_account"
+                ? `Claude 账户 · ${time(data.checked_at)} 更新`
+                : data.state === "unrecognized"
+                  ? "额度事件缺少可识别的数值。"
+                  : Object.keys(windows).length
+                    ? "来源：会话历史，非账户实时查询。"
+                    : "近期 CCBridge 会话未上报额度。"}
+        </p>
+      )}
+      {data.live_error && (
+        <InlineAlert kind="warning">
+          {data.live_error} 当前显示会话历史。
+        </InlineAlert>
       )}
       {data.error && <InlineAlert>{data.error}</InlineAlert>}
     </section>

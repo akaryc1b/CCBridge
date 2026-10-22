@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use std::{
     fs,
-    io::Write,
+    io::{Read, Write},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -15,19 +15,21 @@ fn safe(p: &Path, private: bool) -> Result<()> {
         || m.uid() != unsafe { libc::geteuid() }
         || (private && m.permissions().mode() & 0o077 != 0)
     {
-        bail!("VPS 认证路径权限或归属异常，已停止操作")
+        bail!("VPS 认证路径权限或归属异常：{}，已停止操作", p.display())
     }
     Ok(())
 }
-fn paths(home: &Path) -> Result<(PathBuf, PathBuf)> {
+fn paths(home: &Path, create: bool) -> Result<(PathBuf, PathBuf)> {
     let mut p = home.to_path_buf();
     for component in [".local", "share", "ccbridge", "codeup-auth"] {
         p.push(component);
-        if !p.exists() {
+        if !p.exists() && create {
             use std::os::unix::fs::DirBuilderExt;
             fs::DirBuilder::new().mode(0o700).create(&p)?;
         }
-        safe(&p, component == "codeup-auth")?;
+        if fs::symlink_metadata(&p).is_ok() {
+            safe(&p, component == "codeup-auth")?;
+        }
     }
     for name in ["credentials", "helper.gitconfig"] {
         let f = p.join(name);
@@ -73,11 +75,39 @@ fn private_write(p: &Path, bytes: &[u8]) -> Result<()> {
     }
     result
 }
+// Inspect only our managed store; never return its password or raw URL.
+fn credential_username(path: &Path) -> Result<Option<String>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    fs::File::open(path)?
+        .take(64 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 64 * 1024 {
+        bail!("VPS 认证文件过大，请重新同步");
+    }
+    for line in String::from_utf8_lossy(&bytes).lines() {
+        if let Ok(url) = url::Url::parse(line) {
+            if url.scheme() == "https"
+                && url.host_str() == Some("codeup.aliyun.com")
+                && !url.username().is_empty()
+                && url.password().is_some_and(|p| !p.is_empty())
+            {
+                let encoded = format!("username={}", url.username().replace('+', "%2B"));
+                return Ok(url::form_urlencoded::parse(encoded.as_bytes())
+                    .next()
+                    .map(|(_, v)| v.into_owned()));
+            }
+        }
+    }
+    Ok(None)
+}
 pub fn rpc(v: &Value) -> Result<Value> {
     rpc_at(v, &home()?.canonicalize()?)
 }
 pub fn rpc_at(v: &Value, home: &Path) -> Result<Value> {
-    let (credentials, config) = paths(home)?;
+    let (credentials, config) = paths(home, v["op"] == "git_vps_auth_install")?;
     let config_text = config.to_str().context("VPS HOME 路径无效")?;
     let includes = git(
         home,
@@ -187,9 +217,12 @@ pub fn rpc_at(v: &Value, home: &Path) -> Result<Value> {
     let included = String::from_utf8(includes.stdout)?
         .lines()
         .any(|s| s == config_text);
-    Ok(
-        json!({"configured":included&&credentials.is_file()&&config.is_file(),"host":"codeup.aliyun.com","storage":"vps_private_file","message":if included&&credentials.is_file(){"VPS 配置已写入；请检测仓库访问以确认权限"}else{"VPS 尚未配置；可随时从 App 补同步，无需重新克隆"}}),
-    )
+    let username = credential_username(&credentials)?;
+    let configured = included && config.is_file() && username.is_some();
+    Ok(json!({"configured":configured,"included":included,
+        "entry_present":username.is_some(),"username":username,
+        "files_present":credentials.is_file() && config.is_file(),
+        "host":"codeup.aliyun.com","storage":"vps_private_file"}))
 }
 
 #[cfg(test)]
@@ -222,7 +255,7 @@ mod tests {
         assert!(!String::from_utf8_lossy(&other.stdout).contains("fixture-token"));
         req["secret"] = json!("fixture-new-token");
         rpc_at(&req, &home).unwrap();
-        let (cred, _) = paths(&home).unwrap();
+        let (cred, _) = paths(&home, true).unwrap();
         assert_eq!(
             fs::metadata(&cred).unwrap().permissions().mode() & 0o777,
             0o600
@@ -246,10 +279,28 @@ mod tests {
         fs::remove_dir_all(home).unwrap();
     }
     #[test]
+    fn status_is_read_only_and_detects_erased_credentials() {
+        let home = std::env::temp_dir().join(format!("ccb-status-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&home).unwrap();
+        let request = json!({"op":"git_vps_auth_status"});
+        assert_eq!(rpc_at(&request, &home).unwrap()["configured"], false);
+        assert!(!home.join(".local").exists());
+        rpc_at(&json!({"op":"git_vps_auth_install","server_storage_ack":true,"username":"fixture-user","secret":"fixture-token"}),&home).unwrap();
+        assert_eq!(rpc_at(&request, &home).unwrap()["username"], "fixture-user");
+        let (credentials, _) = paths(&home, false).unwrap();
+        fs::write(credentials, "").unwrap(); // Git erase after a rejected credential.
+        let state = rpc_at(&request, &home).unwrap();
+        assert_eq!(state["configured"], false);
+        assert_eq!(state["entry_present"], false);
+        assert_eq!(state["files_present"], true);
+        assert!(!state.to_string().contains("fixture-token"));
+        fs::remove_dir_all(home).unwrap();
+    }
+    #[test]
     fn rejects_symlink_credentials_and_line_injection() {
         let home = std::env::temp_dir().join(format!("ccb-auth-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&home).unwrap();
-        let (cred, _) = paths(&home).unwrap();
+        let (cred, _) = paths(&home, true).unwrap();
         std::os::unix::fs::symlink("/tmp", &cred).unwrap();
         assert!(rpc_at(&json!({"op":"git_vps_auth_status"}), &home).is_err());
         fs::remove_file(cred).unwrap();

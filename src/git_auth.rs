@@ -109,6 +109,41 @@ pub fn status(scope: &str, p: &Profile) -> Result<Value> {
         json!({"scope":scope,"configured":user.is_some(),"username":user,"host":"codeup.aliyun.com","storage":storage(&key(scope,p)?)?}),
     )
 }
+/// Configuration inspection only; does not invoke credential helpers or contact Codeup.
+pub fn check_configuration(scope: &str, p: &Profile) -> Result<Value> {
+    let mut result = status(scope, p)?;
+    if scope == "local" {
+        use std::io::Read;
+        let mut child = std::process::Command::new("git")
+            .args([
+                "config",
+                "--get-urlmatch",
+                "credential.helper",
+                "https://codeup.aliyun.com",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .context("无法检查本机 Git 配置")?;
+        let mut bytes = Vec::new();
+        let read = child
+            .stdout
+            .take()
+            .unwrap()
+            .take(16 * 1024 + 1)
+            .read_to_end(&mut bytes);
+        if read.is_err() || bytes.len() > 16 * 1024 {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("Git 凭据助手配置读取失败或过大");
+        }
+        result["helper_configured"] =
+            json!(child.wait()?.success() && bytes.iter().any(|b| !b.is_ascii_whitespace()));
+    }
+    result["checked_at"] = json!(now());
+    Ok(result)
+}
 #[cfg(target_os = "macos")]
 pub async fn save(scope: &str, p: &Profile, c: Credential, store: &str) -> Result<Value> {
     c.validate()?;
@@ -195,25 +230,53 @@ pub async fn for_vps(
     url: &str,
     draft: Option<Credential>,
 ) -> Result<Credential> {
-    host(url)?;
-    if let Some(c) = draft {
-        c.validate()?;
-        return Ok(c);
+    for_vps_from(scope, p, url, draft, "auto").await
+}
+pub async fn for_vps_from(
+    scope: &str,
+    p: &Profile,
+    url: &str,
+    draft: Option<Credential>,
+    source: &str,
+) -> Result<Credential> {
+    if !["auto", "input", "app", "git_helper"].contains(&source) {
+        bail!("请选择认证来源");
     }
-    if let Some(c) = load(scope, p).await? {
-        return Ok(c);
+    // Copying an explicit or App-saved host credential needs no repository path.
+    if url != "https://codeup.aliyun.com/" {
+        host(url)?;
     }
-    if scope != "local" {
-        bail!("App 尚未保存服务器档认证，请输入令牌或选择本机已有认证")
+    if source == "input" || source == "auto" {
+        if let Some(c) = draft {
+            c.validate()?;
+            return Ok(c);
+        }
+        if source == "input" {
+            bail!("请填写要同步的 Codeup 用户名和令牌");
+        }
+    }
+    if source == "app" || source == "auto" {
+        if let Some(c) = load(scope, p).await? {
+            return Ok(c);
+        }
+        if source == "app" {
+            bail!("App 尚未保存这份认证，请选择本机 Git 凭据助手或输入令牌");
+        }
+    }
+    if source != "git_helper" && scope != "local" {
+        bail!("App 尚未保存服务器档认证，请输入令牌或选择本机 Git 凭据助手")
     }
     // Ask the configured Git helper, not a shell/keychain export. No returned secret reaches UI/logs.
     let url = url.to_string();
     tokio::task::spawn_blocking(move || -> Result<Credential> {
-        use std::io::Write;
+        use std::io::{Read, Write};
+        use std::os::unix::process::CommandExt;
         use std::process::Stdio;
+        use std::time::{Duration, Instant};
         let parsed = url::Url::parse(&url)?;
         let mut child = std::process::Command::new("git")
             .args(["credential", "fill"])
+            .process_group(0)
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_ASKPASS", "/usr/bin/false")
             .env("GCM_INTERACTIVE", "Never")
@@ -228,11 +291,42 @@ pub async fn for_vps(
             )
             .as_bytes(),
         )?;
-        let out = child.wait_with_output()?;
-        if !out.status.success() {
+        let output = child.stdout.take().unwrap();
+        let reader = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            output
+                .take(16 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map(|_| bytes)
+        });
+        let group = child.id() as i32;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let state = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(40))
+                }
+                Ok(None) => {
+                    break Err(anyhow::anyhow!(
+                        "读取本机 Git 认证超时，请处理系统授权后重试"
+                    ));
+                }
+                Err(e) => break Err(e.into()),
+            }
+        };
+        // Terminate only this helper process group, including inherited pipe holders.
+        unsafe {
+            libc::kill(-group, libc::SIGKILL);
+        }
+        let _ = child.wait();
+        let bytes = reader
+            .join()
+            .map_err(|_| anyhow::anyhow!("Git 认证读取线程异常"))??;
+        if !state?.success() || bytes.len() > 16 * 1024 {
             bail!("本机 Git 助手没有可用认证，请在 App 输入 Codeup 用户名与令牌")
         }
-        let text = String::from_utf8(out.stdout)?;
+        let text = String::from_utf8(bytes).context("Git 助手返回的认证格式无效")?;
         let mut c = Credential {
             username: String::new(),
             secret: String::new(),
@@ -253,6 +347,31 @@ pub async fn for_vps(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn explicit_host_credential_sync_does_not_need_repository_url() {
+        let c = for_vps(
+            "local",
+            &Profile::default(),
+            "https://codeup.aliyun.com/",
+            Some(Credential {
+                username: "fixture".into(),
+                secret: "fixture-token".into(),
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(c.username, "fixture");
+        assert!(
+            for_vps(
+                "local",
+                &Profile::default(),
+                "https://other.example/",
+                Some(c)
+            )
+            .await
+            .is_err()
+        );
+    }
     #[test]
     fn git_protocol_and_remote_input_keep_secrets_out_of_commands() {
         let fallback = command(&["--version"], None, "codeup.aliyun.com");

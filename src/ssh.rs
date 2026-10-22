@@ -517,10 +517,20 @@ git_auth clone --progress -- {} "$dest"
         }
         // A human-enabled VPS credential becomes the default for server Git. Do not shadow it
         // with an older App copy, and never retry under another identity after auth failure.
-        if self.probe["runner_version"].as_str() == Some(env!("CARGO_PKG_VERSION")) {
+        if self.probe["runner_version"].as_str() == Some(env!("CARGO_PKG_VERSION"))
+            || self.probe["capabilities"].as_array().is_some_and(|caps| {
+                caps.iter()
+                    .any(|cap| cap == "claude_info_v1" || cap == "vps_auth_v1")
+            })
+        {
             let status = self.rpc(json!({"op":"git_vps_auth_status"})).await?;
             if status["configured"] == true {
                 return Ok(None);
+            }
+            if status["files_present"] == true {
+                bail!(
+                    "服务器 Codeup 凭据已失效或未接入 Git，请在 App 重新同步后检测；未改用另一份 App 凭据"
+                )
             }
         }
         crate::git_auth::load("remote", &self.profile).await

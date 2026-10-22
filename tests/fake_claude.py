@@ -9,7 +9,12 @@ if '--input-format' in args:
     assert request['type']=='control_request' and request['request']['subtype']=='initialize'
     assert '--no-session-persistence' in args
     print(json.dumps({'type':'control_response','response':{'subtype':'success','request_id':request['request_id'],'response':{'models':[{'value':'default','resolvedModel':'fixture-default'},{'value':'fixture-fast','displayName':'Fixture fast'}]}}}),flush=True)
-    time.sleep(30) # The probe must reap this process after initialize, without a user prompt.
+    followup=sys.stdin.readline() # Models probe closes here without any user prompt.
+    if followup:
+        request=json.loads(followup)
+        assert request['request']=={'subtype':'get_usage','skip_behaviors':True}
+        print(json.dumps({'type':'control_response','response':{'subtype':'success','request_id':request['request_id'],'response':{'rate_limits_available':True,'rate_limits':{'five_hour':{'utilization':10,'resets_at':'2026-10-22T22:30:00Z'}}}}}),flush=True)
+        time.sleep(30)
     sys.exit(0)
 prompt=sys.stdin.read()
 get=lambda flag:args[args.index(flag)+1] if flag in args else None

@@ -348,7 +348,11 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             serde_json::from_value(v["profile"].clone()).unwrap_or_default()
         };
         if op == "git_auth_status" {
-            return crate::git_auth::status(scope, &p);
+            let scope = scope.to_string();
+            return tokio::task::spawn_blocking(move || {
+                crate::git_auth::check_configuration(&scope, &p)
+            })
+            .await?;
         }
         if op == "git_auth_migrate" {
             crate::secret_store::confirm_consent(v["storage_ack"] == true)?;
@@ -673,10 +677,15 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             bail!("VPS 认证检测只能在 App 操作")
         }
         let mut r = c.git_access(field(&v, "url")?, None).await.map_err(|e| {
-            let text=format!("{e:#}");
-            if text.contains("未取得 Codeup 认证") || text.contains("未通过认证") || text.contains("读取权限") {
-                anyhow::anyhow!("VPS 自身 Git 认证或仓库权限不足；请在此窗口点击‘同步到当前 VPS’或更新 VPS 令牌，并核对仓库地址与权限后再检测。本次未使用 Mac 凭据。")
-            } else { e.context("VPS 自身 Git 检测失败，本次未使用 Mac 凭据") }
+            let text = format!("{e:#}");
+            if text.contains("未取得 Codeup 认证")
+                || text.contains("未通过认证")
+                || text.contains("读取权限")
+            {
+                anyhow::anyhow!("服务器尚无此仓库的访问权限，请同步认证并核对仓库地址后重试。")
+            } else {
+                e.context("VPS 自身 Git 检测失败，本次未使用 Mac 凭据")
+            }
         })?;
         r["message"] = json!("VPS 自身 Git 认证检测通过，未注入 Mac 凭据");
         return Ok(r);
@@ -692,11 +701,14 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if !human {
             bail!("VPS 认证只能由人在 App 明确确认，不允许 MCP 写入凭据")
         }
-        if c.probe["runner_version"].as_str() != Some(env!("CARGO_PKG_VERSION")) {
-            bail!("请先更新当前账号 Runner")
-        }
+        // The RPC is the compatibility check. A patch-version difference does not
+        // invalidate this unchanged protocol (e.g. App 0.10.4 / Runner 0.10.2).
+        let status = c
+            .rpc(json!({"op":"git_vps_auth_status"}))
+            .await
+            .context("无法检查 VPS 认证配置；请检查连接及 Runner 是否支持此功能")?;
         if op == "git_vps_auth_status" {
-            return c.rpc(json!({"op":op})).await;
+            return Ok(status);
         }
         let account = format!("{}@{}:{}", c.profile.user, c.profile.host, c.profile.port);
         if v["vps_account"] != account {
@@ -715,11 +727,15 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 username: v["username"].as_str().unwrap_or("").into(),
                 secret: secret.into(),
             });
-        let cred = crate::git_auth::for_vps(
+        let cred = crate::git_auth::for_vps_from(
             v["scope"].as_str().unwrap_or("local"),
             &c.profile,
-            field(&v, "url")?,
+            v["url"]
+                .as_str()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("https://codeup.aliyun.com/"),
             draft,
+            v["credential_source"].as_str().unwrap_or("auto"),
         )
         .await?;
         return c.rpc(json!({"op":op,"server_storage_ack":true,"username":cred.username,"secret":cred.secret})).await;

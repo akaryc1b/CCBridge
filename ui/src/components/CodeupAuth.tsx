@@ -6,6 +6,13 @@ import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "./ui/select";
+import {
   Dialog,
   DialogContent,
   DialogHeader,
@@ -51,7 +58,8 @@ export function CodeupAuth({
     [vpsAccess, setVpsAccess] = useState<Data>({}),
     [busy, setBusy] = useState(""),
     [error, setError] = useState(""),
-    [confirmation, setConfirmation] = useState<Data | null>(null);
+    [confirmation, setConfirmation] = useState<Data | null>(null),
+    [syncSource, setSyncSource] = useState("git_helper");
   const generation = useRef(0);
   const runLock = useRef(false);
   useEffect(() => {
@@ -105,7 +113,7 @@ export function CodeupAuth({
     setAccess({});
     setVpsAccess({});
     setConfirmation(null);
-  }, [url, username, secret]);
+  }, [url, username, secret, syncSource]);
   const request = () => ({
     scope,
     url,
@@ -113,6 +121,7 @@ export function CodeupAuth({
     secret,
     storage: "file",
     vps_account: account,
+    credential_source: secret ? "input" : syncSource,
   });
   async function run(op: string, req: Data = request()) {
     if (runLock.current) return;
@@ -133,13 +142,16 @@ export function CodeupAuth({
         }),
       };
       if (op === "git_access") setAccess(checked);
+      else if (op === "git_auth_status")
+        setStatus({ ...r, manually_checked: true });
       else if (op === "git_vps_auth_test") setVpsAccess(checked);
       else if (op.startsWith("git_vps_auth_")) {
-        setVps(r);
+        setVps({ ...r, manually_checked: op === "git_vps_auth_status" });
         setVpsAccess({});
         setSecret("");
       } else {
         setStatus(r);
+        if (op === "git_auth_remove") setUsername("");
         setSecret("");
         setAccess({});
         if (["git_auth_save", "git_auth_migrate"].includes(op)) {
@@ -184,7 +196,9 @@ export function CodeupAuth({
     scope === "remote" && vps.configured
       ? "VPS 凭据"
       : status.configured
-        ? "App 已保存"
+        ? status.storage === "file"
+          ? "App 已保存"
+          : "App 旧版存档 · 需迁移"
         : scope === "local"
           ? "本机 Git 凭据助手"
           : "服务器 Git 凭据助手";
@@ -208,8 +222,8 @@ export function CodeupAuth({
           <div className="dialog-body">
             <div className="segmented">
               {[
-                ["local", "本机获取"],
-                ["remote", "服务器获取"],
+                ["local", "本机 Git"],
+                ["remote", "服务器 Git"],
               ].map(([v, l]) => (
                 <button
                   disabled={!!busy}
@@ -222,7 +236,7 @@ export function CodeupAuth({
               ))}
             </div>
             <div className="field">
-              <Label htmlFor="codeup-url">仓库地址</Label>
+              <Label htmlFor="codeup-url">仓库地址（访问检测时填写）</Label>
               <Input
                 id="codeup-url"
                 value={url}
@@ -231,18 +245,41 @@ export function CodeupAuth({
                 placeholder="https://codeup.aliyun.com/组织/仓库.git"
               />
             </div>
-            <StatusRow label="当前来源">
+            <StatusRow
+              label="认证配置"
+              action={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={disabled}
+                  onClick={() => void run("git_auth_status", { scope })}
+                >
+                  {busy === "git_auth_status"
+                    ? "检查中…"
+                    : status.manually_checked
+                      ? "已检查 · 再检查"
+                      : "检查配置"}
+                </Button>
+              }
+            >
               {status.loading ? (
                 "读取中…"
               ) : status.error ? (
                 <span className="text-destructive">{status.error}</span>
-              ) : (
+              ) : status.configured ||
+                (scope === "remote" && vps.configured) ? (
                 effective
+              ) : status.helper_configured ? (
+                "已配置本机 Git 助手"
+              ) : scope === "local" ? (
+                "未找到 App 凭据或 Git 助手"
+              ) : (
+                "App 未保存"
               )}
             </StatusRow>
             {!(scope === "remote" && vps.configured) && (
               <StatusRow
-                label="仓库访问"
+                label={scope === "local" ? "本机仓库访问" : "App 仓库访问"}
                 action={
                   <Button
                     variant="outline"
@@ -321,11 +358,11 @@ export function CodeupAuth({
                 : "未保存"}
             </StatusRow>
             <div className="section-title auth-vps-title">
-              <h3>当前 VPS</h3>
+              <h3>服务器认证</h3>
               <span className="muted">{account || "未连接"}</span>
             </div>
             <StatusRow
-              label="凭据"
+              label="服务器配置"
               action={
                 <Button
                   variant="ghost"
@@ -346,14 +383,28 @@ export function CodeupAuth({
               ) : vps.error ? (
                 <span className="text-destructive">读取失败</span>
               ) : vps.configured ? (
-                "已写入"
+                `已同步${vps.username ? ` · ${vps.username}` : ""}`
+              ) : vps.files_present && !vps.entry_present ? (
+                "凭据已失效 · 请重新同步"
+              ) : vps.entry_present && !vps.included ? (
+                "Git 配置未接入 · 请重新同步"
               ) : (
-                "未由 App 写入"
+                "未同步"
               )}
             </StatusRow>
             {vps.error && <InlineAlert>{vps.error}</InlineAlert>}
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!!busy || !connected || !!vps.loading}
+              onClick={() => void run("git_vps_auth_status", {})}
+            >
+              {vps.manually_checked
+                ? "已检查 · 再检查服务器配置"
+                : "检查服务器配置"}
+            </Button>
             <StatusRow
-              label="仓库访问"
+              label="服务器仓库访问"
               action={
                 <Button
                   variant="outline"
@@ -372,21 +423,57 @@ export function CodeupAuth({
               </span>
             </StatusRow>
             {vpsAccess.error && <InlineAlert>{vpsAccess.error}</InlineAlert>}
+            <div className="field">
+              <Label>同步来源</Label>
+              <Select
+                value={secret ? "input" : syncSource}
+                disabled={!!busy || !!secret}
+                onValueChange={setSyncSource}
+              >
+                <SelectTrigger aria-label="同步来源">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="git_helper">本机 Git 凭据助手</SelectItem>
+                  <SelectItem
+                    value="app"
+                    disabled={!status.configured || status.storage !== "file"}
+                  >
+                    当前 App 保存的认证
+                    {status.configured && status.storage !== "file"
+                      ? "（需迁移）"
+                      : ""}
+                  </SelectItem>
+                  {secret && (
+                    <SelectItem value="input">
+                      上方填写的用户名和令牌
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            </div>
             <Button
               variant="ghost"
               className="auth-write"
-              disabled={disabled || !connected || !!vps.loading || !url.trim()}
+              disabled={
+                disabled ||
+                !connected ||
+                !!vps.loading ||
+                (syncSource === "app" && !status.configured && !secret)
+              }
               onClick={() => confirm("git_vps_auth_install")}
             >
               <KeyRound size={14} />
-              {vps.configured ? "更新 VPS 凭据…" : "写入 VPS…"}
+              {vps.configured ? "重新同步到服务器…" : "同步到服务器…"}
             </Button>
             {busy && (
               <p role="status" className="muted flex items-center gap-2">
                 <Loader2 size={14} className="spin" />
                 {busy.includes("test") || busy === "git_access"
                   ? "检测中…"
-                  : "保存中…"}
+                  : busy.endsWith("status")
+                    ? "检查配置中…"
+                    : "保存中…"}
               </p>
             )}
             {error && <InlineAlert>{error}</InlineAlert>}
@@ -403,7 +490,7 @@ export function CodeupAuth({
               disabled={disabled || !username.trim() || !secret}
               onClick={() => confirm("git_auth_save")}
             >
-              {onSaved ? "保存并重试克隆" : "保存"}
+              {onSaved ? "保存并重试克隆" : "保存到 App"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -436,13 +523,11 @@ export function CodeupAuth({
             <code>~/.local/share/ccbridge/codeup-auth</code>
             <p className="muted">
               来源：
-              {confirmation?.request.secret
-                ? "输入的令牌"
-                : status.configured
-                  ? "App 已保存"
-                  : confirmation?.request.scope === "local"
-                    ? "本机 Git 凭据助手"
-                    : "未保存，请先输入令牌"}
+              {confirmation?.request.credential_source === "input"
+                ? "上方填写的用户名和令牌"
+                : confirmation?.request.credential_source === "app"
+                  ? "当前 App 保存的认证"
+                  : "本机 Git 凭据助手"}
             </p>
           </>
         ) : isRemove ? (
@@ -450,7 +535,9 @@ export function CodeupAuth({
             移除
             {confirmation?.op === "git_vps_auth_remove"
               ? ` ${account} 上由 CCBridge 写入的 VPS 凭据`
-              : " App 保存的凭据"}
+              : confirmation?.request.scope === "remote"
+                ? ` App 为 ${account} 保存的服务器档凭据`
+                : " App 本机档凭据"}
             ？
           </p>
         ) : (
