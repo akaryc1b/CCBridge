@@ -1766,7 +1766,7 @@ small {
 .status-row > span:first-child {
   color: var(--foreground);
 }
-.status-row button {
+.status-row [data-slot="button"] {
   height: 28px;
 }
 .form-two {
@@ -2153,4 +2153,7 @@ pre {
 .markdown pre {
   max-width: 100%;
   overflow: auto;
+}
+.form-two [data-slot="select-trigger"] {
+  width: 100%;
 }
