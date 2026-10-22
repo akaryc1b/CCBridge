@@ -584,6 +584,9 @@ export default function App() {
     await browserNavigation.current!(p);
   }
   const listedPath = listing.path || "";
+  const visibleEntries = (listing.entries || []).filter((entry: Data) =>
+    entry.name.toLowerCase().includes(fileFilter.toLowerCase()),
+  );
   const browsedProject = containingProject(
     listedPath,
     projects
@@ -1499,74 +1502,75 @@ export default function App() {
                     <span>分支</span>
                     <span>最近修改</span>
                   </div>
-                  {(listing.entries || [])
-                    .filter((e: Data) =>
-                      e.name.toLowerCase().includes(fileFilter.toLowerCase()),
-                    )
-                    .map((e: Data) => (
-                      <FileContextMenu
-                        key={e.path}
-                        entry={e}
-                        disabled={!locationReady}
-                        onAction={(action, entry) =>
-                          setFileOperation({ action, entry })
-                        }
+                  {visibleEntries.map((e: Data) => (
+                    <FileContextMenu
+                      key={e.path}
+                      entry={e}
+                      disabled={!locationReady}
+                      onAction={(action, entry) =>
+                        setFileOperation({ action, entry })
+                      }
+                    >
+                      <div
+                        className="file-row"
+                        onKeyDown={(event) => {
+                          if (!locationReady) return;
+                          if (event.key === "F2") {
+                            event.preventDefault();
+                            setFileOperation({ action: "rename", entry: e });
+                          } else if (
+                            event.metaKey &&
+                            event.key === "Backspace"
+                          ) {
+                            event.preventDefault();
+                            setFileOperation({ action: "trash", entry: e });
+                          }
+                        }}
                       >
-                        <div
-                          className="file-row"
-                          onKeyDown={(event) => {
-                            if (!locationReady) return;
-                            if (event.key === "F2") {
-                              event.preventDefault();
-                              setFileOperation({ action: "rename", entry: e });
-                            } else if (
-                              event.metaKey &&
-                              event.key === "Backspace"
-                            ) {
-                              event.preventDefault();
-                              setFileOperation({ action: "trash", entry: e });
-                            }
-                          }}
+                        <button
+                          disabled={!locationReady}
+                          onClick={() =>
+                            ["directory", "repository"].includes(e.kind)
+                              ? safe(browse(e.path))
+                              : safe(previewFile(e.path))
+                          }
                         >
-                          <button
-                            disabled={!locationReady}
-                            onClick={() =>
-                              ["directory", "repository"].includes(e.kind)
-                                ? safe(browse(e.path))
-                                : safe(previewFile(e.path))
-                            }
-                          >
-                            {e.kind === "file" ? (
-                              <FileText size={17} />
-                            ) : (
-                              <Folder size={17} />
-                            )}
-                            <span>{e.name}</span>
-                            {e.kind === "repository" && (
-                              <Badge variant="outline">Git</Badge>
-                            )}
-                            <small>
-                              {e.kind === "file"
-                                ? "文件"
-                                : e.kind === "symlink"
-                                  ? "链接"
-                                  : "文件夹"}
-                            </small>
-                          </button>
-                          <span className="file-branch">{e.branch || "—"}</span>
-                          <span className="file-modified">
-                            {e.modified_at ? time(e.modified_at) : "—"}
-                          </span>
-                          <FileActions
-                            entry={e}
-                            disabled={!locationReady}
-                            onAction={(action, entry) =>
-                              setFileOperation({ action, entry })
-                            }
-                          />
-                        </div>
-                      </FileContextMenu>
-                    ))}
+                          {e.kind === "file" ? (
+                            <FileText size={17} />
+                          ) : (
+                            <Folder size={17} />
+                          )}
+                          <span>{e.name}</span>
+                          {e.kind === "repository" && (
+                            <Badge variant="outline">Git</Badge>
+                          )}
+                          <small>
+                            {e.kind === "file"
+                              ? "文件"
+                              : e.kind === "symlink"
+                                ? "链接"
+                                : "文件夹"}
+                          </small>
+                        </button>
+                        <span className="file-branch">{e.branch || "—"}</span>
+                        <span className="file-modified">
+                          {e.modified_at ? time(e.modified_at) : "—"}
+                        </span>
+                        <FileActions
+                          entry={e}
+                          disabled={!locationReady}
+                          onAction={(action, entry) =>
+                            setFileOperation({ action, entry })
+                          }
+                        />
+                      </div>
+                    </FileContextMenu>
+                  ))}
+                  {fileFilter &&
+                    listing.entries?.length > 0 &&
+                    visibleEntries.length === 0 && (
+                      <p className="empty">没有匹配文件</p>
+                    )}
                   {!listing.entries?.length && (
                     <p className="empty">
                       {browsing
@@ -1578,6 +1582,7 @@ export default function App() {
                   )}
                 </div>
                 <div className="file-status">
+                  {fileFilter ? `${visibleEntries.length} / ` : ""}
                   {listing.entries?.length || 0}项
                   {listing.truncated ? " · 仅显示前1000项" : ""}
                 </div>
