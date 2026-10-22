@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { bytes, elapsed, time } from "./format";
+import { bytes, elapsed, time, gitResultSummary } from "./format";
 describe("visible operation values", () => {
   it("labels binary transfer units without rounding zero into a percentage", () => {
     expect(bytes(0)).toBe("0 B");
@@ -20,4 +20,15 @@ describe("visible operation values", () => {
     );
     expect(time(0, now)).toBe("未记录时间");
   });
+});
+
+it("separates skipped guards from failed updates without changing protocol state", () => {
+  expect(
+    gitResultSummary([
+      { state: "updated" },
+      { state: "unchanged" },
+      { state: "failed", code: "dirty" },
+      { state: "failed", code: "auth" },
+    ]),
+  ).toBe("已快进 1 · 已是最新 1 · 跳过 1 · 失败 1");
 });

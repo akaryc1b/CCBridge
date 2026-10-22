@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Loader2 } from "lucide-react";
 import { Progress } from "../ui/progress";
-import { elapsed, bytes, phaseText } from "@/lib/format";
+import { elapsed, bytes, phaseText, gitResultSummary } from "@/lib/format";
 export function InlineAlert({
   children,
   kind = "error",
@@ -65,6 +65,10 @@ export function OperationBar({
   if (!operation) return null;
   const o = operation;
   const running = o.state === "running";
+  const counts =
+    !running && Array.isArray(o.result?.results)
+      ? gitResultSummary(o.result.results)
+      : "";
   const summary =
     o.state === "partial"
       ? "部分完成"
@@ -85,9 +89,7 @@ export function OperationBar({
             : summary}
         </strong>
         {o.total > 0 && (
-          <span>
-            已处理 {o.processed}/{o.total}
-          </span>
+          <span>{counts || `已处理 ${o.processed}/${o.total}`}</span>
         )}
         <time>{elapsed((o.finished_at_ms || now) - o.started_at_ms)}</time>
       </div>

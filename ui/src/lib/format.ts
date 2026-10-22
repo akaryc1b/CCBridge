@@ -28,3 +28,23 @@ export const phaseText: Record<string, string> = {
   receiving: "接收对象",
   resolving: "解析对象",
 };
+
+export function gitResultSummary(results: Record<string, any>[]) {
+  const counts = { updated: 0, unchanged: 0, ahead: 0, skipped: 0, failed: 0 };
+  for (const row of results) {
+    if (row.blocked || ["dirty", "no_upstream"].includes(row.code))
+      counts.skipped++;
+    else if (row.state in counts) counts[row.state as keyof typeof counts]++;
+  }
+  const labels = {
+    updated: "已快进",
+    unchanged: "已是最新",
+    ahead: "本地领先",
+    skipped: "跳过",
+    failed: "失败",
+  };
+  return (Object.keys(counts) as (keyof typeof counts)[])
+    .filter((key) => counts[key] > 0)
+    .map((key) => `${labels[key]} ${counts[key]}`)
+    .join(" · ");
+}
