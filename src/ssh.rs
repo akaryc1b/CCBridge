@@ -62,7 +62,7 @@ pub async fn connect(p: Profile, password: String) -> Result<Connection> {
         Ok(h) => h,
         Err(e) => {
             let fp = seen.lock().unwrap().clone();
-            if !fp.is_empty() {
+            if !fp.is_empty() && fp != p.fingerprint {
                 bail!(
                     "HOST_KEY:{fp}\n服务器指纹未确认或与已保存值不一致。请通过管理员核对；不要盲目接受变化。"
                 )

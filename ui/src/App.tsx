@@ -14,7 +14,11 @@ import { Confirm } from "@/components/common/Confirm";
 import { useOperation } from "@/lib/useOperation";
 import { time, elapsed, bytes } from "@/lib/format";
 import { GitUpdate } from "@/components/GitUpdate";
-import { isConnecting, clearConnectionErrors } from "@/lib/connection";
+import {
+  isConnecting,
+  clearConnectionErrors,
+  hostKeyCandidate,
+} from "@/lib/connection";
 import { Workbench } from "@/components/Workbench";
 import { DropdownMenu as Menu } from "radix-ui";
 import { CodeupAuth } from "@/components/CodeupAuth";
@@ -216,7 +220,12 @@ export default function App() {
     [modelEdit, setModelEdit] = useState(false),
     [modelDraft, setModelDraft] = useState("");
   const [autoConfirm, setAutoConfirm] = useState(false),
-    [hostKey, setHostKey] = useState("");
+    [hostKey, setHostKey] = useState<{
+      fingerprint: string;
+      profile: Data;
+      ack: boolean;
+      secret: string;
+    } | null>(null);
   const [projects, setProjects] = useState<Data[]>([]),
     [listing, setListing] = useState<Data>({ entries: [] }),
     [path, setPath] = useState(""),
@@ -440,7 +449,12 @@ export default function App() {
         typeof e === "object" && e !== null && "message" in e
           ? String((e as Data).message)
           : String(e);
-      if (requestSequence.current.get(command) === sequence) {
+      if (
+        hostKeyCandidate(e) &&
+        ["connect_ssh", "auto_connect"].includes(command)
+      ) {
+        setErrors(clearConnectionErrors);
+      } else if (requestSequence.current.get(command) === sequence) {
         setErrors((old) => ({
           ...old,
           [command]: {
@@ -691,8 +705,15 @@ export default function App() {
               setAutoTarget(result.profile || {});
               // Do not replace an editor draft while startup connection is in flight.
             }
-          } catch {
-            /* single attempt; visible page error remains */
+          } catch (e) {
+            const fingerprint = hostKeyCandidate(e);
+            if (fingerprint)
+              setHostKey({
+                fingerprint,
+                profile: s.profile,
+                ack: s.local_storage_ack === true,
+                secret: "",
+              });
           }
         }
       })(),
@@ -733,7 +754,10 @@ export default function App() {
     let cleanup: (() => void) | undefined;
     let disposed = false;
     listen<Data>("backend-event", (e) => {
-      if (e.payload.response?.ok === false)
+      if (
+        e.payload.response?.ok === false &&
+        !hostKeyCandidate(e.payload.response.error)
+      )
         setErrors((x) => ({
           ...x,
           backend: { page: "servers", message: e.payload.response.error },
@@ -807,15 +831,19 @@ export default function App() {
       setServerEdit(false);
     }
   }
-  async function connect(nextProfile = profile, ack = storageAck) {
-    if (password && !storageConsent && !ack) {
+  async function connect(
+    nextProfile = profile,
+    ack = storageAck,
+    secret = password,
+  ) {
+    if (secret && !storageConsent && !ack) {
       setLocalConfirm({ action: "connect" });
       return;
     }
     try {
       const c = await request("connect_ssh", {
         profile: nextProfile,
-        password,
+        password: secret,
         storage_ack: ack,
       });
       if (c) {
@@ -831,11 +859,9 @@ export default function App() {
         if (ack) setStorageConsent(true);
       }
     } catch (e) {
-      const message =
-        typeof e === "object" && e !== null
-          ? String((e as Data).message)
-          : String(e);
-      if (message.includes("HOST_KEY:")) setHostKey(message);
+      const fingerprint = hostKeyCandidate(e);
+      if (fingerprint)
+        setHostKey({ fingerprint, profile: nextProfile, ack, secret });
     }
   }
   async function send() {
@@ -2670,31 +2696,56 @@ export default function App() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={!!hostKey} onOpenChange={(v) => !v && setHostKey("")}>
+      <Dialog open={!!hostKey} onOpenChange={(v) => !v && setHostKey(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>确认 SSH 主机身份</DialogTitle>
-            <DialogDescription>核对指纹后再信任</DialogDescription>
+            <DialogTitle>
+              {hostKey?.profile.fingerprint
+                ? "服务器身份已变化"
+                : "首次连接此服务器"}
+            </DialogTitle>
+            <DialogDescription>
+              {hostKey?.profile.fingerprint
+                ? "与已保存指纹不一致。请先向管理员核实，更换主机或密钥也可能导致变化。"
+                : "确认服务器指纹后，保存并继续连接。"}
+            </DialogDescription>
           </DialogHeader>
-          <pre>{hostKey}</pre>
+          <StatusRow label="服务器">
+            {hostKey?.profile.user}@{hostKey?.profile.host}:
+            {hostKey?.profile.port}
+          </StatusRow>
+          {hostKey?.profile.fingerprint && (
+            <StatusRow label="原指纹">
+              <code className="break-all">{hostKey.profile.fingerprint}</code>
+            </StatusRow>
+          )}
+          <StatusRow label="SHA256 指纹">
+            <code className="break-all">{hostKey?.fingerprint}</code>
+          </StatusRow>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setHostKey("")}>
+            <Button variant="outline" onClick={() => setHostKey(null)}>
               取消
             </Button>
             <Button
               onClick={() => {
-                const fingerprint = hostKey
-                  .split("HOST_KEY:")[1]
-                  ?.trim()
-                  .split(/\s/)[0];
-                if (fingerprint) {
-                  patch("fingerprint", fingerprint);
-                  setHostKey("");
-                  safe(connect({ ...profile, fingerprint }));
-                }
+                if (!hostKey) return;
+                const candidate = hostKey;
+                setHostKey(null);
+                safe(
+                  connect(
+                    {
+                      ...candidate.profile,
+                      fingerprint: candidate.fingerprint,
+                    },
+                    candidate.ack,
+                    candidate.secret,
+                  ),
+                );
               }}
             >
-              信任并连接
+              {hostKey?.profile.fingerprint
+                ? "已核实，更新并连接"
+                : "信任并连接"}
             </Button>
           </DialogFooter>
         </DialogContent>

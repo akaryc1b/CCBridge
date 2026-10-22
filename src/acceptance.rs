@@ -261,6 +261,15 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
             .to_string()
             .starts_with("HOST_KEY:")
     );
+    p.fingerprint = "SHA256:previous-server-key".into();
+    assert!(
+        ssh::connect(p.clone(), "test-only-password".into())
+            .await
+            .err()
+            .unwrap()
+            .to_string()
+            .starts_with("HOST_KEY:")
+    );
     p.fingerprint = fp;
     assert!(ssh::connect(p.clone(), "wrong".into()).await.is_err());
     let c = ssh::connect(p.clone(), "test-only-password".into()).await?;
