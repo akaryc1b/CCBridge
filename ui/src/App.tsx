@@ -1,4 +1,8 @@
-import { OperationBar, InlineAlert } from "@/components/common/Feedback";
+import {
+  OperationBar,
+  InlineAlert,
+  StatusRow,
+} from "@/components/common/Feedback";
 import { Confirm } from "@/components/common/Confirm";
 import { useOperation } from "@/lib/useOperation";
 import { time, elapsed, bytes } from "@/lib/format";
@@ -244,16 +248,17 @@ export default function App() {
   const [cloneId, setCloneId] = useState<string>();
   const [installId, setInstallId] = useState<string>();
   const [updateTransfer, setUpdateTransfer] = useState<Data>({});
+  const [updateStarted, setUpdateStarted] = useState(0);
   const [localConfirm, setLocalConfirm] = useState<null | { action: string }>(
     null,
   );
   const [previewName, setPreviewName] = useState("");
   const [tick, setTick] = useState(Date.now());
   useEffect(() => {
-    if (!tasks.some(active)) return;
+    if (!tasks.some(active) && updatePhase !== "downloading") return;
     const t = setInterval(() => setTick(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [tasks.some(active)]);
+  }, [tasks.some(active), updatePhase]);
 
   const [authUrl, setAuthUrl] = useState("");
   const [preferences, setPreferences] = useState<Data>({});
@@ -844,6 +849,11 @@ export default function App() {
     }
   }
   async function checkUpdate() {
+    setErrors((x) => {
+      const next = { ...x };
+      delete next.update;
+      return next;
+    });
     setUpdatePhase("checking");
     try {
       const r = await invoke<Data>("check_update");
@@ -858,6 +868,15 @@ export default function App() {
     }
   }
   async function downloadUpdate() {
+    setUpdateStarted(Date.now());
+    setTick(Date.now());
+    setUpdateTransfer({});
+    setProgress(0);
+    setErrors((x) => {
+      const next = { ...x };
+      delete next.update;
+      return next;
+    });
     setUpdatePhase("downloading");
     try {
       await invoke("download_update");
@@ -1999,49 +2018,70 @@ export default function App() {
             />
           )}
           {page === "codex" && (
-            <Panel title="Codex MCP">
-              <p
-                role={integrationState === "error" ? "alert" : "status"}
-                className={
-                  integrationState === "error" ? "text-destructive" : "muted"
-                }
-              >
-                {integration || mcpStatus.message || "正在检查配置…"}
-              </p>
-              <div className="toolbar">
-                <Button
-                  disabled={
-                    !installLocation.installed || integrationState === "saving"
-                  }
-                  onClick={() => void configureCodex()}
-                >
-                  <Cable size={16} />
-                  {integrationState === "saving" ? "正在配置…" : "写入配置"}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() =>
-                    safe(
-                      navigator.clipboard
-                        .writeText(
-                          `[mcp_servers.ccbridge]\ncommand = "/Applications/CCBridge.app/Contents/MacOS/ccbridge"\nargs = ["mcp"]\ntool_timeout_sec = 960`,
-                        )
-                        .then(() => toast.success("配置已复制"))
-                        .catch(() => toast.error("复制失败")),
-                    )
-                  }
-                >
-                  复制配置
-                </Button>
-              </div>
-            </Panel>
+            <div className="integration-panel">
+              <Panel title="Codex 接入">
+                <StatusRow label="Codex 配置">
+                  <span
+                    role={integrationState === "error" ? "alert" : "status"}
+                    className={
+                      integrationState === "error"
+                        ? "text-destructive"
+                        : "muted"
+                    }
+                  >
+                    {integration || mcpStatus.message || "正在检查配置…"}
+                  </span>
+                </StatusRow>
+                <div className="toolbar integration-actions">
+                  <Button
+                    disabled={
+                      !installLocation.installed ||
+                      integrationState === "saving"
+                    }
+                    onClick={() => void configureCodex()}
+                  >
+                    <Cable size={16} />
+                    {integrationState === "saving" ? "正在配置…" : "写入配置"}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      safe(
+                        navigator.clipboard
+                          .writeText(
+                            `[mcp_servers.ccbridge]\ncommand = "/Applications/CCBridge.app/Contents/MacOS/ccbridge"\nargs = ["mcp"]\ntool_timeout_sec = 960`,
+                          )
+                          .then(() => toast.success("配置已复制"))
+                          .catch(() => toast.error("复制失败")),
+                      )
+                    }
+                  >
+                    复制配置
+                  </Button>
+                </div>
+              </Panel>
+              <Panel title="提供的工具">
+                <div className="tool-tags">
+                  {[
+                    "connection_status",
+                    "project_list",
+                    "cc_start",
+                    "cc_reply",
+                    "cc_result",
+                    "git_update",
+                  ].map((name) => (
+                    <code key={name}>{name}</code>
+                  ))}
+                </div>
+              </Panel>
+            </div>
           )}
           {page === "updates" && (
-            <>
-              <Panel title="CCBridge 更新">
+            <div className="update-panel">
+              <Panel title="">
                 <div className="update-hero">
                   <span className="brand-icon">
-                    <Terminal size={27} />
+                    <Command size={27} />
                   </span>
                   <div>
                     <h2>CCBridge {version}</h2>
@@ -2053,7 +2093,7 @@ export default function App() {
                     {
                       idle: "未检查",
                       checking: "正在检查 GitHub…",
-                      current: "你正在使用最新版本",
+                      current: "未发现新版本",
                       available: `发现新版本 ${update.version || ""}`,
                       downloading: "下载中…",
                       verified: "签名验证通过",
@@ -2076,10 +2116,13 @@ export default function App() {
                       {updateTransfer.total
                         ? ` / ${bytes(updateTransfer.total)} · ${progress}%`
                         : ""}
+                      <span className="transfer-time">
+                        {elapsed(tick - updateStarted)}
+                      </span>
                     </p>
                   </div>
                 )}
-                <div className="toolbar">
+                <div className="toolbar integration-actions">
                   <Button
                     variant="outline"
                     disabled={[
@@ -2105,8 +2148,10 @@ export default function App() {
                         safe(
                           invoke("apply_update").catch((e) => {
                             setUpdatePhase("verified");
-                            toast.error(String(e));
-                            throw e;
+                            setErrors((x) => ({
+                              ...x,
+                              update: { page: "updates", message: String(e) },
+                            }));
                           }),
                         );
                       }}
@@ -2116,7 +2161,7 @@ export default function App() {
                   )}
                 </div>
               </Panel>
-            </>
+            </div>
           )}
           {page === "settings" && (
             <>
@@ -2342,6 +2387,9 @@ export default function App() {
         path={listedPath}
         connectionId={connection.connection_id || ""}
         onOperation={setBranchOperation}
+        onChanged={async () => {
+          await browse(listedPath);
+        }}
       />
       <Confirm
         open={!!localConfirm}

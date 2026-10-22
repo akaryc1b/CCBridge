@@ -1,5 +1,6 @@
 import { DropdownMenu as Menu } from "radix-ui";
-import { MoreHorizontal } from "lucide-react";
+import { StatusRow } from "./common/Feedback";
+import { MoreHorizontal, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,7 +67,8 @@ export function Databases({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
-    [checks, setChecks] = useState<Data>({});
+    [checks, setChecks] = useState<Data>({}),
+    [loaded, setLoaded] = useState(false);
   const run = async (fn: () => Promise<void>) => {
     if (busy) return;
     setBusy(true);
@@ -83,6 +85,7 @@ export function Databases({
     const r = await request("database_list", { workspace: w });
     if (r) {
       setData(r);
+      setLoaded(true);
       setBindings(r.bindings || []);
     }
   }
@@ -115,41 +118,29 @@ export function Databases({
   );
   return (
     <div className="space-y-5">
-      <div className="toolbar">
-        <Button
-          variant={tab === "connections" ? "secondary" : "ghost"}
+      <div className="segmented">
+        <button
+          className={tab === "connections" ? "chosen" : ""}
+          aria-pressed={tab === "connections"}
           onClick={() => setTab("connections")}
         >
           连接
-        </Button>
-        <Button
-          variant={tab === "mapping" ? "secondary" : "ghost"}
+        </button>
+        <button
+          className={tab === "mapping" ? "chosen" : ""}
+          aria-pressed={tab === "mapping"}
           onClick={() => setTab("mapping")}
         >
           项目映射
-        </Button>
+        </button>
       </div>
       {tab === "connections" && (
         <Card>
           <CardHeader>
             <CardTitle>数据库连接</CardTitle>
-            <CardDescription></CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex flex-wrap gap-3">
-              <Button
-                variant="outline"
-                disabled={!connected || busy}
-                onClick={() =>
-                  void run(async () => {
-                    const r = await request("database_detect", {});
-                    setRuntime(r);
-                    setNotice(r.notice);
-                  })
-                }
-              >
-                重新探测
-              </Button>
+            <div className="toolbar db-toolbar">
               <Button
                 disabled={!connected || busy}
                 onClick={() => {
@@ -168,31 +159,21 @@ export function Databases({
                 disabled={!connected || busy}
                 onClick={() => void run(() => load())}
               >
+                <RefreshCw size={14} />
                 刷新
               </Button>
             </div>
-            {runtime.candidates?.map((c: Data) => (
-              <div key={c.package_root} className="runtime-result">
-                <Badge variant={c.compatible ? "secondary" : "outline"}>
-                  {c.compatible ? "运行文件已找到" : "版本未验证"}
-                </Badge>
-                <p className="break-all">{c.package_root}</p>
-                <p className="hint">
-                  universal-db-mcp {c.version} · {c.source}
-                </p>
-              </div>
-            ))}
-            {runtime.registered?.map((r: Data) => (
-              <p key={r.name} className="hint">
-                已发现 Claude MCP：{r.name} · {r.command}
-              </p>
-            ))}
             {notice && (
               <p role="status" className="hint">
                 {notice}
               </p>
             )}
-            {data.connections.length === 0 && (
+            {!loaded && busy && (
+              <p role="status" className="hint">
+                读取连接…
+              </p>
+            )}
+            {loaded && data.connections.length === 0 && (
               <p className="hint">还没有数据库连接</p>
             )}
             {data.connections.map((d: Data) => (
@@ -299,6 +280,53 @@ export function Databases({
                 </div>
               </div>
             ))}
+            <StatusRow
+              label="数据库 MCP"
+              action={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={!connected || busy}
+                  onClick={() =>
+                    void run(async () => {
+                      const r = await request("database_detect", {});
+                      setRuntime(r);
+                      setNotice(r.notice);
+                    })
+                  }
+                >
+                  {busy ? "检测中…" : "检测"}
+                </Button>
+              }
+            >
+              <span className="muted" title={runtime.package_root || ""}>
+                {runtime.candidates?.some((c: Data) => c.compatible)
+                  ? `运行文件已找到 · ${runtime.candidates.find((c: Data) => c.compatible)?.version}`
+                  : connected
+                    ? !runtime.candidates
+                      ? busy
+                        ? "检测中…"
+                        : "未检测"
+                      : "未找到运行文件"
+                    : "未连接"}
+              </span>
+            </StatusRow>
+            {(runtime.candidates?.length > 0 ||
+              runtime.registered?.length > 0) && (
+              <details className="runtime-diagnostics">
+                <summary>探测结果</summary>
+                {runtime.candidates?.map((c: Data) => (
+                  <p key={c.package_root}>
+                    <code>{c.package_root}</code> · {c.version} · {c.source}
+                  </p>
+                ))}
+                {runtime.registered?.map((r: Data) => (
+                  <p key={r.name}>
+                    <code>{r.name}</code> · {r.command}
+                  </p>
+                ))}
+              </details>
+            )}
           </CardContent>
         </Card>
       )}

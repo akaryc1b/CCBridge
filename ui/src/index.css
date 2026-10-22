@@ -2083,3 +2083,57 @@ pre {
 .clone-source > button:last-child {
   margin-left: auto;
 }
+
+.integration-panel {
+  max-width: 800px;
+  margin: 0 auto;
+}
+.integration-actions {
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+.tool-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tool-tags code {
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+.db-toolbar {
+  justify-content: flex-end;
+}
+.runtime-diagnostics {
+  color: var(--muted-text);
+  font-size: 12px;
+}
+.runtime-diagnostics p {
+  padding: 5px 0;
+  overflow-wrap: anywhere;
+}
+
+.update-panel {
+  max-width: 800px;
+  margin: 0 auto;
+}
+.update-panel .update-hero {
+  flex-direction: column;
+  text-align: center;
+  padding: 30px 0 40px;
+  gap: 14px;
+}
+.update-panel .update-hero > div {
+  flex: none;
+}
+.update-panel .update-hero h2 {
+  margin-bottom: 5px;
+}
+.update-panel .update-status {
+  border: 0;
+  padding: 12px 0;
+}
+.transfer-time {
+  float: right;
+}

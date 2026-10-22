@@ -412,12 +412,14 @@ export function BranchDialog({
   path,
   connectionId,
   onOperation,
+  onChanged,
 }: {
   open: boolean;
   onClose: () => void;
   path: string;
   connectionId: string;
   onOperation?: (operation: Data) => void;
+  onChanged?: () => Promise<void>;
 }) {
   const [fetchId, setFetchId] = useState<string>();
   const operation = useOperation(
@@ -481,6 +483,8 @@ export function BranchDialog({
           : `已切换到 ${r.current}`,
       );
       setBranch("");
+      setRemote("");
+      await onChanged?.();
     } catch (e) {
       setError(errorText(e));
     } finally {
