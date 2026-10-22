@@ -1,121 +1,166 @@
+<div align="center">
+
+<img src="src-tauri/icons/128x128.png" alt="CCBridge" width="72" height="72">
+
 # CCBridge
 
+### 连接远端 Claude Code 的桌面工作台
+
+**在 Mac 上管理 SSH 项目，让 Codex 派发任务、持续对话、取回结果。**
+
+[![Version](https://img.shields.io/github/v/release/akaryc1b/CCBridge?color=blue&label=version)](https://github.com/akaryc1b/CCBridge/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-macOS-lightgrey)](#下载安装)
+[![Tauri](https://img.shields.io/badge/Tauri-2-orange)](https://tauri.app/)
 [![CI](https://github.com/akaryc1b/CCBridge/actions/workflows/ci.yml/badge.svg)](https://github.com/akaryc1b/CCBridge/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/akaryc1b/CCBridge)](https://github.com/akaryc1b/CCBridge/releases/latest)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-**在 Mac 上管理 SSH 项目，让 Codex 通过 MCP 调用远端 Claude Code。**
+**[下载安装](#下载安装) · [快速开始](#快速开始) · [功能特性](#功能特性) · [常见问题](#常见问题) · [使用指南](docs/USER_GUIDE.md)**
 
-CCBridge 将 SSH 连接、远端文件、Git 操作和 Claude 会话放在同一个桌面应用中。采用 Rust + Tauri 2，界面基于 React、shadcn/ui 与 Radix，不依赖 Electron。
+</div>
 
-```text
-Codex / MCP 客户端 ── stdio ── CCBridge Mac App
-                                  │ SSH
-                                  ▼
-                           当前账号的 Runner
-                                  │
-                           Claude Code / 项目
-```
+## 为什么选择 CCBridge？
 
-## 功能
+代码在服务器上，Codex 在本机，Claude Code 也已经能用了——不必再来回切换终端、搬运提示词和复制执行结果。
 
-- **SSH 连接**：账号密码登录、服务器指纹核对、本机保存密码、启动自动连接。
-- **项目与文件**：多项目、多仓库；目录浏览、文本预览、新建、重命名、移动、回收与恢复。
-- **Git 与 Codeup**：克隆进度、访问检测、认证保存、可选 VPS 认证同步、分支管理、只快进更新。
-- **Claude 会话**：按项目分组、Markdown 对话、多轮续聊、任务状态、审批或全自动执行。
-- **模型与额度**：从远端 Claude 获取可选模型；展示每轮实际模型，以及最近上报的五小时和每周额度。
-- **数据库 MCP**：项目可映射多个 MySQL / PostgreSQL 连接，按用途隔离，固定只读模式。
-- **桌面体验**：亮色 / 暗色 / 跟随系统；GitHub 签名应用内更新，保护运行中的任务。
+CCBridge 用你自己的 SSH 账号连接远端，为 Codex 提供 MCP 工具，把项目、文件、Git 和 Claude 会话集中在一个应用中。
 
-## 下载与安装
+- **连上就能协作** — 在 App 登录 SSH、安装当前账号 Runner，再一键配置 Codex MCP。
+- **对话可以继续** — 按项目整理会话，追问沿用原会话与目录，随时查看任务状态和结果。
+- **代码留在远端** — 在服务器克隆、浏览和更新仓库；一个项目可组织后端、Web 与移动端多个仓库。
+- **模型从远端获取** — 下拉选择 Claude 提供的模型，展示每轮实际模型和最近上报的额度。
+- **适合日常使用** — 本机保存密码、启动自动连接、亮暗主题和签名应用内更新。
 
-从 [最新 Release](https://github.com/akaryc1b/CCBridge/releases/latest) 下载对应安装包：
+## 界面预览
 
-| Mac 芯片 | 安装包 | 系统要求 |
-|---|---|---|
-| Apple Silicon（M 系列） | `CCBridge-macos-arm64.dmg` | macOS 12 或更高 |
-| Intel | `CCBridge-macos-x86_64.dmg` | macOS 12 或更高 |
+以下预览使用当前界面组件与演示数据，不包含真实服务器、账号或私有项目。
 
-打开 DMG，将 **CCBridge.app 拖入 Applications**，再从“应用程序”启动。后续在 App 的“应用更新”中升级，无需反复安装 DMG。ZIP 用于备用恢复。
+<table>
+<tr>
+<td align="center" width="50%"><img src="docs/images/workbench-light.png" alt="亮色工作台：项目、最近会话、运行环境与Claude额度" width="600"><br><strong>亮色工作台</strong></td>
+<td align="center" width="50%"><img src="docs/images/workbench-dark.png" alt="暗色工作台：统一中性色、项目导航与任务入口" width="600"><br><strong>暗色工作台</strong></td>
+</tr>
+</table>
 
-应用未使用 Developer ID 签名或 Apple 公证，首次打开可能需要按 macOS 提示允许。应用内更新使用独立签名验证；验证失败不会替换现用 App。
+## 下载安装
 
-Windows 尚未发布，计划见 [Windows 支持范围](docs/WINDOWS_SUPPORT.md)。
+### macOS
+
+要求 **macOS 12 或更高版本**。按芯片选择安装包：
+
+| Apple Silicon（M 系列） | Intel |
+|---|---|
+| [下载 ARM DMG](https://github.com/akaryc1b/CCBridge/releases/latest/download/CCBridge-macos-arm64.dmg) | [下载 Intel DMG](https://github.com/akaryc1b/CCBridge/releases/latest/download/CCBridge-macos-x86_64.dmg) |
+
+1. 打开 DMG，将 **CCBridge.app 拖入 Applications**。
+2. 从“应用程序”启动 CCBridge。
+3. 后续在“应用更新”中检查、下载并安装新版本，无需重复安装 DMG。
+
+应用未使用 Developer ID 签名或 Apple 公证，首次打开可能需要在 macOS 安全设置中允许。应用内更新使用独立签名验证，验证失败不替换当前 App。
+
+[全部版本与备用 ZIP](https://github.com/akaryc1b/CCBridge/releases) · [更新说明](docs/release-0.10.1.md)
+
+### 远端环境
+
+- 当前正式包提供 **Linux x86_64 Runner**，安装在 SSH 账号 HOME 下，不需要 sudo。
+- 服务器需已有可运行、已认证的 **Claude Code**；CCBridge 不复制 Claude 登录凭据。
+- Windows 桌面版尚未发布，见 [后续支持计划](docs/WINDOWS_SUPPORT.md)。
 
 ## 快速开始
 
-### 1. 连接服务器
+### 1. 连接并打开项目
 
-在“服务器”填写实际主机、SSH 端口、用户名和密码，首次连接核对服务器指纹。密码只在 App 输入，不要发送给模型或写入 MCP 配置。
+在“服务器”填写主机、实际 SSH 端口、用户名和密码，核对首次连接的服务器指纹。连接后安装当前账号 Runner，再到“项目与文件”打开已有目录，或创建项目并克隆仓库。
 
-远端需要已安装并完成认证的 **Claude Code**。CCBridge 不代装 Claude，也不复制 Claude 的登录凭据。
+一个项目可包含多个独立仓库，也可以只选择普通目录开展任务。
 
-### 2. 安装 Runner 并选择项目
+### 2. 接入 Codex
 
-连接后，在服务器页安装当前账号的 Runner；App 会显示版本和安装状态，同版本不会重复上传。正式包提供 Linux x86_64 Runner，不需要 sudo。
+在 **“Codex / MCP → 自动写入 MCP 配置”** 完成配置，再重新加载 ccbridge MCP 或新开 Codex 会话。其他任务正在运行时，等它们结束再重载。
 
-在“项目与文件”打开已有目录，或创建项目并克隆仓库。一个项目可以包含后端、Web、移动端等多个仓库。浏览目录与 MCP 默认项目分开管理，续聊保留原会话目录。
-
-### 3. 接入 Codex
-
-在“Codex / MCP”点击 **自动写入 MCP 配置**，然后重新加载该 MCP，或新开 Codex 会话。不要在其他任务运行时强行重载。
-
-手动配置时，将以下片段合并到 Codex 的 `config.toml`，不要覆盖整个文件：
-
-```toml
-[mcp_servers.ccbridge]
-command = "/Applications/CCBridge.app/Contents/MacOS/ccbridge"
-args = ["mcp"]
-tool_timeout_sec = 960
-```
-
-无需设置项目 `cwd`。其他 stdio MCP 客户端使用相同命令和参数。
-
-将 [调用规则示例](integration/AGENTS-snippet.md) 配置到项目约束后，可以直接说：
+将 [调用规则](integration/AGENTS-snippet.md) 加入对应项目的开发约束后，可以直接说：
 
 > 使用 Claude 分析这个项目的登录流程，只分析，不修改代码。
 
-模型执行前需确认连接和准确项目路径；多轮追问使用原会话，不能将“已派发”当作任务完成。
+> 沿用刚才的 Claude 会话，继续解释错误处理。
 
-## 需要了解的边界
+需要手动接入或使用其他 MCP 客户端时，见 [MCP 配置与工具说明](docs/USER_GUIDE.md#接入-codex)。
 
-- **全自动**：App 新任务默认选择全自动，但需用户先开启对应账号的授权。MCP 调用应显式指定模式；省略时协议默认审批，续聊沿用原模式。全自动可使用该 SSH 账号的文件、命令和网络权限，工作目录不是系统沙箱。
-- **代码同步**：远端 Claude 读取服务器上的代码；本机未提交内容不会自动上传。Git 更新只获取当前跟踪分支并快进，拒绝脏工作区、分叉等情况，不自动 stash、reset 或推送。
-- **认证作用域**：Mac 认证与 VPS 持久认证不同。若要在 VPS 普通终端或 Claude 中直接 `git pull`，需在 App 明确确认后同步到该 VPS 账号；克隆代码不会自动同步凭据。
-- **密码保存**：使用本机私有文件保存，不是加密保险库。同一系统账号的程序及管理员可能读取；首次保存会提示风险。VPS 保存认证同样需要明确确认。
-- **模型与用量**：模型列表来自远端，可刷新，无需为模型增减更新 App；远端 Claude Code 本身须支持相应模型。额度是当前账号 CCBridge 任务的最近上报，不是全部 Claude 客户端的实时账单。
-- **数据库权限**：固定只读保护不能代替数据库本身的 SELECT 权限；建议使用专用低权限账号。
+### 3. 选择模型与执行模式
 
-完整操作、MCP 工具和状态含义见 [使用指南](docs/USER_GUIDE.md)。
+模型从远端列表下拉选择；选择“跟随远端默认”即可沿用服务器默认模型。后续模型变化可刷新列表，不必为此重装 App。
 
-## 开发
+App 新任务默认选择全自动，需先由用户开启账号的全自动授权。MCP 调用应显式指定模式；省略模式时协议默认审批，续聊沿用原模式。
 
-需要 Rust 1.93.0、Node.js 22、pnpm 10、Git、Python 3；Mac 还需 Xcode 命令行工具和 macOS SDK。
+**全自动可使用该 SSH 账号的文件、命令和网络权限，工作目录不是系统沙箱。** 建议使用独立、低权限的 SSH 账号。
 
-```sh
-pnpm --dir ui install --frozen-lockfile
-pnpm --dir ui test
-pnpm --dir ui build
-cargo test --locked --no-default-features
-```
+## 功能特性
 
-默认测试使用隔离的 SSH / Git / Claude fixture，不需要真实账号。正式构建、完整集成测试和签名打包见 [构建与发布指南](docs/BUILDING.md)。
+### 连接与工作台
 
-| 目录 | 内容 |
-|---|---|
-| `src/` | Rust 核心、SSH、Runner、MCP 与状态管理 |
-| `src-tauri/` | Tauri 原生宿主与应用配置 |
-| `ui/` | React 界面与公共组件 |
-| `integration/` | MCP 接入与调用规则 |
-| `tests/` | 协议、Git、数据库等隔离测试 |
-| `docs/` | 使用、构建、UI 规范与版本说明 |
+- SSH 密码登录、服务器指纹核对、本机密码保存与启动自动连接。
+- 项目、最近会话、Runner / Claude 状态、默认模型与额度集中展示。
+- 亮色、暗色、跟随系统；原生 Mac 窗口控制。
 
-## 发布与贡献
+### 项目、文件与 Git
 
-GitHub Actions 分别构建 ARM 和 Intel，共用 Linux / 数据库检查，独立缓存和发布。**ARM 先发布，Intel 通过后追加到同一 Release**；更新清单合并保留两个平台。
+- 多项目、多仓库组织；目录浏览与只读文本预览。
+- 新建文件 / 文件夹、重命名、移动、移入回收区与恢复；同名目标不覆盖。
+- Codeup HTTPS 认证配置、已有 Git 认证复用、仓库访问检测、克隆进度。
+- 分支查看、创建与切换；Git 更新仅快进，拒绝脏工作区和分叉。
+- 可在 App 确认后同步认证到当前 VPS 账号，支持后续普通 `git pull`。
 
-欢迎通过 [Issues](https://github.com/akaryc1b/CCBridge/issues) 报告问题或提出建议。提交代码前阅读 [贡献指南](CONTRIBUTING.md)；涉及界面的改动遵循 [UI、状态与文案规范](docs/UI_GUIDELINES.md)。安全问题按 [SECURITY.md](SECURITY.md) 报告，不要公开凭据或私有会话。
+### Claude 会话与 MCP
+
+- 按项目分组、Markdown 对话、运行记录、任务状态查询和取消。
+- 同会话多轮追问，目录与模式随会话保留，不随 App 浏览目录改变。
+- 远端模型列表、下一轮模型选择与每轮实际模型展示。
+- 最近上报的五小时 / 每周额度、恢复时间与上报时间。
+- Codex MCP 自动配置；支持显式项目路由、UUID 幂等请求与增量事件。
+
+### 项目数据库
+
+- 一个项目映射多个 MySQL / PostgreSQL 连接，以用途别名区分。
+- 分别检查运行环境、MCP 握手和数据库连接。
+- 复用远端已安装的 universal-db-mcp，当前适配版本为 2.14.0，固定只读模式。
+
+## 常见问题
+
+### 本机代码会自动同步给 Claude 吗？
+
+不会。Claude 读取远端目录；本机修改需提交、推送，再在服务器更新。克隆支持服务器直接获取，或使用本机认证获取后经 SSH 传输代码。
+
+### 克隆成功后，为什么 VPS 的 `git pull` 仍缺认证？
+
+代码与认证分别管理。若希望 VPS 终端或 Claude 直接拉取，在 App 的 Codeup 认证窗口明确确认并同步到当前 VPS；以后也可补同步，不需要重新克隆。
+
+### 保存的密码安全吗？
+
+密码保存在本机私有文件中，不是加密保险库；同一系统账号下的程序及管理员可能读取。首次保存会提示风险。VPS 持久认证也需要明确确认，建议使用最小权限专用令牌。
+
+### 模型和用量是实时的吗？
+
+模型列表直接从远端 Claude 获取，支持刷新；远端 Claude Code 需支持相应模型。用量显示当前 SSH 账号 CCBridge 任务的**最近上报**，并非所有 Claude 客户端的实时费用账单。无上报时不会显示为 0%。
+
+### 更新会中断正在运行的任务吗？
+
+安装前检查远端任务并排空本地写入与 MCP 长调用；存在活动任务或无法确认状态时不安装。ARM 先发布，Intel 通过后追加到同一版本，更新包按架构匹配。
+
+## 文档与开发
+
+- [使用指南](docs/USER_GUIDE.md)：认证、文件、会话、数据库及 MCP 的详细操作。
+- [构建与发布](docs/BUILDING.md)：本地开发、隔离测试、打包与 CI/CD。
+- [贡献指南](CONTRIBUTING.md)：开发约束与提交流程。
+- [UI、状态与文案规范](docs/UI_GUIDELINES.md)：界面和交互的统一标准。
+- [安全报告](SECURITY.md)：安全问题与凭据处理边界。
+
+技术栈：**Rust · Tauri 2 · React · TypeScript · shadcn/ui · Radix**。不依赖 Electron。
+
+发现问题或有功能建议，请提交 [Issue](https://github.com/akaryc1b/CCBridge/issues)；请勿上传密码、令牌或私有会话。
+
+## 致谢
+
+感谢 [CC Switch](https://github.com/farion1231/cc-switch) 提供桌面交互与项目展示方面的参考，以及 Tauri、shadcn/ui、Radix 等开源项目。
 
 ## 许可证
 
-项目采用 [MIT License](LICENSE)。第三方许可证保留在 [licenses/](licenses/)、[SHADCN-EGUI-LICENSE](SHADCN-EGUI-LICENSE) 和 [UI 第三方说明](ui/THIRD-PARTY.md) 中。
+[MIT License](LICENSE)。第三方许可证见 [licenses/](licenses/)、[SHADCN-EGUI-LICENSE](SHADCN-EGUI-LICENSE) 和 [UI 第三方说明](ui/THIRD-PARTY.md)。

@@ -1530,8 +1530,10 @@ h3 {
   padding-top: 0;
 }
 .brand {
-  height: 72px;
-  font-size: 20px;
+  height: 44px;
+  padding: 0 10px;
+  gap: 8px;
+  font-size: 17px;
 }
 .sidebar nav button {
   height: 39px;
@@ -2155,24 +2157,90 @@ pre {
 }
 
 /* Claude account observations reuse the server section hierarchy. */
-.claude-usage { padding: 0 0 16px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
-.claude-usage .section-heading { display: flex; align-items: center; justify-content: space-between; }
-.claude-usage h3 { font-size: 15px; font-weight: 600; }
-.quota-value { display: grid; gap: 6px; width: 280px; max-width: 100%; }
-.quota-value [data-slot="progress"] { height: 4px; }
-.remote-model-select { max-width: 420px; min-width: 220px; }
+.claude-usage {
+  padding: 0 0 16px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+}
+.claude-usage .section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.claude-usage h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+.quota-value {
+  display: grid;
+  gap: 6px;
+  width: 280px;
+  max-width: 100%;
+}
+.quota-value [data-slot="progress"] {
+  height: 4px;
+}
+.remote-model-select {
+  max-width: 420px;
+  min-width: 220px;
+}
 
 /* Select portals must remain above their containing dialog, including on WebKit. */
-[data-slot="select-content"] { z-index: 60; }
-.window-drag-space { display: none; }
-.mac-chrome .sidebar { padding-top: 28px; }
-.mac-chrome .window-drag-space { display: block; position: absolute; top: 0; left: 0; width: 208px; height: 28px; }
-.mac-chrome .brand > * { pointer-events: none; }
-[data-tauri-drag-region] { user-select: none; }
-.workgrid aside { min-width: 0; }
-.workbench-model { display: grid; gap: 6px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
-.workbench-model > span:last-child { overflow-wrap: anywhere; color: var(--muted-text); }
-.workgrid .claude-usage .status-row { display: block; padding: 10px 0; }
-.workgrid .claude-usage .status-value { margin-top: 6px; display: block; }
-.workgrid .quota-value { width: 100%; }
-.workgrid .quota-value > span { font-size: 13px; overflow-wrap: anywhere; }
+[data-slot="select-content"] {
+  z-index: 60;
+}
+.window-drag-space {
+  display: none;
+}
+.mac-chrome .sidebar {
+  padding-top: 28px;
+}
+.mac-chrome .window-drag-space {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 208px;
+  height: 28px;
+}
+.mac-chrome .brand > * {
+  pointer-events: none;
+}
+[data-tauri-drag-region] {
+  user-select: none;
+}
+.workgrid aside {
+  min-width: 0;
+}
+.workbench-model {
+  display: grid;
+  gap: 6px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.workbench-model > span:last-child {
+  overflow-wrap: anywhere;
+  color: var(--muted-text);
+}
+.workgrid .claude-usage .status-row {
+  display: block;
+  padding: 10px 0;
+}
+.workgrid .claude-usage .status-value {
+  margin-top: 6px;
+  display: block;
+}
+.workgrid .quota-value {
+  width: 100%;
+}
+.workgrid .quota-value > span {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.app-icon {
+  display: block;
+  flex: none;
+  object-fit: contain;
+}

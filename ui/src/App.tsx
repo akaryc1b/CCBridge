@@ -1,3 +1,4 @@
+import { AppIcon } from "@/components/AppIcon";
 import { useClaudeInfo } from "@/lib/useClaudeInfo";
 import {
   ClaudeUsage,
@@ -56,7 +57,6 @@ import {
   MoreHorizontal,
   GitBranch,
   Search,
-  Command,
   FolderOpen,
   Server,
   FolderGit2,
@@ -955,9 +955,7 @@ export default function App() {
       <aside className="sidebar">
         <div className="window-drag-space" data-tauri-drag-region />
         <div className="brand" data-tauri-drag-region>
-          <span className="brand-icon">
-            <Command size={19} />
-          </span>
+          <AppIcon />
           <div>CCBridge</div>
         </div>
         <nav>
@@ -2149,9 +2147,7 @@ export default function App() {
             <div className="update-panel">
               <Panel title="">
                 <div className="update-hero">
-                  <span className="brand-icon">
-                    <Command size={27} />
-                  </span>
+                  <AppIcon size={56} />
                   <div>
                     <h2>CCBridge {version}</h2>
                     <p className="muted">{architecture}</p>
