@@ -87,7 +87,8 @@ export function CodeupAuth({
       .catch((e) => {
         if (seq === generation.current) setStatus({ error: errorText(e) });
       });
-    if (connected)
+    if (connected) {
+      setVps({ loading: true });
       invoke<Data>("git_vps_auth_status", { request: {} })
         .then((r) => {
           if (seq === generation.current) setVps(r);
@@ -95,7 +96,7 @@ export function CodeupAuth({
         .catch((e) => {
           if (seq === generation.current) setVps({ error: errorText(e) });
         });
-    else setVps({});
+    } else setVps({});
     return () => {
       generation.current++;
     };
@@ -329,7 +330,9 @@ export function CodeupAuth({
                 <Button
                   variant="ghost"
                   size="sm"
-                  disabled={!!busy || !connected || !vps.configured}
+                  disabled={
+                    !!busy || !connected || !vps.configured || vps.loading
+                  }
                   onClick={() => confirm("git_vps_auth_remove")}
                 >
                   移除…
@@ -338,6 +341,8 @@ export function CodeupAuth({
             >
               {!connected ? (
                 "未连接"
+              ) : vps.loading ? (
+                "读取中…"
               ) : vps.error ? (
                 <span className="text-destructive">读取失败</span>
               ) : vps.configured ? (
@@ -353,7 +358,9 @@ export function CodeupAuth({
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={!!busy || !connected || !url.trim()}
+                  disabled={
+                    !!busy || !connected || !!vps.loading || !url.trim()
+                  }
                   onClick={() => void run("git_vps_auth_test")}
                 >
                   检测
@@ -368,7 +375,7 @@ export function CodeupAuth({
             <Button
               variant="ghost"
               className="auth-write"
-              disabled={!!busy || !connected || !url.trim()}
+              disabled={!!busy || !connected || !!vps.loading || !url.trim()}
               onClick={() => confirm("git_vps_auth_install")}
             >
               <KeyRound size={14} />
@@ -428,7 +435,14 @@ export function CodeupAuth({
             </p>
             <code>~/.local/share/ccbridge/codeup-auth</code>
             <p className="muted">
-              来源：{confirmation?.request.secret ? "输入的令牌" : effective}
+              来源：
+              {confirmation?.request.secret
+                ? "输入的令牌"
+                : status.configured
+                  ? "App 已保存"
+                  : confirmation?.request.scope === "local"
+                    ? "本机 Git 凭据助手"
+                    : "未保存，请先输入令牌"}
             </p>
           </>
         ) : isRemove ? (

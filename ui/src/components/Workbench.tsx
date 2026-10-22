@@ -169,7 +169,11 @@ export function Workbench({
             <div className="status-row">
               <span>执行权限</span>
               <Badge variant="outline">
-                {connection.profile?.allow_auto ? "允许全自动" : "审批"}
+                {!connection.connected
+                  ? "未连接"
+                  : connection.profile?.allow_auto
+                    ? "允许全自动"
+                    : "审批"}
               </Badge>
             </div>
             <Button variant="ghost" onClick={() => onPage("servers")}>

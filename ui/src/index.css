@@ -1758,6 +1758,7 @@ small {
   flex-wrap: wrap;
 }
 .status-row {
+  margin-top: 0;
   min-height: 46px;
   border-bottom: 1px solid var(--line);
   font-size: 13px;
@@ -2046,6 +2047,7 @@ pre {
 }
 
 .compact-environment {
+  margin-bottom: 0;
   gap: 10px;
   padding: 10px 0;
   min-height: 44px;

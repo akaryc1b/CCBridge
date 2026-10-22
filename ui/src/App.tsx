@@ -155,10 +155,12 @@ function Panel({
 }) {
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        {description && <CardDescription>{description}</CardDescription>}
-      </CardHeader>
+      {(title || description) && (
+        <CardHeader>
+          {title && <CardTitle>{title}</CardTitle>}
+          {description && <CardDescription>{description}</CardDescription>}
+        </CardHeader>
+      )}
       <CardContent>{children}</CardContent>
     </Card>
   );
@@ -1152,7 +1154,7 @@ export default function App() {
           )}
           {page === "servers" && (
             <>
-              <Panel title="当前服务器">
+              <Panel title="">
                 <div className="server-row">
                   <div className="server-symbol">
                     <Server />
