@@ -6,11 +6,11 @@
 
 ## 开发
 
-使用 Rust 1.93、Node.js 22、pnpm 10。先阅读 README 构建步骤。Rust 核心在 `src/`，正式 GUI 在 `src-tauri/` 和 `ui/`；旧 egui 仅保留为开发回退。
+使用 Rust 1.93、Node.js 22、pnpm 10。先阅读 [构建、测试与发布](docs/BUILDING.md)。Rust 核心在 `src/`，正式 GUI 在 `src-tauri/` 和 `ui/`；旧 egui 仅保留为开发回退。
 
 默认测试使用临时 SSH / Git / Claude fixture，不能连接真实模型、账号或数据库。完整 SSH/MCP 验收先构建 release，并将 `CCBRIDGE_TEST_BIN` 指向同一源码版本的程序。
 
-不要提交 `dist*`、`target`、运行日志、用户配置、私钥或真实会话。数据库功能暂缓。
+不要提交 `dist*`、`target`、运行日志、用户配置、私钥或真实会话。数据库改动须提供隔离测试，不连接真实业务数据库。
 
 ## 发布
 
