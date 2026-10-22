@@ -2137,3 +2137,20 @@ pre {
 .transfer-time {
   float: right;
 }
+
+.messages {
+  overflow-x: hidden;
+}
+.message,
+.markdown {
+  min-width: 0;
+  max-width: 100%;
+}
+.markdown-table {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.markdown pre {
+  max-width: 100%;
+  overflow: auto;
+}

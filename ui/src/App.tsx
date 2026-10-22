@@ -175,6 +175,13 @@ function Markdown({ text }: { text: string }) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         skipHtml
+        components={{
+          table: ({ children }) => (
+            <div className="markdown-table">
+              <table>{children}</table>
+            </div>
+          ),
+        }}
         urlTransform={(u) => (/^https?:\/\//i.test(u) ? u : "")}
       >
         {text}
@@ -1727,13 +1734,19 @@ export default function App() {
                               <Sparkles size={16} />
                               Claude Code{" "}
                               <Badge variant="secondary">
-                                {displayModel(turn).actual}
+                                {Array.isArray(turn.events)
+                                  ? displayModel(turn).actual
+                                  : "读取中…"}
                               </Badge>
                               <span>
                                 {statusLabels[turn.state] || turn.state}
                               </span>
                             </div>
-                            {taskFailure(turn) ? (
+                            {!Array.isArray(turn.events) ? (
+                              <p role="status" className="muted">
+                                读取会话…
+                              </p>
+                            ) : taskFailure(turn) ? (
                               <InlineAlert>{taskFailure(turn)}</InlineAlert>
                             ) : turn.result ? (
                               <Markdown
