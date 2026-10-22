@@ -13,3 +13,7 @@
 ## 发布与保护
 
 构建发布遵循 CONTRIBUTING.md。现用App的活动任务、账号凭据与数据库配置不得因UI整改受损；不使用Developer ID。验收通过后更新现用App并发布GitHub：ARM先发布，x86随后追加，不等待Intel才发布ARM。
+
+## 后续 Windows 支持
+
+Windows 已纳入后续交付范围，具体平台计划见 [docs/WINDOWS_SUPPORT.md](docs/WINDOWS_SUPPORT.md)。当前 Mac 整改与发布继续推进，不以 Windows 为本轮发布前置条件。新增共享代码不得无条件依赖 macOS 路径、钥匙串或 Unix 命令；平台差异收敛到现有边界，共享核心与界面，不另建一套产品。

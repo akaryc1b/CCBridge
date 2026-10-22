@@ -375,7 +375,7 @@ export function CodeupAuth({
             <Button
               variant="ghost"
               className="auth-write"
-              disabled={!!busy || !connected || !!vps.loading || !url.trim()}
+              disabled={disabled || !connected || !!vps.loading || !url.trim()}
               onClick={() => confirm("git_vps_auth_install")}
             >
               <KeyRound size={14} />
