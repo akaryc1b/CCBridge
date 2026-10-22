@@ -264,14 +264,18 @@ export function GitUpdate({
             <>
               {(finished || reviewing) && (
                 <Button
-                  variant="outline"
+                  variant={
+                    finished && !failed.length && !completed
+                      ? "default"
+                      : "outline"
+                  }
                   disabled={checking}
                   onClick={() => void inspect(true)}
                 >
                   刷新
                 </Button>
               )}
-              {!completed && (
+              {!completed && (!finished || failed.length > 0) && (
                 <Button
                   disabled={
                     checking ||
