@@ -590,7 +590,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         return Ok(match guard.as_ref() {
             Some(c) => {
                 let mut r = c.info();
-                r["operations"] = json!({"git_update":crate::operations::snapshot(&state.operations,&c.profile.account_key(),&c.connection_id,None,Some("git_update"),None)});
+                r["operations"] = json!({"git_update":crate::operations::snapshot(&state.operations,&c.profile.account_key(),&c.connection_id,None,Some("git_update"),None),"branch_fetch":crate::operations::snapshot(&state.operations,&c.profile.account_key(),&c.connection_id,None,Some("branch_fetch"),None)});
                 r
             }
             None => {

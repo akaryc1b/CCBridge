@@ -411,11 +411,13 @@ export function BranchDialog({
   onClose,
   path,
   connectionId,
+  onOperation,
 }: {
   open: boolean;
   onClose: () => void;
   path: string;
   connectionId: string;
+  onOperation?: (operation: Data) => void;
 }) {
   const [fetchId, setFetchId] = useState<string>();
   const operation = useOperation(
@@ -425,6 +427,9 @@ export function BranchDialog({
     open || !!fetchId,
     fetchId,
   );
+  useEffect(() => {
+    if (operation.snap) onOperation?.(operation.snap);
+  }, [operation.snap]);
   const [info, setInfo] = useState<Data>({}),
     [branch, setBranch] = useState(""),
     [remote, setRemote] = useState(""),
@@ -437,11 +442,7 @@ export function BranchDialog({
     if (busy) return;
     setBusy(true);
     setError("");
-    setMessage(
-      op === "branch_fetch"
-        ? "正在获取 origin 引用，不合并代码…"
-        : "正在读取分支…",
-    );
+    setMessage(op === "branch_fetch" ? "正在获取远端…" : "正在读取分支…");
     try {
       const operation_id =
         op === "branch_fetch" ? crypto.randomUUID() : undefined;
@@ -490,7 +491,7 @@ export function BranchDialog({
     <Dialog
       open={open}
       onOpenChange={(v) => {
-        if (!v && !busy) onClose();
+        if (!v) onClose();
       }}
     >
       <DialogContent>
@@ -618,7 +619,7 @@ export function BranchDialog({
               快进同步到 {remote}
             </Button>
           )}
-          <Button variant="outline" onClick={onClose} disabled={busy}>
+          <Button variant="outline" onClick={onClose}>
             关闭
           </Button>
           <Button

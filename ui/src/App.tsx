@@ -240,6 +240,7 @@ export default function App() {
   );
   const [gitUpdateOpen, setGitUpdateOpen] = useState(false);
   const [gitOperation, setGitOperation] = useState<Data | null>(null);
+  const [branchOperation, setBranchOperation] = useState<Data | null>(null);
   const [cloneId, setCloneId] = useState<string>();
   const [installId, setInstallId] = useState<string>();
   const [updateTransfer, setUpdateTransfer] = useState<Data>({});
@@ -344,6 +345,9 @@ export default function App() {
   useEffect(() => {
     setGitOperation(connection.operations?.git_update || null);
   }, [connection.connection_id, connection.operations?.git_update?.revision]);
+  useEffect(() => {
+    setBranchOperation(connection.operations?.branch_fetch || null);
+  }, [connection.connection_id, connection.operations?.branch_fetch?.revision]);
   const currentProject =
     connection.profile?.active_remote_workspace ||
     profile.active_remote_workspace ||
@@ -962,6 +966,19 @@ export default function App() {
                 }}
               >
                 Git 更新 {gitOperation.processed}/{gitOperation.total || "…"}
+              </Button>
+            )}
+            {branchOperation?.state === "running" && (
+              <Button
+                className="op-chip"
+                variant="ghost"
+                onClick={() => {
+                  setPage("projects");
+                  safe(browse(branchOperation.path));
+                  setBranchesOpen(true);
+                }}
+              >
+                获取分支
               </Button>
             )}
             {cloneOperation.snap?.state === "running" && (
@@ -2324,6 +2341,7 @@ export default function App() {
         onClose={() => setBranchesOpen(false)}
         path={listedPath}
         connectionId={connection.connection_id || ""}
+        onOperation={setBranchOperation}
       />
       <Confirm
         open={!!localConfirm}
