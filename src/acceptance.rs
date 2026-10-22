@@ -2,7 +2,7 @@ use crate::{backend, common::*, ssh};
 use anyhow::{Context, Result};
 use russh::{
     Channel, ChannelId,
-    keys::{Algorithm, HashAlg, PrivateKey, ssh_key::rand_core::OsRng},
+    keys::{Algorithm, HashAlg, PrivateKey, ssh_key::rand_core::UnwrapErr},
     server::{self, Msg, Server as _, Session},
 };
 use serde_json::{Value, json};
@@ -38,10 +38,12 @@ impl server::Handler for TestServer {
     async fn channel_open_session(
         &mut self,
         ch: Channel<Msg>,
+        reply: server::ChannelOpenHandle,
         _: &mut Session,
-    ) -> Result<bool, Self::Error> {
+    ) -> Result<(), Self::Error> {
         self.data.insert(ch.id(), vec![]);
-        Ok(true)
+        reply.accept().await;
+        Ok(())
     }
     async fn exec_request(
         &mut self,
@@ -213,7 +215,7 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
     let fake = std::fs::canonicalize("tests/fake_claude.py")?;
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700))?;
-    let key = PrivateKey::random(&mut OsRng, Algorithm::Ed25519)?;
+    let key = PrivateKey::random(&mut UnwrapErr(getrandom::SysRng), Algorithm::Ed25519)?;
     let fp = key.public_key().fingerprint(HashAlg::Sha256).to_string();
     let config = Arc::new(server::Config {
         keys: vec![key],

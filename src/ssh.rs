@@ -1,9 +1,6 @@
 use crate::common::*;
 use anyhow::{Context, Result, bail};
-use russh::{
-    ChannelMsg, client,
-    keys::{HashAlg, ssh_key},
-};
+use russh::{ChannelMsg, client, keys::HashAlg};
 use serde_json::{Value, json};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,9 +13,9 @@ impl client::Handler for HostCheck {
     type Error = russh::Error;
     async fn check_server_key(
         &mut self,
-        key: &ssh_key::PublicKey,
+        key: &russh::keys::PublicKeyOrCertificate,
     ) -> std::result::Result<bool, Self::Error> {
-        let fp = key.fingerprint(HashAlg::Sha256).to_string();
+        let fp = key.public_key().fingerprint(HashAlg::Sha256).to_string();
         *self.seen.lock().unwrap() = fp.clone();
         Ok(!self.expected.is_empty() && self.expected == fp)
     }
@@ -776,5 +773,93 @@ impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for CountedReader<R> 
             }
         }
         r
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use russh::keys::{Algorithm, PrivateKey, ssh_key::rand_core::UnwrapErr};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    fn string(out: &mut Vec<u8>, bytes: &[u8]) {
+        out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+        out.extend_from_slice(bytes);
+    }
+    fn packet(payload: &[u8]) -> Vec<u8> {
+        let mut padding = 8 - (payload.len() + 5) % 8;
+        if padding < 4 {
+            padding += 8;
+        }
+        let mut out = ((payload.len() + padding + 1) as u32)
+            .to_be_bytes()
+            .to_vec();
+        out.push(padding as u8);
+        out.extend_from_slice(payload);
+        out.resize(out.len() + padding, 0);
+        out
+    }
+    #[tokio::test]
+    async fn malformed_x25519_is_an_error_not_a_panicked_client_task() {
+        for length in [0, 31, 32, 33] {
+            let key =
+                PrivateKey::random(&mut UnwrapErr(getrandom::SysRng), Algorithm::Ed25519).unwrap();
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut banner = String::new();
+                stream.read_line(&mut banner).await.unwrap();
+                stream
+                    .get_mut()
+                    .write_all(b"SSH-2.0-CCBridge-security-fixture\r\n")
+                    .await
+                    .unwrap();
+                let mut kex = vec![20];
+                kex.extend_from_slice(&[0; 16]);
+                for value in [
+                    "curve25519-sha256",
+                    "ssh-ed25519",
+                    "aes128-ctr",
+                    "aes128-ctr",
+                    "hmac-sha2-256",
+                    "hmac-sha2-256",
+                    "none",
+                    "none",
+                    "",
+                    "",
+                ] {
+                    string(&mut kex, value.as_bytes());
+                }
+                kex.extend_from_slice(&[0; 5]);
+                stream.get_mut().write_all(&packet(&kex)).await.unwrap();
+                let mut reply = vec![31];
+                string(&mut reply, &key.public_key().to_bytes().unwrap());
+                // Includes a 32-byte zero point, which also must be rejected.
+                string(&mut reply, &vec![0; length]);
+                string(&mut reply, &[]);
+                stream.get_mut().write_all(&packet(&reply)).await.unwrap();
+                let _ = tokio::io::copy(&mut stream, &mut tokio::io::sink()).await;
+            });
+            let attempt = tokio::spawn(client::connect(
+                Arc::new(client::Config::default()),
+                address,
+                HostCheck {
+                    expected: String::new(),
+                    seen: Arc::new(Mutex::new(String::new())),
+                },
+            ));
+            let result = tokio::time::timeout(Duration::from_secs(5), attempt)
+                .await
+                .expect("bounded SSH handshake")
+                .expect("client task must not panic");
+            assert!(
+                matches!(result, Err(russh::Error::Kex)),
+                "malformed or zero-point X25519 should return Kex, length={length}"
+            );
+            server.abort();
+            let _ = server.await;
+        }
     }
 }

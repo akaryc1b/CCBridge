@@ -20,3 +20,5 @@ databases.json
 /src-tauri/gen/
 
 git-auth.json
+
+/security-audit.json

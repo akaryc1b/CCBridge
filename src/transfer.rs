@@ -3,7 +3,7 @@ use anyhow::{Context, Result, bail};
 use std::{
     io::Read,
     path::PathBuf,
-    process::Stdio,
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 pub struct Bundle {
@@ -15,39 +15,61 @@ impl Drop for Bundle {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
-fn git(args: &[&str], cred: Option<&crate::git_auth::Credential>, host: &str) -> Result<()> {
-    let mut c = crate::git_auth::command(args, cred, host)
+const STDERR_LIMIT: usize = 64 * 1024;
+
+// Drain the whole pipe without retaining unbounded server/helper output.
+fn read_tail(mut reader: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut tail = Vec::with_capacity(STDERR_LIMIT);
+    let mut buffer = [0u8; 8192];
+    loop {
+        let n = match reader.read(&mut buffer) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if n == 0 {
+            return Ok(tail);
+        }
+        let discard = (tail.len() + n).saturating_sub(STDERR_LIMIT);
+        tail.drain(..discard);
+        tail.extend_from_slice(&buffer[..n]);
+    }
+}
+
+fn run_git(mut command: Command, duration: Duration) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+    // A dedicated group lets a timeout reap only this request's Git/helper processes.
+    command.process_group(0);
+    let mut c = command
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .context("无法启动本机 Git")?;
-    let mut o = c.stdout.take().unwrap();
-    let mut e = c.stderr.take().unwrap();
-    let out = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = o.read_to_end(&mut b);
-    });
-    let err = std::thread::spawn(move || {
-        let mut b = Vec::new();
-        let _ = e.read_to_end(&mut b);
-        b
-    });
-    let deadline = Instant::now() + Duration::from_secs(300);
-    let status = loop {
-        if let Some(s) = c.try_wait()? {
-            break s;
+    let group = c.id() as i32;
+    let e = c.stderr.take().unwrap();
+    let err = std::thread::spawn(move || read_tail(e));
+    let deadline = Instant::now() + duration;
+    let status = (|| -> Result<_> {
+        loop {
+            if let Some(s) = c.try_wait()? {
+                return Ok(s);
+            }
+            if Instant::now() >= deadline {
+                bail!("本机 Git 读取超时；请检查本机 Codeup 认证和网络")
+            };
+            std::thread::sleep(Duration::from_millis(40));
         }
-        if Instant::now() >= deadline {
-            let _ = c.kill();
-            let _ = c.wait();
-            bail!("本机 Git 读取超时；请检查本机 Codeup 认证和网络")
-        };
-        std::thread::sleep(Duration::from_millis(40));
-    };
-    let _ = out.join();
-    let errors = err.join().unwrap_or_default();
+    })();
+    // Also close inherited pipes held by helpers after Git exits, before joining the reader.
+    unsafe {
+        libc::kill(-group, libc::SIGKILL);
+    }
+    let _ = c.wait();
+    let errors = err
+        .join()
+        .map_err(|_| anyhow::anyhow!("Git 错误输出读取线程异常"))??;
+    let status = status?;
     if !status.success() {
         bail!(
             "本机 Git 无法获取仓库：{}",
@@ -55,6 +77,12 @@ fn git(args: &[&str], cred: Option<&crate::git_auth::Credential>, host: &str) ->
         )
     }
     Ok(())
+}
+fn git(args: &[&str], cred: Option<&crate::git_auth::Credential>, host: &str) -> Result<()> {
+    run_git(
+        crate::git_auth::command(args, cred, host),
+        Duration::from_secs(300),
+    )
 }
 pub fn local_failure(stderr: &str) -> &'static str {
     let e = stderr.to_ascii_lowercase();
@@ -153,6 +181,41 @@ rm -- "$bundle"
 mod tests {
     use super::*;
     use std::process::Command;
+    #[test]
+    fn output_tail_is_bounded_and_keeps_last_bytes() {
+        let mut input = vec![b'x'; 2 * 1024 * 1024];
+        input.extend_from_slice(b"fatal: authentication failed");
+        let tail = read_tail(std::io::Cursor::new(&input)).unwrap();
+        assert_eq!(tail.len(), STDERR_LIMIT);
+        assert_eq!(&tail, &input[input.len() - STDERR_LIMIT..]);
+        assert_eq!(read_tail(std::io::Cursor::new(b"short")).unwrap(), b"short");
+    }
+    #[test]
+    fn noisy_git_and_its_helpers_do_not_block_cleanup() {
+        let mut noisy = Command::new("sh");
+        noisy.args(["-c", "head -c 2097152 /dev/zero; head -c 2097152 /dev/zero >&2; printf 'authentication failed' >&2; exit 1"]);
+        assert!(
+            run_git(noisy, Duration::from_secs(5))
+                .unwrap_err()
+                .to_string()
+                .contains("认证")
+        );
+        let started = Instant::now();
+        let mut hung = Command::new("sh");
+        hung.args(["-c", "sleep 30 & wait"]);
+        assert!(
+            run_git(hung, Duration::from_millis(100))
+                .unwrap_err()
+                .to_string()
+                .contains("超时")
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+        // The helper retains stderr even though the direct child has exited.
+        let mut orphan_pipe = Command::new("sh");
+        orphan_pipe.args(["-c", "sleep 30 & exit 0"]);
+        run_git(orphan_pipe, Duration::from_secs(2)).unwrap();
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
     #[test]
     fn local_errors_identify_the_local_machine() {
         assert!(local_failure("fatal: could not read Username").contains("本机"));

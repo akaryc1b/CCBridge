@@ -15,7 +15,7 @@
 ## 发布
 
 1. 同步根 Cargo.toml、Cargo.lock、src-tauri/Cargo.toml、src-tauri/Cargo.lock、tauri.conf.json 与 ui/package.json 版本。
-2. 本机执行对应测试，推送代码并等待 CI。
+2. 本机执行对应测试与 SECURITY.md 中的安全检查，推送代码并等待 CI。新告警先核实目标/feature；豁免必须限定版本、依据和期限。
 3. 在通过检查的提交打 `vX.Y.Z` 标签。标签构建需要仓库 Secret `TAURI_SIGNING_PRIVATE_KEY`，密码可留空；公钥在 Tauri 配置中。
 4. CI 自动发布 ZIP、签名 tar.gz、sig、latest.json 与 Linux Runner。检查清单版本、平台 `darwin-aarch64`、HTTPS 下载 URL 与签名存在。
 5. Mac 实测从上一签名版本检查 → 下载并验签 → 安全排空 → 安装重启 → SSH/MCP 恢复。

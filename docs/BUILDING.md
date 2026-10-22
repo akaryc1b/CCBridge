@@ -13,6 +13,9 @@ pnpm --dir ui build
 cargo build --locked --release
 CCBRIDGE_TEST_BIN="$PWD/target/release/ccbridge" cargo test --locked
 cargo fmt --all -- --check
+python3 tests/security-audit-test.py
+python3 scripts/security-audit.py --output security-audit.json
+pnpm --dir ui audit --prod --audit-level=low
 cargo check --locked --manifest-path src-tauri/Cargo.toml
 ```
 
@@ -47,3 +50,5 @@ sh tests/linux-smoke.sh "$PWD/target/release/ccbridge"
 
 CI 不保存 SSH/数据库密码，不连接开发或生产服务器，不自动部署用户 Runner。GUI 登录与真实服务器验收在授权环境完成。维护说明见 [CONTRIBUTING.md](../CONTRIBUTING.md)。
 
+
+安全检查范围、按目标与版本限定的公告复核策略见 [SECURITY.md](../SECURITY.md)。

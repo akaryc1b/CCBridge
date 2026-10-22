@@ -57,7 +57,7 @@ CCBridge 用你自己的 SSH 账号连接远端，为 Codex 提供 MCP 工具，
 
 应用未使用 Developer ID 签名或 Apple 公证，首次打开可能需要在 macOS 安全设置中允许。应用内更新使用独立签名验证，验证失败不替换当前 App。
 
-[全部版本与备用 ZIP](https://github.com/akaryc1b/CCBridge/releases) · [更新说明](docs/release-0.10.1.md)
+[全部版本与备用 ZIP](https://github.com/akaryc1b/CCBridge/releases) · [更新说明](docs/release-0.10.2.md)
 
 ### 远端环境
 

@@ -1,0 +1,39 @@
+[
+  {
+    "package": "rmcp",
+    "version": "0.8.5",
+    "ids": [
+      "GHSA-33f5-2c5q-wgwj",
+      "GHSA-89vp-x53w-74fx",
+      "GHSA-9g45-5xwm-f3wc",
+      "GHSA-9pj6-vhgr-3mwh",
+      "GHSA-c9xm-49cp-xcr9",
+      "RUSTSEC-2026-0189"
+    ],
+    "scopes": [
+      "runner-linux",
+      "app-arm64",
+      "app-x86_64"
+    ],
+    "reason": "Both servers use stdio only (src/mcp.rs); HTTP server/client and OAuth transports are not enabled or called. Reassess before enabling them.",
+    "reference": "https://rustsec.org/advisories/RUSTSEC-2026-0189.html",
+    "reviewed": "2026-10-22",
+    "expires": "2026-11-21"
+  },
+  {
+    "package": "paste",
+    "version": "1.0.15",
+    "ids": [
+      "RUSTSEC-2024-0436"
+    ],
+    "scopes": [
+      "runner-linux",
+      "app-arm64",
+      "app-x86_64"
+    ],
+    "reason": "Unmaintained build-time macro, not a reported exploitable vulnerability. Track migration in the Tauri dependency chain.",
+    "reference": "https://rustsec.org/advisories/RUSTSEC-2024-0436.html",
+    "reviewed": "2026-10-22",
+    "expires": "2026-11-21"
+  }
+]
