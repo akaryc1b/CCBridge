@@ -1947,8 +1947,8 @@ export default function App() {
           )}
           {page === "codex" && (
             <Panel title="Codex MCP">
-              <p role="status" className="muted">
-                {mcpStatus.message || "正在检查配置…"}
+              <p role={integrationState === "error" ? "alert" : "status"} className={integrationState === "error" ? "text-destructive" : "muted"}>
+                {integration || mcpStatus.message || "正在检查配置…"}
               </p>
               <div className="toolbar">
                 <Button
@@ -1976,16 +1976,6 @@ export default function App() {
                   复制配置
                 </Button>
               </div>
-              {integration && (
-                <p
-                  role={integrationState === "error" ? "alert" : "status"}
-                  className={
-                    integrationState === "error" ? "text-destructive" : "hint"
-                  }
-                >
-                  {integration}
-                </p>
-              )}
             </Panel>
           )}
           {page === "updates" && (
@@ -1999,7 +1989,6 @@ export default function App() {
                     <h2>CCBridge {version}</h2>
                     <p className="muted">{architecture}</p>
                   </div>
-                  <Badge variant="outline"></Badge>
                 </div>
                 <div className="update-status">
                   {
@@ -2554,7 +2543,7 @@ export default function App() {
           ))}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCloneOpen(false)}>
-              取消
+              关闭
             </Button>
             <Button
               disabled={!cloneUrls.trim() || busy.has("clone_repository")}

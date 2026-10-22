@@ -26,6 +26,7 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 type Data = Record<string, any>;
 const empty = {
@@ -473,7 +474,7 @@ export function Databases({
             <DialogTitle>{form.id ? "编辑连接" : "新增数据库连接"}</DialogTitle>
             <DialogDescription>建议使用只读（SELECT）账号</DialogDescription>
           </DialogHeader>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="dialog-body"><div className="form-two">
             {field("name", "连接名称")}
             <div className="field">
               <Label>数据库类型</Label>
@@ -527,8 +528,11 @@ export function Databases({
               {error}
             </p>
           )}
+          </div>
+          <DialogFooter>
+          <Button variant="outline" disabled={busy} onClick={() => { setEditing(false); setForm(empty); }}>关闭</Button>
           <Button
-            disabled={busy}
+            disabled={busy || !form.name.trim() || !form.host.trim() || !form.user.trim() || !form.database.trim()}
             onClick={() =>
               void run(async () => {
                 await request("database_save", { connection: form });
@@ -546,6 +550,7 @@ export function Databases({
           >
             {busy ? "保存中…" : "保存连接"}
           </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
