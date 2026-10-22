@@ -157,7 +157,13 @@ export function GitUpdate({
             Git 更新
           </DialogTitle>
           <DialogDescription title={path}>
-            {path.split("/").pop()} · {plan.length} 个仓库{" "}
+            {path.split("/").pop()} ·{" "}
+            {snap && !reviewing
+              ? snap.total
+              : checking && !plan.length
+                ? "…"
+                : plan.length}{" "}
+            个仓库{" "}
             <Button
               variant="ghost"
               size="icon"

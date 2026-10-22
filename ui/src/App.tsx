@@ -994,7 +994,8 @@ export default function App() {
                   setGitUpdateOpen(true);
                 }}
               >
-                Git 更新 {gitOperation.processed}/{gitOperation.total || "…"}
+                Git 更新{gitOperation.source === "mcp" ? "（MCP）" : ""}{" "}
+                {gitOperation.processed}/{gitOperation.total || "…"}
               </Button>
             )}
             {branchOperation?.state === "running" && (
