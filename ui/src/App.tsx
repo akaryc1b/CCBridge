@@ -350,7 +350,8 @@ export default function App() {
     !!claudeInfoSupported,
   );
   useEffect(() => {
-    if (page === "servers" && connected) void claudeInfo.refreshUsage();
+    if (["servers", "overview"].includes(page) && connected)
+      void claudeInfo.refreshUsage();
   }, [page, task?.updated_at]);
   const selectedModelId =
     modelPolicy === "explicit"
@@ -948,9 +949,12 @@ export default function App() {
     />
   );
   return (
-    <div className="app">
+    <div
+      className={`app ${navigator.platform.toLowerCase().includes("mac") ? "mac-chrome" : ""}`}
+    >
       <aside className="sidebar">
-        <div className="brand">
+        <div className="window-drag-space" data-tauri-drag-region />
+        <div className="brand" data-tauri-drag-region>
           <span className="brand-icon">
             <Command size={19} />
           </span>
@@ -1008,8 +1012,10 @@ export default function App() {
         </div>
       </aside>
       <main>
-        <header>
-          <h1>{pages.find((p) => p[0] === page)?.[1]}</h1>
+        <header data-tauri-drag-region>
+          <h1 data-tauri-drag-region>
+            {pages.find((p) => p[0] === page)?.[1]}
+          </h1>
           <div className="page-actions">
             {gitOperation?.state === "running" && (
               <Button
@@ -1214,6 +1220,18 @@ export default function App() {
               tasks={tasks}
               currentProject={currentProject}
               connection={connection}
+              defaultModel={modelLabel(
+                profile.model || "default",
+                claudeInfo.catalog.models,
+              )}
+              usage={
+                <ClaudeUsage
+                  connected={connected}
+                  data={claudeInfo.usage}
+                  supported={!!claudeInfoSupported}
+                  refresh={() => void claudeInfo.refreshUsage()}
+                />
+              }
               onFiles={(p) => {
                 setPage("projects");
                 safe(browse(p));
@@ -1418,6 +1436,7 @@ export default function App() {
                 </div>
               </Panel>
               <ClaudeUsage
+                connected={connected}
                 data={claudeInfo.usage}
                 supported={!!claudeInfoSupported}
                 refresh={() => void claudeInfo.refreshUsage()}

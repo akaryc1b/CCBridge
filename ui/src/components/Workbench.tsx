@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { time } from "@/lib/format";
 import { FolderOpen, Plus, ArrowRight, Check, ShieldCheck } from "lucide-react";
 import { Button } from "./ui/button";
@@ -9,6 +10,8 @@ export function Workbench({
   tasks,
   currentProject,
   connection,
+  defaultModel,
+  usage,
   onFiles,
   onSession,
   onPage,
@@ -17,6 +20,8 @@ export function Workbench({
   tasks: D[];
   currentProject: string;
   connection: D;
+  defaultModel: string;
+  usage: ReactNode;
   onFiles: (p: string) => void;
   onNew: (p: string) => void;
   onSession: (id: string) => void;
@@ -166,6 +171,10 @@ export function Workbench({
                 )}
               </span>
             </div>
+            <div className="workbench-model">
+              <span>默认模型</span>
+              <span title={defaultModel}>{defaultModel}</span>
+            </div>
             <div className="status-row">
               <span>执行权限</span>
               <Badge variant="outline">
@@ -182,6 +191,7 @@ export function Workbench({
               <ArrowRight />
             </Button>
           </div>
+          {usage}
         </aside>
       </div>
     </>
