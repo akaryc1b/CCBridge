@@ -1865,7 +1865,7 @@ small {
   font-size: 12px !important;
   color: var(--primary);
 }
- .projectrow {
+.projectrow {
   padding: 0;
   border-bottom: 1px solid var(--line);
   border-radius: 0;
@@ -2043,4 +2043,41 @@ pre {
 }
 .sessions .group-new {
   color: var(--muted-text);
+}
+
+.compact-environment {
+  gap: 10px;
+  padding: 10px 0;
+  min-height: 44px;
+}
+.status-success {
+  color: var(--success);
+  font-size: 12px;
+}
+
+.projectlist > button.projectrow {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--foreground);
+}
+.projectlist > button.projectrow:hover {
+  background: var(--soft);
+}
+.projecthead {
+  width: 100%;
+}
+
+.clone-source {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.clone-source [data-slot="select-trigger"] {
+  width: auto;
+  min-width: 130px;
+}
+.clone-source > button:last-child {
+  margin-left: auto;
 }

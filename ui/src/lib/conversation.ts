@@ -36,7 +36,9 @@ export function latestSessions(tasks: RecordValue[]) {
 export function displayModel(task: RecordValue) {
   return {
     requested: task.model_requested || task.model || "远端默认",
-    actual: task.model_resolved || (["running","queued"].includes(task.state)?"等待上报":"未上报"),
+    actual:
+      task.model_resolved ||
+      (["running", "queued"].includes(task.state) ? "等待上报" : "未上报"),
   };
 }
 
@@ -130,11 +132,24 @@ export function nextModelLabel(
 export function taskFailure(task: RecordValue): string | null {
   const result = task.result;
   const events = task.events || [];
-  const limited = result?.api_error === "usage_limit_reached" ||
+  const limited =
+    result?.api_error === "usage_limit_reached" ||
     events.some((e: RecordValue) => e.api_error === "usage_limit_reached");
   if (!limited) return null;
-  const reset = events.find((e: RecordValue) => e.rate_limit_info?.resetsAt)?.rate_limit_info?.resetsAt ||
-    events.find((e: RecordValue) => e.api_error_params?.rate_limit_info?.resetsAt)?.api_error_params?.rate_limit_info?.resetsAt;
-  const time = reset ? new Date(reset * 1000).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }) : "";
+  const reset =
+    events.find((e: RecordValue) => e.rate_limit_info?.resetsAt)
+      ?.rate_limit_info?.resetsAt ||
+    events.find(
+      (e: RecordValue) => e.api_error_params?.rate_limit_info?.resetsAt,
+    )?.api_error_params?.rate_limit_info?.resetsAt;
+  const time = reset
+    ? new Date(reset * 1000).toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+    : "";
   return `Claude 用量已达上限${time ? `，预计 ${time} 恢复` : ""}。恢复后可继续此会话。`;
 }

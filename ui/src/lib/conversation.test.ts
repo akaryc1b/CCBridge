@@ -136,10 +136,28 @@ describe("project sessions and visible model", () => {
   });
 });
 
-it('distinguishes waiting from unreported models without guessing',()=>{expect(displayModel({state:'running',model:'opus'}).actual).toBe('等待上报');expect(displayModel({state:'completed',model:'opus'}).actual).toBe('未上报')});
+it("distinguishes waiting from unreported models without guessing", () => {
+  expect(displayModel({ state: "running", model: "opus" }).actual).toBe(
+    "等待上报",
+  );
+  expect(displayModel({ state: "completed", model: "opus" }).actual).toBe(
+    "未上报",
+  );
+});
 
 it("renders rate limits as an actionable state without inventing a reset time", () => {
-  expect(taskFailure({ result: { api_error: "usage_limit_reached" } })).toBe("Claude 用量已达上限。恢复后可继续此会话。");
+  expect(taskFailure({ result: { api_error: "usage_limit_reached" } })).toBe(
+    "Claude 用量已达上限。恢复后可继续此会话。",
+  );
   expect(taskFailure({ state: "failed", error: "network" })).toBeNull();
-  expect(taskFailure({ events: [{ api_error: "usage_limit_reached", api_error_params: { rate_limit_info: { resetsAt: 1792643400 } } }] })).toContain("12:30");
+  expect(
+    taskFailure({
+      events: [
+        {
+          api_error: "usage_limit_reached",
+          api_error_params: { rate_limit_info: { resetsAt: 1792643400 } },
+        },
+      ],
+    }),
+  ).toContain("12:30");
 });

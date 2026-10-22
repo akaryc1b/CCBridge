@@ -45,6 +45,7 @@ export function GitUpdate({
     [id, setId] = useState<string>(),
     [error, setError] = useState("");
   const [verifiedUnknown, setVerifiedUnknown] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
   const scope = useRef(0);
   const { snap, error: pollError } = useOperation(
     "git_update",
@@ -57,6 +58,7 @@ export function GitUpdate({
   useEffect(() => {
     scope.current++;
     setId(undefined);
+    setReviewing(false);
     setPlan([]);
     setResult([]);
     setError("");
@@ -75,7 +77,11 @@ export function GitUpdate({
       const r = await invoke<D>("git_update_plan", { request: { path } });
       if (seq === scope.current) {
         setPlan(r.repositories || []);
-        if (manual) setVerifiedUnknown(true);
+        if (manual) {
+          setVerifiedUnknown(true);
+          setReviewing(true);
+          setResult([]);
+        }
       }
       return r.repositories || [];
     } catch (e) {
@@ -91,6 +97,7 @@ export function GitUpdate({
   async function update(only?: string[]) {
     if (running) return;
     setVerifiedUnknown(false);
+    setReviewing(false);
     setStarting(true);
     setError("");
     const seq = scope.current;
@@ -127,13 +134,15 @@ export function GitUpdate({
   }
   const rows = plan.map((r) => ({
     ...r,
-    ...(snap?.items || []).find((x: D) => x.path === r.path),
+    ...(!reviewing ? snap?.items || [] : []).find((x: D) => x.path === r.path),
     ...result.find((x) => x.path === r.path),
   }));
   const failed = rows.filter(
     (r) => r.state === "failed" && ["auth", "network"].includes(r.code),
   );
   const unknown = snap?.state === "unknown";
+  const finished = !!snap && snap.state !== "running" && !reviewing;
+  const completed = finished && snap.state === "done";
   return (
     <Dialog
       open={open}
@@ -160,7 +169,7 @@ export function GitUpdate({
           </DialogDescription>
         </DialogHeader>
         <div className="dialog-body">
-          <OperationBar operation={snap} />
+          <OperationBar operation={reviewing ? null : snap} />
           {checking && !snap && (
             <p role="status">
               <Loader2 size={14} className="spin" />
@@ -248,12 +257,12 @@ export function GitUpdate({
         </div>
         <DialogFooter>
           <span className="muted grow">{running ? "后台继续执行" : ""}</span>
-          <Button variant="outline" onClick={onClose}>
-            关闭
+          <Button variant={completed ? "default" : "outline"} onClick={onClose}>
+            {completed ? "完成" : "关闭"}
           </Button>
           {!running && (
             <>
-              {(result.length > 0 || unknown) && (
+              {(finished || reviewing) && (
                 <Button
                   variant="outline"
                   disabled={checking}
@@ -262,22 +271,25 @@ export function GitUpdate({
                   刷新
                 </Button>
               )}
-              <Button
-                disabled={
-                  checking ||
-                  !plan.some((r) => !r.blocked) ||
-                  (unknown && !verifiedUnknown)
-                }
-                onClick={() =>
-                  void update(
-                    failed.length ? failed.map((r) => r.path) : undefined,
-                  )
-                }
-              >
-                {failed.length
-                  ? "重试失败项"
-                  : `快进更新 ${plan.filter((r) => !r.blocked).length} 个仓库`}
-              </Button>
+              {!completed && (
+                <Button
+                  disabled={
+                    checking ||
+                    !plan.some((r) => !r.blocked) ||
+                    (unknown && !verifiedUnknown) ||
+                    (finished && !failed.length)
+                  }
+                  onClick={() =>
+                    void update(
+                      failed.length ? failed.map((r) => r.path) : undefined,
+                    )
+                  }
+                >
+                  {failed.length
+                    ? "重试失败项"
+                    : `快进更新 ${plan.filter((r) => !r.blocked).length} 个仓库`}
+                </Button>
+              )}
             </>
           )}
         </DialogFooter>

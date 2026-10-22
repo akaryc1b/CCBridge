@@ -297,7 +297,16 @@ export function FileOperation({
             }
             onClick={() => void submit()}
           >
-            {busy ? "正在处理…" : ({ trash: "移入回收区", rename: "重命名", create: "新建", move: "移动" } as Record<string, string>)[action] || "保存"}
+            {busy
+              ? "正在处理…"
+              : (
+                  {
+                    trash: "移入回收区",
+                    rename: "重命名",
+                    create: "新建",
+                    move: "移动",
+                  } as Record<string, string>
+                )[action] || "保存"}
           </Button>
         </DialogFooter>
       </DialogContent>

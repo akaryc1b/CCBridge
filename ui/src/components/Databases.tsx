@@ -474,82 +474,98 @@ export function Databases({
             <DialogTitle>{form.id ? "编辑连接" : "新增数据库连接"}</DialogTitle>
             <DialogDescription>建议使用只读（SELECT）账号</DialogDescription>
           </DialogHeader>
-          <div className="dialog-body"><div className="form-two">
-            {field("name", "连接名称")}
-            <div className="field">
-              <Label>数据库类型</Label>
-              <Select
-                value={form.kind}
-                onValueChange={(v) =>
-                  setForm({
-                    ...form,
-                    kind: v,
-                    port: v === "mysql" ? 3306 : 5432,
-                  })
-                }
-              >
-                <SelectTrigger aria-label="数据库类型">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="mysql">MySQL</SelectItem>
-                  <SelectItem value="postgres">PostgreSQL</SelectItem>
-                </SelectContent>
-              </Select>
+          <div className="dialog-body">
+            <div className="form-two">
+              {field("name", "连接名称")}
+              <div className="field">
+                <Label>数据库类型</Label>
+                <Select
+                  value={form.kind}
+                  onValueChange={(v) =>
+                    setForm({
+                      ...form,
+                      kind: v,
+                      port: v === "mysql" ? 3306 : 5432,
+                    })
+                  }
+                >
+                  <SelectTrigger aria-label="数据库类型">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="mysql">MySQL</SelectItem>
+                    <SelectItem value="postgres">PostgreSQL</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {field("host", "数据库地址")}
+              {field("port", "端口", "number")}
+              {field("user", "用户名")}
+              {field("database", "数据库名")}
+              {field(
+                "password",
+                form.password_saved ? "密码（留空保留已保存密码）" : "密码",
+                "password",
+              )}
+              <div className="field">
+                <Label htmlFor="db-enabled">在新任务中启用</Label>
+                <Switch
+                  id="db-enabled"
+                  checked={form.enabled}
+                  onCheckedChange={(v) => setForm({ ...form, enabled: v })}
+                />
+              </div>
             </div>
-            {field("host", "数据库地址")}
-            {field("port", "端口", "number")}
-            {field("user", "用户名")}
-            {field("database", "数据库名")}
-            {field(
-              "password",
-              form.password_saved ? "密码（留空保留已保存密码）" : "密码",
-              "password",
+            <details>
+              <summary>远端运行环境</summary>
+              <div className="space-y-3 pt-3">
+                {field("node", "Node 绝对路径")}
+                {field("package_root", "universal-db-mcp 安装目录")}
+                <p className="hint"></p>
+              </div>
+            </details>
+            {error && (
+              <p role="alert" className="error-box">
+                {error}
+              </p>
             )}
-            <div className="field">
-              <Label htmlFor="db-enabled">在新任务中启用</Label>
-              <Switch
-                id="db-enabled"
-                checked={form.enabled}
-                onCheckedChange={(v) => setForm({ ...form, enabled: v })}
-              />
-            </div>
-          </div>
-          <details>
-            <summary>远端运行环境</summary>
-            <div className="space-y-3 pt-3">
-              {field("node", "Node 绝对路径")}
-              {field("package_root", "universal-db-mcp 安装目录")}
-              <p className="hint"></p>
-            </div>
-          </details>
-          {error && (
-            <p role="alert" className="error-box">
-              {error}
-            </p>
-          )}
           </div>
           <DialogFooter>
-          <Button variant="outline" disabled={busy} onClick={() => { setEditing(false); setForm(empty); }}>关闭</Button>
-          <Button
-            disabled={busy || !form.name.trim() || !form.host.trim() || !form.user.trim() || !form.database.trim()}
-            onClick={() =>
-              void run(async () => {
-                await request("database_save", { connection: form });
-                setChecks((previous) => {
-                  const next = { ...previous };
-                  delete next[form.id];
-                  return next;
-                });
-                setForm(empty);
+            <Button
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
                 setEditing(false);
-                await load();
-                setNotice("已保存（未测试）");
-              })
-            }
-          >
-            {busy ? "保存中…" : "保存连接"}
-          </Button>
+                setForm(empty);
+              }}
+            >
+              关闭
+            </Button>
+            <Button
+              disabled={
+                busy ||
+                !form.name.trim() ||
+                !form.host.trim() ||
+                !form.user.trim() ||
+                !form.database.trim()
+              }
+              onClick={() =>
+                void run(async () => {
+                  await request("database_save", { connection: form });
+                  setChecks((previous) => {
+                    const next = { ...previous };
+                    delete next[form.id];
+                    return next;
+                  });
+                  setForm(empty);
+                  setEditing(false);
+                  await load();
+                  setNotice("已保存（未测试）");
+                })
+              }
+            >
+              {busy ? "保存中…" : "保存连接"}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

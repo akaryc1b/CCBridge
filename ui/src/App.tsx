@@ -194,7 +194,9 @@ export default function App() {
   const [busy, setBusy] = useState<Set<string>>(new Set()),
     [errors, setErrors] = useState<Data>({}),
     [serverEdit, setServerEdit] = useState(false),
-    [autoConfirm, setAutoConfirm] = useState(false),
+    [modelEdit, setModelEdit] = useState(false),
+    [modelDraft, setModelDraft] = useState("");
+  const [autoConfirm, setAutoConfirm] = useState(false),
     [hostKey, setHostKey] = useState("");
   const [projects, setProjects] = useState<Data[]>([]),
     [listing, setListing] = useState<Data>({ entries: [] }),
@@ -1237,107 +1239,139 @@ export default function App() {
                   />
                   <div>
                     <Label>允许全自动任务</Label>
-                    <p className="muted">App 与 MCP 可按任务请求全自动</p>
                   </div>
                 </div>
-              </Panel>{" "}
+                <div className="status-row">
+                  <span>新会话默认</span>
+                  <Badge variant="outline">全自动</Badge>
+                </div>
+              </Panel>
               <Panel title="远端运行环境">
-                <div className="environment-row">
-                  <div>
-                    <Label>当前账号 Runner</Label>
-                    <p className="muted">
-                      {runner.runner_version
-                        ? `已安装 ${runner.runner_version}`
-                        : connected
-                          ? "未检测到"
-                          : "未连接"}{" "}
-                      · App {version}
-                    </p>
-                    <code>{connection.resolved_paths?.runner || ""}</code>
-                  </div>
-                  <Badge variant="outline">
-                    {runner.runner_version === version
-                      ? "已安装"
-                      : runner.runner_version
-                        ? `需更新到 ${version}`
-                        : "未检测"}
-                  </Badge>
+                <div className="environment-row compact-environment">
+                  <Label title={connection.resolved_paths?.runner || ""}>
+                    Runner
+                  </Label>
+                  <span className="grow" />
+                  <span className="muted">
+                    {runner.runner_version ||
+                      (connected ? "未检测到" : "未连接")}
+                  </span>
+                  {runner.runner_version === version && (
+                    <span className="status-success">已安装</span>
+                  )}
                   <Button
-                    variant="outline"
+                    variant="ghost"
+                    size="sm"
                     disabled={!connected || busy.has("refresh_runner")}
                     onClick={() =>
                       safe(request("refresh_runner").then(refreshConnection))
                     }
                   >
-                    <RefreshCw size={15} />
+                    <RefreshCw size={14} />
                     检测
                   </Button>
-                  <Button
-                    disabled={
-                      !connected ||
-                      runner.runner_version === version ||
-                      busy.has("install_runner")
-                    }
-                    onClick={() =>
-                      safe(
-                        request("install_runner", {
-                          operation_id: (() => {
-                            const id = crypto.randomUUID();
-                            setInstallId(id);
-                            return id;
-                          })(),
-                          connection_id: connection.connection_id,
-                        }).then(() => {
-                          toast.success("Runner 已安装");
-                          return refreshConnection();
-                        }),
-                      )
-                    }
-                  >
-                    {busy.has("install_runner") ? (
-                      "安装中…"
-                    ) : runner.runner_version === version ? (
-                      <>
-                        <Check size={15} />
-                        已安装
-                      </>
-                    ) : (
-                      "安装 / 更新 Runner"
-                    )}
-                  </Button>
+                  {runner.runner_version !== version && (
+                    <Button
+                      disabled={
+                        !connected ||
+                        runner.runner_version === version ||
+                        busy.has("install_runner")
+                      }
+                      onClick={() =>
+                        safe(
+                          request("install_runner", {
+                            operation_id: (() => {
+                              const id = crypto.randomUUID();
+                              setInstallId(id);
+                              return id;
+                            })(),
+                            connection_id: connection.connection_id,
+                          }).then(() => {
+                            toast.success("Runner 已安装");
+                            return refreshConnection();
+                          }),
+                        )
+                      }
+                    >
+                      {busy.has("install_runner") ? (
+                        "安装中…"
+                      ) : runner.runner_version === version ? (
+                        <>
+                          <Check size={15} />
+                          已安装
+                        </>
+                      ) : (
+                        "安装 / 更新 Runner"
+                      )}
+                    </Button>
+                  )}
                 </div>
                 {installOperation.snap?.state === "running" && (
                   <OperationBar operation={installOperation.snap} />
                 )}
-                <div className="environment-row">
-                  <div>
-                    <Label>Claude Code</Label>
-                    <p className="muted">
-                      {runner.claude_version ||
-                        runner.claude_error ||
-                        "未检测到"}
-                    </p>
-                    <code>{connection.resolved_paths?.claude || ""}</code>
-                  </div>
+                <div className="environment-row compact-environment">
+                  <Label title={connection.resolved_paths?.claude || ""}>
+                    Claude Code
+                  </Label>
+                  <span className="grow" />
+                  <span className="muted">
+                    {runner.claude_version?.replace(" (Claude Code)", "") ||
+                      runner.claude_error ||
+                      "未检测到"}
+                  </span>
                 </div>
-                <Field label="新会话默认模型">
-                  {input("model", "text", "远端默认")}
-                </Field>
-                <Button
-                  variant="outline"
-                  disabled={connecting || busy.has("save_profile")}
-                  onClick={() =>
-                    safe(
-                      request("save_profile", {
-                        profile,
-                        password,
-                        storage_ack: storageAck,
-                      }).then(() => toast.success("已保存")),
-                    )
-                  }
-                >
-                  保存为新会话默认
-                </Button>
+                <div className="environment-row compact-environment">
+                  <Label>默认模型</Label>
+                  <span className="grow" />
+                  <span className="muted">{profile.model || "远端默认"}</span>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setModelDraft(profile.model || "");
+                      setModelEdit(true);
+                    }}
+                  >
+                    修改
+                  </Button>
+                </div>
+              </Panel>
+              <Panel title="启动与密码">
+                <div className="status-row">
+                  <span>启动时自动连接</span>
+                  <Switch
+                    aria-label="启动时自动连接SSH"
+                    checked={preferences.auto_connect === true}
+                    disabled={connecting || busy.has("preferences_save")}
+                    onCheckedChange={(v) =>
+                      safe(
+                        request("preferences_save", { auto_connect: v }).then(
+                          () =>
+                            setPreferences({ ...preferences, auto_connect: v }),
+                        ),
+                      )
+                    }
+                  />
+                </div>
+                <div className="status-row">
+                  <span>SSH 密码</span>
+                  <span className="status-value">
+                    <span className="muted">
+                      {profile.remember_password
+                        ? profile.credential_store === "file"
+                          ? "本机文件"
+                          : "钥匙串"
+                        : "未保存"}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setServerEdit(true)}
+                    >
+                      管理
+                    </Button>
+                  </span>
+                </div>
               </Panel>
             </>
           )}
@@ -1947,7 +1981,12 @@ export default function App() {
           )}
           {page === "codex" && (
             <Panel title="Codex MCP">
-              <p role={integrationState === "error" ? "alert" : "status"} className={integrationState === "error" ? "text-destructive" : "muted"}>
+              <p
+                role={integrationState === "error" ? "alert" : "status"}
+                className={
+                  integrationState === "error" ? "text-destructive" : "muted"
+                }
+              >
                 {integration || mcpStatus.message || "正在检查配置…"}
               </p>
               <div className="toolbar">
@@ -2062,32 +2101,6 @@ export default function App() {
           )}
           {page === "settings" && (
             <>
-              <Panel title="启动">
-                <div className="switch-row">
-                  <Switch
-                    aria-label="启动时自动连接SSH"
-                    checked={preferences.auto_connect === true}
-                    disabled={connecting || busy.has("preferences_save")}
-                    onCheckedChange={(v) =>
-                      safe(
-                        request("preferences_save", { auto_connect: v }).then(
-                          () => {
-                            setPreferences({ auto_connect: v });
-                          },
-                        ),
-                      )
-                    }
-                  />
-                  <div>
-                    <Label>启动App时自动连接SSH</Label>
-                    <p className="hint">
-                      {autoTarget.user && autoTarget.host
-                        ? `下次启动连接：${autoTarget.user}@${autoTarget.host}:${autoTarget.port}`
-                        : "需要先保存一个服务器账号"}
-                    </p>
-                  </div>
-                </div>
-              </Panel>
               <Panel title="外观">
                 <div className="toolbar">
                   {[
@@ -2337,6 +2350,49 @@ export default function App() {
         richColors
         position="bottom-right"
       />
+      <Dialog open={modelEdit} onOpenChange={setModelEdit}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>新会话默认模型</DialogTitle>
+            <DialogDescription>留空使用远端默认模型</DialogDescription>
+          </DialogHeader>
+          <Field label="模型">
+            <Input
+              value={modelDraft}
+              onChange={(e) => setModelDraft(e.target.value)}
+              placeholder="远端默认"
+            />
+          </Field>
+          {errors.save_profile && (
+            <InlineAlert>
+              {String(errors.save_profile.message || errors.save_profile)}
+            </InlineAlert>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setModelEdit(false)}>
+              关闭
+            </Button>
+            <Button
+              disabled={connecting || busy.has("save_profile")}
+              onClick={() =>
+                safe(
+                  request("save_profile", {
+                    profile: { ...profile, model: modelDraft.trim() },
+                    password,
+                    storage_ack: storageAck,
+                  }).then(() => {
+                    setProfile({ ...profile, model: modelDraft.trim() });
+                    setModelEdit(false);
+                    toast.success("已保存");
+                  }),
+                )
+              }
+            >
+              {busy.has("save_profile") ? "保存中…" : "保存"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Dialog open={serverEdit} onOpenChange={setServerEdit}>
         <DialogContent className="server-dialog">
           <DialogHeader>
@@ -2509,30 +2565,32 @@ export default function App() {
             onChange={(e) => setCloneUrls(e.target.value)}
             placeholder="每行一个 HTTPS 地址"
           />
-          <Label>获取方式</Label>
-          <Select
-            value={localAuth ? "local" : "remote"}
-            onValueChange={(v) => setLocalAuth(v === "local")}
-            disabled={busy.has("clone_repository")}
-          >
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="local">本机获取</SelectItem>
-              <SelectItem value="remote">服务器获取</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            variant="outline"
-            disabled={busy.has("clone_repository")}
-            onClick={() => {
-              setAuthScope(localAuth ? "local" : "remote");
-              setAuthOpen(true);
-            }}
-          >
-            认证
-          </Button>
+          <div className="clone-source">
+            <Label>获取方式</Label>
+            <Select
+              value={localAuth ? "local" : "remote"}
+              onValueChange={(v) => setLocalAuth(v === "local")}
+              disabled={busy.has("clone_repository")}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="local">本机获取</SelectItem>
+                <SelectItem value="remote">服务器获取</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              disabled={busy.has("clone_repository")}
+              onClick={() => {
+                setAuthScope(localAuth ? "local" : "remote");
+                setAuthOpen(true);
+              }}
+            >
+              认证
+            </Button>
+          </div>
           <OperationBar operation={cloneOperation.snap} />
           {cloneError && <InlineAlert>{cloneError}</InlineAlert>}
           {cloneResults.map((r) => (

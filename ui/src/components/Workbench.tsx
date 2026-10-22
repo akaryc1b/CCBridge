@@ -10,7 +10,6 @@ export function Workbench({
   currentProject,
   connection,
   onFiles,
-  onNew,
   onSession,
   onPage,
 }: {
@@ -61,12 +60,16 @@ export function Workbench({
           </div>
           <div className="projectlist">
             {projects.map((p) => (
-              <div className="projectrow" key={p.path}>
-                <div className="projecthead">
+              <button
+                className="projectrow"
+                key={p.path}
+                onClick={() => onFiles(p.path)}
+              >
+                <span className="projecthead">
                   <span className="projecticon">
                     <FolderOpen />
                   </span>
-                  <div className="grow">
+                  <span className="grow">
                     <h3>
                       {p.name}{" "}
                       {p.path === currentProject && (
@@ -74,17 +77,10 @@ export function Workbench({
                       )}
                     </h3>
                     <code>{p.path}</code>
-                  </div>
-                  <Button variant="ghost" onClick={() => onFiles(p.path)}>
-                    <FolderOpen />
-                    文件
-                  </Button>
-                  <Button variant="outline" onClick={() => onNew(p.path)}>
-                    <Plus />
-                    新任务
-                  </Button>
-                </div>
-              </div>
+                  </span>
+                  <ArrowRight size={16} />
+                </span>
+              </button>
             ))}
             {!projects.length && (
               <div className="empty">
@@ -159,7 +155,12 @@ export function Workbench({
               <span>Claude Code</span>
               <span>
                 {connection.probe?.claude_version ? (
-                  <>{connection.probe.claude_version}</>
+                  <>
+                    {connection.probe.claude_version.replace(
+                      " (Claude Code)",
+                      "",
+                    )}
+                  </>
                 ) : (
                   "未检测"
                 )}
