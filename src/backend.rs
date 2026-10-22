@@ -617,6 +617,12 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     if c.handle.is_closed() {
         bail!("SSH 已断开，请在 App 重新连接；不要自动重放任务")
     }
+    if ["claude_models", "claude_usage"].contains(&op.as_str()) {
+        if !human {
+            bail!("Claude 环境信息请在 App 查看")
+        }
+        return c.rpc(json!({"op":op,"claude":c.claude_path})).await;
+    }
     if op == "operation_progress" {
         if !human {
             bail!("操作快照仅供 App 查询")

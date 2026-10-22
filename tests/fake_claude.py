@@ -4,6 +4,13 @@ import sys,json,os,time,subprocess
 args=sys.argv[1:]
 if '--version' in args:
     print('fixture-claude 1.0 (NOT a real model)');sys.exit(0)
+if '--input-format' in args:
+    request=json.loads(sys.stdin.readline())
+    assert request['type']=='control_request' and request['request']['subtype']=='initialize'
+    assert '--no-session-persistence' in args
+    print(json.dumps({'type':'control_response','response':{'subtype':'success','request_id':request['request_id'],'response':{'models':[{'value':'default','resolvedModel':'fixture-default'},{'value':'fixture-fast','displayName':'Fixture fast'}]}}}),flush=True)
+    time.sleep(30) # The probe must reap this process after initialize, without a user prompt.
+    sys.exit(0)
 prompt=sys.stdin.read()
 get=lambda flag:args[args.index(flag)+1] if flag in args else None
 session=get('--resume') or get('--session-id')

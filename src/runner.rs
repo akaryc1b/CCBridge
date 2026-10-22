@@ -101,9 +101,11 @@ pub fn dispatch(v: Value) -> Result<Value> {
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
             Ok(
-                json!({"runner_version":env!("CARGO_PKG_VERSION"),"protocol_version":1,"capabilities":["models_v1","projects_v1","session_identity_v1"],"workspace":work,"claude_version":version,"claude_error":if version.is_none(){Some("当前账号未找到可运行的 Claude，请在高级设置填写绝对路径，或在远端安装并登录")}else{None},"account_home":home()?,"state_directory":runner_dir()?,"code_access":"remote_directory","warning":"工作目录不是 OS 沙箱；全自动模式拥有该 SSH 账号的文件与命令权限"}),
+                json!({"runner_version":env!("CARGO_PKG_VERSION"),"protocol_version":1,"capabilities":["models_v1","projects_v1","session_identity_v1","claude_info_v1"],"workspace":work,"claude_version":version,"claude_error":if version.is_none(){Some("当前账号未找到可运行的 Claude，请在高级设置填写绝对路径，或在远端安装并登录")}else{None},"account_home":home()?,"state_directory":runner_dir()?,"code_access":"remote_directory","warning":"工作目录不是 OS 沙箱；全自动模式拥有该 SSH 账号的文件与命令权限"}),
             )
         }
+        "claude_models" => crate::claude_info::models(field(&v, "claude")?),
+        "claude_usage" => crate::claude_info::usage_at(&runner_dir()?),
         "start" => start(v),
         "status" | "result" => snapshot(field(&v, "task_id")?, v["cursor"].as_u64().unwrap_or(0)),
         "list" => {

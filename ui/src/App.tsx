@@ -1,3 +1,9 @@
+import { useClaudeInfo } from "@/lib/useClaudeInfo";
+import {
+  ClaudeUsage,
+  RemoteModelSelect,
+  modelLabel,
+} from "@/components/ClaudeInfo";
 import {
   OperationBar,
   InlineAlert,
@@ -244,7 +250,6 @@ export default function App() {
   const [cloneResults, setCloneResults] = useState<Data[]>([]),
     [cloneElapsed, setCloneElapsed] = useState(0);
   const cloneRetry = useRef<{ signature: string; urls: string[] } | null>(null);
-  const [modelEditing, setModelEditing] = useState(false);
   const [mcpStatus, setMcpStatus] = useState<Data>({});
   const [theme, setTheme] = useState(
     localStorage.getItem("ccbridge-theme") || "system",
@@ -338,6 +343,28 @@ export default function App() {
   const connected = connection.connected === true,
     task = details[selected] || tasks.find((t) => t.task_id === selected),
     runner = connection.probe || {};
+  const claudeInfoSupported =
+    connected && runner.capabilities?.includes("claude_info_v1");
+  const claudeInfo = useClaudeInfo(
+    connected ? connection.connection_id : "",
+    !!claudeInfoSupported,
+  );
+  useEffect(() => {
+    if (page === "servers" && connected) void claudeInfo.refreshUsage();
+  }, [page, task?.updated_at]);
+  const selectedModelId =
+    modelPolicy === "explicit"
+      ? model
+      : modelPolicy === "inherit"
+        ? (!newConversation && (task?.model_requested || task?.model)) ||
+          profile.model ||
+          ""
+        : "";
+  const invalidModel =
+    !!selectedModelId &&
+    !claudeInfo.catalog.loading &&
+    claudeInfo.catalog.models.length > 0 &&
+    !claudeInfo.catalog.models.some((m) => m.value === selectedModelId);
   const timeline = conversationTurns(task, details);
   const transcriptRevision = timeline
     .map((t) =>
@@ -819,7 +846,8 @@ export default function App() {
       busy.has("task_reply") ||
       (task && !newConversation && active(task)) ||
       (mode === "automatic" && !profile.allow_auto) ||
-      (modelPolicy === "explicit" && !model.trim())
+      (modelPolicy === "explicit" && !model.trim()) ||
+      invalidModel
     )
       return;
     const continuing = task && !newConversation;
@@ -852,7 +880,6 @@ export default function App() {
       drafts.current[selected || "__new__"] = "";
       setDraft("");
       setNewConversation(false);
-      setModelEditing(false);
       setSelected(r.task_id);
       setDetails((d) => ({ ...d, [r.task_id]: r }));
       await refreshTasks();
@@ -1372,7 +1399,12 @@ export default function App() {
                 <div className="environment-row compact-environment">
                   <Label>默认模型</Label>
                   <span className="grow" />
-                  <span className="muted">{profile.model || "远端默认"}</span>
+                  <span className="muted">
+                    {modelLabel(
+                      profile.model || "default",
+                      claudeInfo.catalog.models,
+                    )}
+                  </span>
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1385,6 +1417,11 @@ export default function App() {
                   </Button>
                 </div>
               </Panel>
+              <ClaudeUsage
+                data={claudeInfo.usage}
+                supported={!!claudeInfoSupported}
+                refresh={() => void claudeInfo.refreshUsage()}
+              />
               <Panel title="启动与密码">
                 <div className="status-row">
                   <span>启动时自动连接</span>
@@ -1913,66 +1950,59 @@ export default function App() {
                         <SelectItem value="approval">审批</SelectItem>
                       </SelectContent>
                     </Select>
-                    <Select
-                      value={modelPolicy}
-                      onValueChange={(v) => {
-                        setModelPolicy(v);
-                        setModelEditing(v === "explicit");
+                    <RemoteModelSelect
+                      label="下一轮模型"
+                      value={
+                        modelPolicy === "inherit"
+                          ? !newConversation && task
+                            ? "__inherit"
+                            : profile.model || "default"
+                          : modelPolicy === "remote_default"
+                            ? "default"
+                            : model
+                      }
+                      inheritLabel={
+                        !newConversation && task
+                          ? nextModelLabel(task, profile.model)
+                          : undefined
+                      }
+                      models={claudeInfo.catalog.models}
+                      loading={claudeInfo.catalog.loading}
+                      disabled={!connected}
+                      onChange={(v) => {
+                        if (v === "__inherit") {
+                          setModelPolicy("inherit");
+                          setModel("");
+                        } else if (v === "default") {
+                          setModelPolicy("remote_default");
+                          setModel("");
+                        } else {
+                          setModelPolicy("explicit");
+                          setModel(v);
+                        }
                       }}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label="刷新模型列表"
+                      disabled={
+                        !claudeInfoSupported || claudeInfo.catalog.loading
+                      }
+                      onClick={() => void claudeInfo.refreshModels()}
                     >
-                      <SelectTrigger
-                        className="model-select"
-                        aria-label="下一轮模型"
-                      >
-                        <span>
-                          {modelPolicy === "explicit"
-                            ? model.trim() || "指定模型…"
-                            : modelPolicy === "remote_default"
-                              ? "远端配置"
-                              : nextModelLabel(
-                                  !newConversation ? task : undefined,
-                                  profile.model,
-                                )}
-                        </span>
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="inherit">
-                          {nextModelLabel(
-                            !newConversation ? task : undefined,
-                            profile.model,
-                          )}{" "}
-                          · {newConversation ? "账号默认配置" : "当前会话配置"}
-                        </SelectItem>
-                        <SelectItem value="remote_default">
-                          远端配置（不指定模型）
-                        </SelectItem>
-                        <SelectItem value="explicit">指定其他模型…</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    {modelPolicy === "explicit" &&
-                      (modelEditing || !model.trim()) && (
-                        <Input
-                          className="model-input"
-                          onBlur={() => {
-                            if (model.trim()) setModelEditing(false);
-                          }}
-                          value={model}
-                          onChange={(e) => setModel(e.target.value)}
-                          placeholder="sonnet / opus / 完整 ID"
-                        />
-                      )}
-                    {modelPolicy === "explicit" &&
-                      !modelEditing &&
-                      model.trim() && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => setModelEditing(true)}
-                        >
-                          修改模型
-                        </Button>
-                      )}
+                      <RefreshCw
+                        size={14}
+                        className={claudeInfo.catalog.loading ? "spin" : ""}
+                      />
+                    </Button>
                   </div>
+                  {invalidModel && (
+                    <InlineAlert>模型不在远端列表，请重新选择</InlineAlert>
+                  )}
+                  {claudeInfo.catalog.error && (
+                    <InlineAlert>{claudeInfo.catalog.error}</InlineAlert>
+                  )}
                   <Textarea
                     aria-label="任务指令"
                     value={draft}
@@ -2013,6 +2043,7 @@ export default function App() {
                           busy.has("task_reply") ||
                           (!!task && active(task)) ||
                           (modelPolicy === "explicit" && !model.trim()) ||
+                          invalidModel ||
                           (mode === "automatic" && !profile.allow_auto)
                         }
                         onClick={() => safe(send())}
@@ -2441,15 +2472,31 @@ export default function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>新会话默认模型</DialogTitle>
-            <DialogDescription>留空使用远端默认模型</DialogDescription>
+            <DialogDescription className="sr-only">
+              选择远端 Claude 提供的模型
+            </DialogDescription>
           </DialogHeader>
           <Field label="模型">
-            <Input
-              value={modelDraft}
-              onChange={(e) => setModelDraft(e.target.value)}
-              placeholder="远端默认"
+            <RemoteModelSelect
+              value={modelDraft || "default"}
+              onChange={(v) => setModelDraft(v === "default" ? "" : v)}
+              models={claudeInfo.catalog.models}
+              loading={claudeInfo.catalog.loading}
             />
           </Field>
+          <Button
+            variant="ghost"
+            disabled={!claudeInfoSupported || claudeInfo.catalog.loading}
+            onClick={() => void claudeInfo.refreshModels()}
+          >
+            {claudeInfo.catalog.loading ? "获取模型…" : "刷新列表"}
+          </Button>
+          {!claudeInfoSupported && (
+            <InlineAlert kind="warning">更新 Runner 后获取模型列表</InlineAlert>
+          )}
+          {claudeInfo.catalog.error && (
+            <InlineAlert>{claudeInfo.catalog.error}</InlineAlert>
+          )}
           {errors.save_profile && (
             <InlineAlert>
               {String(errors.save_profile.message || errors.save_profile)}
@@ -2460,7 +2507,14 @@ export default function App() {
               关闭
             </Button>
             <Button
-              disabled={connecting || busy.has("save_profile")}
+              disabled={
+                connecting ||
+                busy.has("save_profile") ||
+                claudeInfo.catalog.loading ||
+                !claudeInfo.catalog.models.some(
+                  (m) => m.value === (modelDraft || "default"),
+                )
+              }
               onClick={() =>
                 safe(
                   request("save_profile", {

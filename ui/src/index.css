@@ -2157,3 +2157,11 @@ pre {
 .form-two [data-slot="select-trigger"] {
   width: 100%;
 }
+
+/* Claude account observations reuse the server section hierarchy. */
+.claude-usage { padding: 0 0 16px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.claude-usage .section-heading { display: flex; align-items: center; justify-content: space-between; }
+.claude-usage h3 { font-size: 15px; font-weight: 600; }
+.quota-value { display: grid; gap: 6px; width: 280px; max-width: 100%; }
+.quota-value [data-slot="progress"] { height: 4px; }
+.remote-model-select { max-width: 420px; min-width: 220px; }

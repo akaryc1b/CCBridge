@@ -42,3 +42,5 @@ pub mod vps_auth;
 
 #[cfg(feature = "bridge")]
 pub mod operations;
+
+pub mod claude_info;
