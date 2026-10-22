@@ -2008,12 +2008,12 @@ pre {
 }
 .file-head {
   display: grid !important;
-  grid-template-columns: minmax(0, 1fr) 90px 128px 32px !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 140px) 128px 32px !important;
   gap: 8px;
 }
 .file-row {
   display: grid !important;
-  grid-template-columns: minmax(0, 1fr) 90px 128px 32px !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 140px) 128px 32px !important;
   gap: 8px;
 }
 .file-branch {
@@ -2243,4 +2243,19 @@ pre {
   display: block;
   flex: none;
   object-fit: contain;
+}
+
+/* Each file column owns its overflow; long Git refs cannot cover the date. */
+.file-row > *,
+.file-head > * {
+  min-width: 0;
+}
+.file-branch,
+.file-modified {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-row > button:first-child svg {
+  flex-shrink: 0;
 }

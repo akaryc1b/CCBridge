@@ -42,11 +42,48 @@ fn validate_auto_target_at(root: &std::path::Path, p: &Profile) -> Result<()> {
 fn auto_target(p: &Profile) -> Value {
     json!({"user":p.user,"host":p.host,"port":p.port})
 }
+fn ensure_update_tasks_idle(value: &Value) -> Result<()> {
+    let tasks = value["tasks"]
+        .as_array()
+        .context("无法读取远端任务状态，请刷新会话后重试安装")?;
+    let active: Vec<_> = tasks
+        .iter()
+        .filter(|t| {
+            ["queued", "running", "waiting_approval"].contains(&t["state"].as_str().unwrap_or(""))
+        })
+        .collect();
+    if !active.is_empty() {
+        let names = active
+            .iter()
+            .take(3)
+            .map(|t| {
+                let title = t["title"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("未命名任务");
+                let short: String = title.chars().take(36).collect();
+                let state = match t["state"].as_str().unwrap_or("") {
+                    "waiting_approval" => "等待审批",
+                    "queued" => "排队中",
+                    _ => "执行中",
+                };
+                format!("{short}（{state}）")
+            })
+            .collect::<Vec<_>>()
+            .join("；");
+        bail!(
+            "暂不能安装：远端有 {} 个未结束任务：{}。请在“会话”中处理完成后重试。",
+            active.len(),
+            names
+        );
+    }
+    Ok(())
+}
 pub type Shared = Arc<BackendState>;
-struct Activity(Shared);
+struct Activity(Shared, String);
 impl Drop for Activity {
     fn drop(&mut self) {
-        self.0.gate.lock().unwrap().active -= 1;
+        self.0.gate.lock().unwrap().finish(&self.1);
     }
 }
 pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
@@ -126,25 +163,20 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             }
 
             state.gate.lock().unwrap().prepare()?;
-            let checked =
-                async {
-                    let c =
-                        state.connection.lock().await.clone().ok_or_else(|| {
-                            anyhow::anyhow!("尚未连接服务器，无法确认远端任务空闲")
-                        })?;
-                    let tasks = c.rpc(json!({"op":"list"})).await?;
-                    if tasks["tasks"].as_array().is_none() {
-                        bail!("远端状态不确定，不能安装更新")
-                    }
-                    if tasks["tasks"].as_array().unwrap().iter().any(|t| {
-                        ["queued", "running", "waiting_approval"]
-                            .contains(&t["state"].as_str().unwrap_or(""))
-                    }) {
-                        bail!("远端仍有任务执行或等待审批，请完成后再更新")
-                    }
-                    Ok(())
+            let checked = async {
+                let connection = state.connection.lock().await.clone();
+                if let Some(c) = connection.filter(|c| !c.handle.is_closed()) {
+                    let tasks = c
+                        .rpc(json!({"op":"list"}))
+                        .await
+                        .context("无法检查远端任务，请刷新连接状态后重试安装")?;
+                    ensure_update_tasks_idle(&tasks)?;
                 }
-                .await;
+                // Updating the local App does not stop detached remote Runner tasks.
+                // Offline installation still observes the local operation/MCP drain barrier.
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
             if let Err(e) = checked {
                 state.gate.lock().unwrap().draining = false;
                 return Err(e);
@@ -205,8 +237,8 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
         None
     };
     let _activity = if writing || ["db_test", "db_protocol_test"].contains(&op) {
-        state.gate.lock().unwrap().begin()?;
-        Some(Activity(state.clone()))
+        state.gate.lock().unwrap().begin(op)?;
+        Some(Activity(state.clone(), op.to_string()))
     } else {
         None
     };
@@ -1212,6 +1244,52 @@ fn reply_mode<'a>(
 #[cfg(test)]
 mod mode_tests {
     use super::*;
+    #[tokio::test]
+    async fn offline_update_needs_no_ssh_but_still_protects_local_work() {
+        let state = Arc::new(BackendState::new(None));
+        let ready = dispatch(state.clone(), json!({"op":"prepare_update"}), true)
+            .await
+            .unwrap();
+        assert_eq!(ready["draining"], true);
+        dispatch(state.clone(), json!({"op":"cancel_update"}), true)
+            .await
+            .unwrap();
+        state.gate.lock().unwrap().begin("git_update").unwrap();
+        let error = dispatch(state.clone(), json!({"op":"prepare_update"}), true)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Git 更新"));
+        assert!(!state.gate.lock().unwrap().draining);
+        state.gate.lock().unwrap().finish("git_update");
+        let lease = uuid::Uuid::new_v4().to_string();
+        state
+            .gate
+            .lock()
+            .unwrap()
+            .lease("client_activity_begin", &lease)
+            .unwrap();
+        let error = dispatch(state.clone(), json!({"op":"prepare_update"}), true)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Codex 正在等待"));
+        assert!(
+            dispatch(state.clone(), json!({"op":"prepare_update"}), false)
+                .await
+                .is_err()
+        );
+    }
+    #[test]
+    fn update_blockers_name_tasks_and_next_action() {
+        let error = ensure_update_tasks_idle(&json!({"tasks":[{"title":"只读文档分析","state":"running"},{"title":"审批验证","state":"waiting_approval"}]})).unwrap_err().to_string();
+        assert!(error.contains("2 个未结束任务"));
+        assert!(error.contains("只读文档分析（执行中）"));
+        assert!(error.contains("审批验证（等待审批）"));
+        assert!(error.contains("会话"));
+        assert!(ensure_update_tasks_idle(&json!({"tasks":[{"state":"completed"}]})).is_ok());
+        assert!(ensure_update_tasks_idle(&json!({})).is_err());
+    }
     #[test]
     fn startup_requires_actual_local_password_for_exact_account() {
         let root = std::env::temp_dir().join(format!("ccb-startup-{}", uuid::Uuid::new_v4()));

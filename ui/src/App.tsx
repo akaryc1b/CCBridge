@@ -961,6 +961,7 @@ export default function App() {
         ["save_profile", "connect_ssh", "migrate_password"].includes(key)
       ) &&
       key !== "clone_repository" &&
+      key !== "update" &&
       !key.startsWith("database_") &&
       !["task_list", "task_status", "project_list"].includes(key),
   );
@@ -1633,7 +1634,12 @@ export default function App() {
                                 : "文件夹"}
                           </small>
                         </button>
-                        <span className="file-branch">{e.branch || "—"}</span>
+                        <span
+                          className="file-branch"
+                          title={e.branch || undefined}
+                        >
+                          {e.branch || "—"}
+                        </span>
                         <span className="file-modified">
                           {e.modified_at ? time(e.modified_at) : "—"}
                         </span>
@@ -2188,7 +2194,7 @@ export default function App() {
                       available: `发现新版本 ${update.version || ""}`,
                       downloading: "下载中…",
                       verified: "签名验证通过",
-                      installing: "正在排空活动并安装…",
+                      installing: "正在准备安装…",
                       failed: "更新未完成，当前 App 保持可用",
                     }[updatePhase]
                   }
@@ -2235,6 +2241,11 @@ export default function App() {
                   {updatePhase === "verified" && (
                     <Button
                       onClick={() => {
+                        setErrors((old) => {
+                          const next = { ...old };
+                          delete next.update;
+                          return next;
+                        });
                         setUpdatePhase("installing");
                         safe(
                           invoke("apply_update").catch((e) => {
@@ -2251,6 +2262,9 @@ export default function App() {
                     </Button>
                   )}
                 </div>
+                {errors.update && (
+                  <InlineAlert>{errors.update.message}</InlineAlert>
+                )}
               </Panel>
             </div>
           )}

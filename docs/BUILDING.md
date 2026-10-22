@@ -35,7 +35,7 @@ sh tests/linux-smoke.sh "$PWD/target/release/ccbridge"
 
 首次从旧版迁移到 Tauri 需要替换一次 App；后续在“应用更新”检查、下载、验证签名后安装并重启。账号数据仍在 `~/Library/Application Support/CCBridge`，MCP 路径仍是 `/Applications/CCBridge.app/Contents/MacOS/ccbridge`。
 
-更新前会排空本地写入、检查远端任务，并等待 MCP 长调用租约结束。执行中的任务和审批不会被强制中断。旧版 MCP 没有租约协议，旧等待调用会保守地阻止更新至其最大等待窗口结束；重新加载 MCP 后的新调用使用租约。无法确认远端状态时不安装。
+安装前检查本机操作和 MCP 等待请求；这些活动未结束时显示具体操作及下一步，不能中断后强装。SSH 已连接时额外检查远端未结束任务，并列出任务标题与状态；查询失败则显示原因。未连接或连接已关闭时可离线安装，无须为更新登录 SSH：本机 App 重启不会停止脱离 SSH 会话运行的远端 Runner 任务，重连后可继续查询。旧版 MCP 等待窗口尚未结束时显示剩余等待秒数，不要求重启 Codex。
 
 推送和 PR 执行 Rust 格式、Linux Runner 测试/烟测、Mac SSH/MCP 集成测试、前端测试与 Tauri 编译。标签 `vX.Y.Z` 与版本一致，Linux/数据库公共检查及对应架构检查通过后，该架构立即发布，不等待另一架构。ARM 与 Intel 分别构建、独立发布到同一个 Release；后完成的架构追加文件，并合并 `latest.json`，不会覆盖先完成的架构。尚未完成的架构不会被冒充为可更新；可以先下载已完成架构。发布包含：
 
