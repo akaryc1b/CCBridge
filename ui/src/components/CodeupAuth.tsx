@@ -145,8 +145,10 @@ export function CodeupAuth({
       else if (op === "git_auth_status")
         setStatus({ ...r, manually_checked: true });
       else if (op === "git_vps_auth_test") setVpsAccess(checked);
+      else if (op === "git_vps_auth_status")
+        setVps({ ...r, manually_checked: true });
       else if (op.startsWith("git_vps_auth_")) {
-        setVps({ ...r, manually_checked: op === "git_vps_auth_status" });
+        setVps(r);
         setVpsAccess({});
         setSecret("");
       } else {
