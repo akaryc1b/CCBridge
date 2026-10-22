@@ -607,6 +607,13 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("尚未连接 SSH，请在 App 登录"))?;
     drop(guard);
+    if human
+        && v["connection_id"]
+            .as_str()
+            .is_some_and(|id| id != c.connection_id)
+    {
+        bail!("连接账号已变化，请刷新后重新操作")
+    }
     if c.handle.is_closed() {
         bail!("SSH 已断开，请在 App 重新连接；不要自动重放任务")
     }

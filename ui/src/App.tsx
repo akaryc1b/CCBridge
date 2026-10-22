@@ -236,6 +236,7 @@ export default function App() {
   const [gitUpdateOpen, setGitUpdateOpen] = useState(false);
   const [gitOperation, setGitOperation] = useState<Data | null>(null);
   const [cloneId, setCloneId] = useState<string>();
+  const [installId, setInstallId] = useState<string>();
   const [updateTransfer, setUpdateTransfer] = useState<Data>({});
   const [localConfirm, setLocalConfirm] = useState<null | { action: string }>(
     null,
@@ -349,6 +350,13 @@ export default function App() {
     !!cloneId || cloneOpen,
     cloneId,
   );
+  const installOperation = useOperation(
+    "install_runner",
+    "",
+    connection.connection_id || "",
+    !!installId,
+    installId,
+  );
   const connecting = isConnecting(busy);
   const request = async (
     command: string,
@@ -444,6 +452,7 @@ export default function App() {
         urls: urls.join("\n"),
         local_auth: localAuth,
         operation_id: operationId,
+        connection_id: connection.connection_id,
       });
       if (!r) return;
       setCloneResults(r.repositories || []);
@@ -1270,7 +1279,14 @@ export default function App() {
                     }
                     onClick={() =>
                       safe(
-                        request("install_runner").then(() => {
+                        request("install_runner", {
+                          operation_id: (() => {
+                            const id = crypto.randomUUID();
+                            setInstallId(id);
+                            return id;
+                          })(),
+                          connection_id: connection.connection_id,
+                        }).then(() => {
                           toast.success("Runner 已安装");
                           return refreshConnection();
                         }),
@@ -1289,6 +1305,9 @@ export default function App() {
                     )}
                   </Button>
                 </div>
+                {installOperation.snap?.state === "running" && (
+                  <OperationBar operation={installOperation.snap} />
+                )}
                 <div className="environment-row">
                   <div>
                     <Label>Claude Code</Label>
@@ -2297,6 +2316,7 @@ export default function App() {
         open={branchesOpen}
         onClose={() => setBranchesOpen(false)}
         path={listedPath}
+        connectionId={connection.connection_id || ""}
       />
       <Confirm
         open={!!localConfirm}

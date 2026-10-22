@@ -401,11 +401,21 @@ export function BranchDialog({
   open,
   onClose,
   path,
+  connectionId,
 }: {
   open: boolean;
   onClose: () => void;
   path: string;
+  connectionId: string;
 }) {
+  const [fetchId, setFetchId] = useState<string>();
+  const operation = useOperation(
+    "branch_fetch",
+    path,
+    connectionId,
+    open || !!fetchId,
+    fetchId,
+  );
   const [info, setInfo] = useState<Data>({}),
     [branch, setBranch] = useState(""),
     [remote, setRemote] = useState(""),
@@ -424,7 +434,16 @@ export function BranchDialog({
         : "正在读取分支…",
     );
     try {
-      const r = await invoke<Data>(op, { request: { path } });
+      const operation_id =
+        op === "branch_fetch" ? crypto.randomUUID() : undefined;
+      if (operation_id) setFetchId(operation_id);
+      const r = await invoke<Data>(op, {
+        request: {
+          path,
+          connection_id: connectionId,
+          ...(operation_id ? { operation_id } : {}),
+        },
+      });
       setInfo(r);
       setMessage(op === "branch_fetch" ? "远端分支引用已更新" : "");
     } catch (e) {
@@ -436,7 +455,7 @@ export function BranchDialog({
   }
   useEffect(() => {
     if (open) void load();
-  }, [open, path]);
+  }, [open, path, connectionId]);
   async function change() {
     setBusy(true);
     setError("");
@@ -555,7 +574,11 @@ export function BranchDialog({
           </p>
         )}
 
-        {message && <p role="status">{message}</p>}
+        {operation.snap?.state === "running" ? (
+          <OperationBar operation={operation.snap} />
+        ) : (
+          message && <p role="status">{message}</p>
+        )}
         {error && (
           <p role="alert" className="text-destructive">
             {error}

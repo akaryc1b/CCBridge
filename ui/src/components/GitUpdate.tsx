@@ -44,6 +44,7 @@ export function GitUpdate({
     [starting, setStarting] = useState(false),
     [id, setId] = useState<string>(),
     [error, setError] = useState("");
+  const [verifiedUnknown, setVerifiedUnknown] = useState(false);
   const scope = useRef(0);
   const { snap, error: pollError } = useOperation(
     "git_update",
@@ -66,13 +67,16 @@ export function GitUpdate({
       if (snap.result?.results) setResult(snap.result.results);
     }
   }, [snap]);
-  async function inspect() {
+  async function inspect(manual = false) {
     const seq = scope.current;
     setChecking(true);
     setError("");
     try {
       const r = await invoke<D>("git_update_plan", { request: { path } });
-      if (seq === scope.current) setPlan(r.repositories || []);
+      if (seq === scope.current) {
+        setPlan(r.repositories || []);
+        if (manual) setVerifiedUnknown(true);
+      }
       return r.repositories || [];
     } catch (e) {
       if (seq === scope.current) setError(errorText(e));
@@ -86,6 +90,7 @@ export function GitUpdate({
   }, [open, path, connectionId]);
   async function update(only?: string[]) {
     if (running) return;
+    setVerifiedUnknown(false);
     setStarting(true);
     setError("");
     const seq = scope.current;
@@ -107,6 +112,7 @@ export function GitUpdate({
           path: target,
           expected,
           operation_id: opid,
+          connection_id: connectionId,
           ...(only ? { only } : {}),
         },
       });
@@ -251,13 +257,17 @@ export function GitUpdate({
                 <Button
                   variant="outline"
                   disabled={checking}
-                  onClick={() => void inspect()}
+                  onClick={() => void inspect(true)}
                 >
                   刷新
                 </Button>
               )}
               <Button
-                disabled={checking || !plan.some((r) => !r.blocked) || unknown}
+                disabled={
+                  checking ||
+                  !plan.some((r) => !r.blocked) ||
+                  (unknown && !verifiedUnknown)
+                }
                 onClick={() =>
                   void update(
                     failed.length ? failed.map((r) => r.path) : undefined,
