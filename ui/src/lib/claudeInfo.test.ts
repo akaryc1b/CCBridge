@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { modelLabel, quotaReset } from "../components/ClaudeInfo";
+import {
+  inheritedModelLabel,
+  modelLabel,
+  quotaReset,
+} from "../components/ClaudeInfo";
 describe("remote catalog display", () => {
   const models = [
     { value: "default", label: "Default", resolved: "remote-model" },
@@ -20,4 +24,28 @@ it("normalizes account ISO resets and legacy event seconds without inventing a t
   );
   expect(quotaReset({ resets_at_iso: null })).toBeNull();
   expect(quotaReset({ resets_at_iso: "invalid" })).toBeNull();
+});
+
+describe("continued conversation model display", () => {
+  const models = [
+    { value: "opus", label: "Opus", resolved: "claude-opus-5-5" },
+  ];
+  it("resolves a saved alias exactly as the dashboard does", () => {
+    expect(inheritedModelLabel("opus", models)).toBe("opus · claude-opus-5-5");
+  });
+  it("uses updated remote resolution without changing the saved alias", () => {
+    expect(
+      inheritedModelLabel("opus", [
+        { ...models[0], resolved: "remote-new-opus" },
+      ]),
+    ).toBe("opus · remote-new-opus");
+  });
+  it("preserves concrete historical models and unknown defaults without inventing a version", () => {
+    expect(inheritedModelLabel("claude-opus-5-5", models)).toBe(
+      "claude-opus-5-5",
+    );
+    expect(inheritedModelLabel("opus", [])).toBe("opus");
+    expect(inheritedModelLabel("远端默认", models)).toBe("远端默认");
+    expect(inheritedModelLabel(undefined, models)).toBeUndefined();
+  });
 });

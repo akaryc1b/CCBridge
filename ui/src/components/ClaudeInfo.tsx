@@ -19,6 +19,16 @@ export function modelLabel(value: string, models: RemoteModel[]) {
     return row.resolved ? `跟随远端默认 · ${row.resolved}` : "跟随远端默认";
   return row.resolved ? `${row.value} · ${row.resolved}` : row.label;
 }
+export function inheritedModelLabel(
+  value: string | undefined,
+  models: RemoteModel[],
+) {
+  if (!value) return value;
+  // Resolve a saved alias using the current remote catalog, not a hard-coded lineup.
+  return models.some((m) => m.value === value)
+    ? modelLabel(value, models)
+    : value;
+}
 export function RemoteModelSelect({
   value,
   onChange,
@@ -36,6 +46,7 @@ export function RemoteModelSelect({
   inheritLabel?: string;
   label?: string;
 }) {
+  const resolvedInheritLabel = inheritedModelLabel(inheritLabel, models);
   const known =
     models.some((m) => m.value === (value || "default")) ||
     (value === "__inherit" && !!inheritLabel);
@@ -52,13 +63,13 @@ export function RemoteModelSelect({
             : !models.length
               ? "未获取模型列表"
               : value === "__inherit"
-                ? inheritLabel
+                ? resolvedInheritLabel
                 : modelLabel(value, models)}
         </SelectValue>
       </SelectTrigger>
       <SelectContent position="popper" align="start">
         {inheritLabel && (
-          <SelectItem value="__inherit">{inheritLabel}</SelectItem>
+          <SelectItem value="__inherit">{resolvedInheritLabel}</SelectItem>
         )}
         {!known && value && (
           <SelectItem value={value} disabled>
