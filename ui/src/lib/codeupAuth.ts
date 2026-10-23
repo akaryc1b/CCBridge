@@ -65,3 +65,9 @@ export function sourceLabel(source: string) {
         ? "App 服务器档"
         : "本机 Git 凭据助手";
 }
+
+export function credentialRecovery(message: string) {
+  if (/仅用于|地址不支持|地址格式|缺少域名|网络|超时|连接失败/.test(message))
+    return false;
+  return /认证|凭据|权限|令牌|密码/.test(message);
+}

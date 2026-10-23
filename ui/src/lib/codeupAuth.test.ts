@@ -4,6 +4,7 @@ import {
   syncRequest,
   accessOperation,
   sourceLabel,
+  credentialRecovery,
 } from "./codeupAuth";
 import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
@@ -77,4 +78,16 @@ describe("compact Codeup authentication contract", () => {
       ),
     ).not.toThrow();
   });
+});
+
+it("does not suggest changing passwords for address validation or network errors", () => {
+  expect(
+    credentialRecovery("当前认证配置仅用于 https://codeup.aliyun.com 的仓库"),
+  ).toBe(false);
+  expect(credentialRecovery("认证检测网络超时")).toBe(false);
+  expect(
+    credentialRecovery(
+      "服务器尚无此仓库的访问权限，请同步认证并核对仓库地址后重试。",
+    ),
+  ).toBe(true);
 });

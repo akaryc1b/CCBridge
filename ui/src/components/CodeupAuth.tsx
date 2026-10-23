@@ -26,6 +26,7 @@ import {
   syncRequest,
   sourceLabel,
   accessOperation,
+  credentialRecovery,
   type AuthStatus,
 } from "../lib/codeupAuth";
 type Data = Record<string, any>;
@@ -473,7 +474,7 @@ export function CodeupAuth({
                       <>
                         <AlertCircle size={14} />
                         <span>{access.error}</span>
-                        {/认证|凭据|权限|令牌|密码/.test(access.error) && (
+                        {credentialRecovery(access.error) && (
                           <Button
                             variant="ghost"
                             size="sm"
