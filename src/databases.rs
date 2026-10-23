@@ -61,30 +61,13 @@ fn load() -> Result<Store> {
     }
 }
 fn private_json(p: &Path, value: &impl Serialize) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let tmp = p.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    let result = (|| -> Result<()> {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        f.write_all(&serde_json::to_vec_pretty(value)?)?;
-        f.sync_all()?;
-        std::fs::rename(&tmp, p)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(tmp);
-    }
-    result
+    crate::common::write_json(p, value)
 }
+
 fn save(s: &Store) -> Result<()> {
     private_dir(&runner_dir()?)?;
     private_json(&path()?, s)?;
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path()?, std::fs::Permissions::from_mode(0o600))?;
+    crate::platform::private_file(&path()?)?;
     Ok(())
 }
 fn workspace(s: &str) -> Result<String> {
@@ -246,11 +229,7 @@ pub fn snapshot(workspace: &str, parent: Option<&str>) -> Result<Vec<(String, Da
 pub fn save_snapshot(dir: &Path, connections: &[(String, Database)]) -> Result<()> {
     if !connections.is_empty() {
         private_json(&dir.join("databases.json"), &connections)?;
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(
-            dir.join("databases.json"),
-            std::fs::Permissions::from_mode(0o600),
-        )?;
+        crate::platform::private_file(&dir.join("databases.json"))?;
     }
     Ok(())
 }
@@ -436,13 +415,27 @@ pub fn serve(task: &str, id: &str) -> Result<()> {
     verify_package(&d)?;
     let script = dir.join("database-launch.mjs");
     std::fs::write(&script, include_str!("database-launch.mjs"))?;
+    #[cfg(unix)]
     let error = std::os::unix::process::CommandExt::exec(
         std::process::Command::new(&d.node)
             .arg(script)
             .arg(dir.join("databases.json"))
             .arg(id),
     );
-    Err(error.into())
+    #[cfg(unix)]
+    return Err(error.into());
+    #[cfg(windows)]
+    {
+        let status = std::process::Command::new(&d.node)
+            .arg(script)
+            .arg(dir.join("databases.json"))
+            .arg(id)
+            .status()?;
+        if !status.success() {
+            bail!("数据库 MCP 子进程已退出：{status}");
+        }
+        Ok(())
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -486,7 +479,9 @@ mod tests {
         );
         let secret = root.join("secret.json");
         private_json(&secret, &json!({"password":"fixture-secret"})).unwrap();
+        #[cfg(unix)]
         use std::os::unix::fs::PermissionsExt;
+        #[cfg(unix)]
         assert_eq!(
             std::fs::metadata(secret).unwrap().permissions().mode() & 0o777,
             0o600
@@ -519,9 +514,9 @@ fn test_connection(d: &Database, protocol_only: bool) -> Result<Value> {
         save_snapshot(&dir, &[("test".into(), d.clone())])?;
         let script = dir.join("launch.mjs");
         std::fs::write(&script, include_str!("database-launch.mjs"))?;
-        use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
-        let mut child = Command::new(&d.node)
+        let mut command = Command::new(&d.node);
+        command
             .arg(script)
             .arg(dir.join("databases.json"))
             .arg(&d.id)
@@ -532,10 +527,9 @@ fn test_connection(d: &Database, protocol_only: bool) -> Result<Value> {
             })
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .process_group(0)
-            .spawn()
-            .context("无法启动远端 Node")?;
+            .stderr(Stdio::null());
+        let mut child =
+            crate::platform::ProcessTree::spawn(command).context("无法启动远端 Node")?;
         let end = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
             if let Some(status) = child.try_wait()? {
@@ -554,9 +548,7 @@ fn test_connection(d: &Database, protocol_only: bool) -> Result<Value> {
                 }
             };
             if std::time::Instant::now() > end {
-                unsafe {
-                    libc::kill(-(child.id() as i32), libc::SIGKILL);
-                };
+                let _ = child.terminate(true);
                 let _ = child.wait();
                 bail!("数据库连接测试超过30秒，已停止本次测试")
             };

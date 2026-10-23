@@ -2,13 +2,15 @@
 use crate::common::*;
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
+#[cfg(unix)]
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::{
     fs,
     io::{Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+#[cfg(unix)]
 fn safe(p: &Path, private: bool) -> Result<()> {
     let m = fs::symlink_metadata(p)?;
     if m.file_type().is_symlink()
@@ -19,13 +21,16 @@ fn safe(p: &Path, private: bool) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(windows)]
+fn safe(p: &Path, _private: bool) -> Result<()> {
+    crate::platform::private_file(p)
+}
 fn paths(home: &Path, create: bool) -> Result<(PathBuf, PathBuf)> {
     let mut p = home.to_path_buf();
     for component in [".local", "share", "ccbridge", "codeup-auth"] {
         p.push(component);
         if !p.exists() && create {
-            use std::os::unix::fs::DirBuilderExt;
-            fs::DirBuilder::new().mode(0o700).create(&p)?;
+            crate::platform::private_dir(&p)?;
         }
         if fs::symlink_metadata(&p).is_ok() {
             safe(&p, component == "codeup-auth")?;
@@ -60,14 +65,15 @@ fn git(home: &Path, args: &[&str], input: &[u8]) -> Result<std::process::Output>
 fn private_write(p: &Path, bytes: &[u8]) -> Result<()> {
     let tmp = p.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     let result = (|| -> Result<()> {
-        let mut f = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
-            .open(&tmp)?;
+        let mut options = fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        let mut f = options.open(&tmp)?;
+        crate::platform::private_file(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
-        fs::rename(&tmp, p)?;
+        crate::platform::replace(&tmp, p)?;
         Ok(())
     })();
     if result.is_err() {
@@ -153,8 +159,8 @@ pub fn rpc_at(v: &Value, home: &Path) -> Result<Value> {
                 if !out.status.success() {
                     bail!("VPS 凭据写入失败；原认证未覆盖")
                 }
-                fs::set_permissions(&staged, fs::Permissions::from_mode(0o600))?;
-                fs::rename(&staged, &credentials)?;
+                crate::platform::private_file(&staged)?;
+                crate::platform::replace(&staged, &credentials)?;
                 Ok(())
             })();
             if saved.is_err() {
@@ -256,6 +262,7 @@ mod tests {
         req["secret"] = json!("fixture-new-token");
         rpc_at(&req, &home).unwrap();
         let (cred, _) = paths(&home, true).unwrap();
+        #[cfg(unix)]
         assert_eq!(
             fs::metadata(&cred).unwrap().permissions().mode() & 0o777,
             0o600
@@ -301,6 +308,7 @@ mod tests {
         let home = std::env::temp_dir().join(format!("ccb-auth-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&home).unwrap();
         let (cred, _) = paths(&home, true).unwrap();
+        #[cfg(unix)]
         std::os::unix::fs::symlink("/tmp", &cred).unwrap();
         assert!(rpc_at(&json!({"op":"git_vps_auth_status"}), &home).is_err());
         fs::remove_file(cred).unwrap();

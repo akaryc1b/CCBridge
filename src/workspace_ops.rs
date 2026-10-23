@@ -23,11 +23,19 @@ fn inside(home: &Path, path: &str) -> Result<PathBuf> {
         bail!("不能操作 HOME 或 HOME 以外的目录")
     }
     for component in p.strip_prefix(home)?.components() {
-        let c = component.as_os_str().to_string_lossy();
+        let raw = component.as_os_str().to_string_lossy();
+        let c = if cfg!(windows) {
+            raw.to_lowercase()
+        } else {
+            raw.into_owned()
+        };
+        if cfg!(windows) && c == "appdata" {
+            bail!("不能通过文件管理修改账号运行配置目录");
+        }
         if [
             ".git", ".ssh", ".claude", ".codex", ".aws", ".gnupg", ".kube",
         ]
-        .contains(&c.as_ref())
+        .contains(&c.as_str())
         {
             bail!("不能通过文件管理修改 Git 元数据或凭据目录")
         }
@@ -38,11 +46,14 @@ fn inside(home: &Path, path: &str) -> Result<PathBuf> {
     Ok(p)
 }
 fn name(s: &str) -> Result<()> {
+    #[cfg(windows)]
+    crate::remote_platform::windows_name(s)?;
     if s.is_empty() || [".", ".."].contains(&s) || s.contains(['/', '\0', '\n', '\r']) {
         bail!("名称不能为空，也不能包含斜杠或换行")
     };
     Ok(())
 }
+#[cfg(unix)]
 fn move_exclusive(from: &Path, to: &Path) -> Result<()> {
     use std::os::unix::ffi::OsStrExt;
     let f = std::ffi::CString::new(from.as_os_str().as_bytes())?;
@@ -69,6 +80,10 @@ fn move_exclusive(from: &Path, to: &Path) -> Result<()> {
         bail!("移动失败（未覆盖目标；跨磁盘移动暂不支持）：{e}")
     };
     Ok(())
+}
+#[cfg(windows)]
+fn move_exclusive(from: &Path, to: &Path) -> Result<()> {
+    crate::platform::move_exclusive(from, to).context("移动失败；未覆盖目标，跨磁盘移动暂不支持")
 }
 fn protected(p: &Path, home: &Path, extra: &[String]) -> Result<()> {
     let projects = crate::projects::rpc(&json!({"op":"project_list"}))?;
@@ -103,7 +118,11 @@ fn git(path: &Path, args: &[&str]) -> Result<String> {
         .arg(path)
         .args([
             "-c",
-            "core.hooksPath=/dev/null",
+            if cfg!(windows) {
+                "core.hooksPath=NUL"
+            } else {
+                "core.hooksPath=/dev/null"
+            },
             "-c",
             "core.fsmonitor=false",
         ])
@@ -162,11 +181,13 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
         name(n)?;
         let target = inside(h, parent.join(n).to_str().context("路径无效")?)?;
         protected_running(&target)?;
+        #[cfg(unix)]
         use std::os::unix::fs::OpenOptionsExt;
-        fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .mode(0o600)
+        let mut options = fs::OpenOptions::new();
+        options.create_new(true).write(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        options
             .open(&target)
             .context("新建文件失败，可能已有同名项；未覆盖")?;
         return Ok(json!({"message":"已新建空文件","path":target}));
@@ -346,6 +367,7 @@ mod tests {
             call(json!({"op":"file_mutate","path":dir,"action":"trash","protected":[moved]}))
                 .is_err()
         );
+        #[cfg(unix)]
         std::os::unix::fs::symlink("/", h.join("escape")).unwrap();
         assert!(inside(&h, h.join("escape/etc/passwd").to_str().unwrap()).is_err());
         fs::create_dir(h.join(".git")).unwrap();

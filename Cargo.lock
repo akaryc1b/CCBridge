@@ -713,11 +713,13 @@ name = "ccbridge"
 version = "0.10.8"
 dependencies = [
  "anyhow",
+ "base64",
  "eframe",
  "egui_commonmark",
  "getrandom 0.4.3",
  "keyring",
  "libc",
+ "process-wrap",
  "rfd",
  "rmcp",
  "russh",
@@ -729,6 +731,7 @@ dependencies = [
  "toml_edit 0.22.27",
  "url",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3380,6 +3383,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "process-wrap"
+version = "10.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f21b97672d2dc848e7b25701ab4535618b92f4861c13cc3f7f7bed52ad3c8da"
+dependencies = [
+ "indexmap",
+ "nix",
+ "windows",
 ]
 
 [[package]]

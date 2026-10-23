@@ -2,7 +2,7 @@ use crate::common::*;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::os::unix::process::CommandExt;
+
 use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
@@ -55,6 +55,10 @@ pub fn rpc_stdio() -> Result<()> {
 }
 pub fn dispatch(v: Value) -> Result<Value> {
     match field(&v, "op")? {
+        "git_native_access" | "git_native_url" | "git_native_fetch" | "git_native_clone" => {
+            crate::native_git::rpc(&v)
+        }
+        "fs_list" | "fs_mkdir" | "fs_preview" => crate::native_fs::rpc(&v),
         "git_update_plan" | "git_update_preflight" | "git_update_apply" => {
             crate::git_update::rpc(&v)
         }
@@ -91,7 +95,7 @@ pub fn dispatch(v: Value) -> Result<Value> {
                 None
             };
             let claude = v["claude"].as_str().unwrap_or("");
-            let out = if claude.starts_with('/') {
+            let out = if Path::new(claude).is_absolute() {
                 Command::new(claude).arg("--version").output().ok()
             } else {
                 None
@@ -269,14 +273,7 @@ fn start(v: Value) -> Result<Value> {
         .stdin(Stdio::null())
         .stdout(log.try_clone()?)
         .stderr(log);
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    crate::platform::detach(&mut cmd);
     match cmd.spawn() {
         Ok(child) => {
             t.worker_pid = child.id(); /* worker owns subsequent writes */
@@ -294,20 +291,18 @@ fn start(v: Value) -> Result<Value> {
     )
 }
 fn registry_guard() -> Result<File> {
-    use std::os::fd::AsRawFd;
     let f = OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
         .open(runner_dir()?.join("registry.lock"))?;
-    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
+    f.lock()?;
     Ok(f)
 }
 fn alive(pid: u32) -> bool {
-    pid > 0 && unsafe { libc::kill(pid as i32, 0) == 0 }
+    crate::platform::alive(pid)
 }
+
 fn workspace_lock(workspace: &str) -> Result<std::path::PathBuf> {
     // Reversible encoding, not a security digest; lock identity uses exact canonical path bytes.
     let name: String = workspace
@@ -400,12 +395,11 @@ fn run_cc(t: &mut Task, dir: &Path) -> Result<()> {
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(File::create(dir.join("stderr.log"))?);
-    cmd.process_group(0);
-    let mut child = cmd.spawn().context("无法启动远端 CC")?;
-    let mut input = child.stdin.take().unwrap();
+    let mut child = crate::platform::ProcessTree::spawn(cmd).context("无法启动远端 CC")?;
+    let mut input = child.stdin().unwrap();
     input.write_all(t.prompt.as_bytes())?;
     drop(input);
-    let stdout = child.stdout.take().unwrap();
+    let stdout = child.stdout().unwrap();
     let event_path = dir.join("events.jsonl");
     let reader = std::thread::spawn(move || -> Result<()> {
         let mut out = OpenOptions::new()
@@ -437,18 +431,14 @@ fn run_cc(t: &mut Task, dir: &Path) -> Result<()> {
     let status = loop {
         if dir.join("cancel").exists() {
             cancelled = true;
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGTERM);
-            }
+            child.terminate(false)?;
             let deadline = std::time::Instant::now() + Duration::from_secs(3);
             let cancelled_status = loop {
                 if let Some(s) = child.try_wait()? {
                     break s;
                 }
                 if std::time::Instant::now() > deadline {
-                    unsafe {
-                        libc::kill(-(child.id() as i32), libc::SIGKILL);
-                    }
+                    child.terminate(true)?;
                     break child.wait()?;
                 }
                 std::thread::sleep(Duration::from_millis(50));
@@ -460,6 +450,7 @@ fn run_cc(t: &mut Task, dir: &Path) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(100));
     };
+    let _ = child.terminate(true);
     reader
         .join()
         .map_err(|_| anyhow::anyhow!("CC 输出读取线程异常结束"))??;

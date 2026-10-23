@@ -9,7 +9,11 @@ fn git(p: &Path, args: &[&str]) -> Result<String> {
         .arg(p)
         .args([
             "-c",
-            "core.hooksPath=/dev/null",
+            if cfg!(windows) {
+                "core.hooksPath=NUL"
+            } else {
+                "core.hooksPath=/dev/null"
+            },
             "-c",
             "core.fsmonitor=false",
         ])

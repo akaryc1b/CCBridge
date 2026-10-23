@@ -33,6 +33,7 @@ pub mod workspace_ops;
 #[cfg(feature = "bridge")]
 pub mod git_auth;
 
+#[cfg(unix)]
 pub mod secret_store;
 
 pub mod install;
@@ -44,3 +45,14 @@ pub mod vps_auth;
 pub mod operations;
 
 pub mod claude_info;
+
+pub mod platform;
+pub mod remote_platform;
+
+pub mod native_fs;
+
+#[cfg(feature = "bridge")]
+pub mod windows_bootstrap;
+
+pub mod git_protocol;
+pub mod native_git;

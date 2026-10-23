@@ -1,6 +1,7 @@
 use crate::{common, databases, integration, mcp, runner};
 use anyhow::{Result, bail};
 pub fn run_non_gui(args: Vec<String>) -> Result<bool> {
+    #[cfg(unix)]
     unsafe {
         libc::umask(0o077);
     }

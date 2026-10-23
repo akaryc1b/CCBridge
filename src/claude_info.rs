@@ -14,11 +14,11 @@ pub fn models(claude: &str) -> Result<Value> {
     control(claude, false)
 }
 fn control(claude: &str, usage: bool) -> Result<Value> {
-    use std::os::unix::process::CommandExt;
-    if !claude.starts_with('/') {
+    if !Path::new(claude).is_absolute() {
         bail!("远端未找到 Claude Code，请先检测运行环境");
     }
-    let mut child = Command::new(claude)
+    let mut command = Command::new(claude);
+    command
         .args([
             "-p",
             "--input-format",
@@ -34,15 +34,13 @@ fn control(claude: &str, usage: bool) -> Result<Value> {
             "{\"disableAllHooks\":true}",
         ])
         .current_dir(home()?)
-        .process_group(0)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("无法启动 Claude 信息查询")?;
-    let group = child.id() as i32;
-    let output = child.stdout.take().unwrap();
-    let mut input = child.stdin.take().unwrap();
+        .stderr(Stdio::null());
+    let mut child =
+        crate::platform::ProcessTree::spawn(command).context("无法启动 Claude 信息查询")?;
+    let output = child.stdout().unwrap();
+    let mut input = child.stdin().unwrap();
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
     let reader = std::thread::spawn(move || {
         let found = (|| -> Result<Value> {
@@ -96,9 +94,7 @@ fn control(claude: &str, usage: bool) -> Result<Value> {
         .recv_timeout(Duration::from_secs(30))
         .context("查询 Claude 信息超时，请重试");
     // No user prompt is sent. Reap only our private probe and its inherited pipes.
-    unsafe {
-        libc::kill(-group, libc::SIGKILL);
-    }
+    let _ = child.terminate(true);
     let _ = child.wait();
     let _ = reader.join();
     result?

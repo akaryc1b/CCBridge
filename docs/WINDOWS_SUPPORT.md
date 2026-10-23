@@ -1,6 +1,6 @@
 # Windows 后续支持范围
 
-状态：需求已确认，尚未实现或验收。当前先完成 Mac 0.9.0 交付，Windows 不阻塞 ARM 发布和 Intel 追加。
+状态：本文描述 Windows 桌面客户端，尚未实现或验收。当前原生 Windows **远端** 开发见 [WINDOWS_REMOTE.md](WINDOWS_REMOTE.md)；两者独立，不阻塞 Mac ARM 发布和 Intel 追加。
 
 ## 交付方向
 

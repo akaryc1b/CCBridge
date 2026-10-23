@@ -26,6 +26,8 @@ pub struct RemoteEnvironment {
     pub user: String,
     pub claude: String,
     pub platform: String,
+    #[serde(default)]
+    pub local_app_data: String,
 }
 #[derive(Clone)]
 pub struct Connection {
@@ -92,6 +94,7 @@ pub async fn connect(p: Profile, password: String) -> Result<Connection> {
             user: String::new(),
             claude: String::new(),
             platform: String::new(),
+            local_app_data: String::new(),
         },
         runner_path: String::new(),
         claude_path: String::new(),
@@ -107,28 +110,59 @@ fi
 printf '%s\000%s\000%s\000%s\000' "$h" "$(id -un)" "$c" "$(uname -sm)"
 "#;
     let (out, err, status) = conn.execute(script.into(), &[]).await?;
-    if status != Some(0) {
-        bail!("获取远端账号 HOME 失败：{}", String::from_utf8_lossy(&err))
-    }
-    let parts: Vec<_> = out.split(|b| *b == 0).collect();
-    if parts.len() != 5 {
-        bail!("远端登录环境返回无效；请检查 shell 是否向 stdout 输出额外文本")
-    }
-    let values: Vec<String> = parts[..4]
-        .iter()
-        .map(|s| String::from_utf8_lossy(s).to_string())
-        .collect();
-    if !values[0].starts_with('/') || values[0].contains('\n') {
-        bail!("远端 HOME 不是有效绝对路径")
-    }
-    conn.environment = RemoteEnvironment {
-        home: values[0].clone(),
-        user: values[1].clone(),
-        claude: values[2].clone(),
-        platform: values[3].clone(),
+    conn.environment = if status == Some(0) && out.first() == Some(&b'/') {
+        let parts: Vec<_> = out.split(|b| *b == 0).collect();
+        if parts.len() != 5 {
+            bail!("远端登录环境返回无效；请检查 shell 是否向 stdout 输出额外文本")
+        }
+        let values: Vec<String> = parts[..4]
+            .iter()
+            .map(|s| String::from_utf8_lossy(s).to_string())
+            .collect();
+        if !values[0].starts_with('/') || values[0].contains('\n') {
+            bail!("远端 HOME 不是有效绝对路径")
+        }
+        let environment = RemoteEnvironment {
+            home: values[0].clone(),
+            user: values[1].clone(),
+            claude: values[2].clone(),
+            platform: values[3].clone(),
+            local_app_data: String::new(),
+        };
+        environment
+    } else {
+        let (win, winerr, code) = conn
+            .execute(
+                crate::remote_platform::powershell(crate::remote_platform::DISCOVER_WINDOWS),
+                &[],
+            )
+            .await?;
+        if code != Some(0) {
+            bail!(
+                "远端系统探测失败；POSIX：{}；Windows：{}",
+                String::from_utf8_lossy(&err),
+                String::from_utf8_lossy(&winerr)
+            );
+        }
+        let env: RemoteEnvironment =
+            serde_json::from_slice(&win).context("Windows 环境响应无效")?;
+        if !crate::remote_platform::windows_absolute(&env.home)
+            || !crate::remote_platform::windows_absolute(&env.local_app_data)
+        {
+            bail!("Windows 用户目录无效");
+        }
+        env
     };
     conn.runner_path = if conn.profile.runner.is_empty() {
-        format!("{}/.local/bin/ccbridge", conn.environment.home)
+        if conn.is_windows() {
+            format!(
+                "{}\\CCBridge\\runner\\{}\\ccbridge.exe",
+                conn.environment.local_app_data,
+                env!("CARGO_PKG_VERSION")
+            )
+        } else {
+            format!("{}/.local/bin/ccbridge", conn.environment.home)
+        }
     } else {
         conn.profile.runner.clone()
     };
@@ -141,6 +175,31 @@ printf '%s\000%s\000%s\000%s\000' "$h" "$(id -un)" "$c" "$(uname -sm)"
     Ok(conn)
 }
 impl Connection {
+    fn is_windows(&self) -> bool {
+        self.environment.platform.starts_with("Windows ")
+    }
+    fn state_path(&self) -> String {
+        if self.is_windows() {
+            format!("{}\\CCBridge\\state", self.environment.local_app_data)
+        } else {
+            format!("{}/.local/state/ccbridge", self.environment.home)
+        }
+    }
+    fn rpc_command(&self) -> Result<String> {
+        if self.is_windows() {
+            Ok(crate::remote_platform::powershell(&format!(
+                "$ErrorActionPreference='Stop'; $env:CCBRIDGE_RUNNER_HOME={}; & {} rpc; exit $LASTEXITCODE",
+                crate::remote_platform::ps_literal(&self.state_path())?,
+                crate::remote_platform::ps_literal(&self.runner_path)?
+            )))
+        } else {
+            Ok(format!(
+                "env CCBRIDGE_RUNNER_HOME={} {} rpc",
+                shell_quote(&self.state_path()),
+                shell_quote(&self.runner_path)
+            ))
+        }
+    }
     pub async fn refresh(&mut self) {
         self.probe = match self
             .rpc(json!({"op":"probe","workspace":self.profile.workspace,"claude":self.claude_path}))
@@ -154,11 +213,11 @@ impl Connection {
         }
     }
     pub fn info(&self) -> Value {
-        json!({"connection_id":self.connection_id,"app_version":env!("CARGO_PKG_VERSION"),"bridge_protocol":1,"bridge_capabilities":["client_activity_lease","update_drain","models_v1"],"connected":!self.handle.is_closed(),"profile":self.profile,"probe":self.probe,"environment":self.environment,"resolved_paths":{"runner":self.runner_path,"claude":self.claude_path,"state":format!("{}/.local/state/ccbridge",self.environment.home)}})
+        json!({"connection_id":self.connection_id,"app_version":env!("CARGO_PKG_VERSION"),"bridge_protocol":1,"bridge_capabilities":["client_activity_lease","update_drain","models_v1"],"connected":!self.handle.is_closed(),"profile":self.profile,"probe":self.probe,"environment":self.environment,"resolved_paths":{"runner":self.runner_path,"claude":self.claude_path,"state":self.state_path()}})
     }
     pub fn permits_workspace(&self, path: &str) -> bool {
         (!self.profile.workspace.is_empty() && path == self.profile.workspace)
-            || std::path::Path::new(path).starts_with(&self.environment.home)
+            || crate::remote_platform::within(path, &self.environment.home)
     }
     pub async fn match_repository(&self, local_path: &str) -> Result<Value> {
         let local = crate::repository::inspect(std::path::Path::new(local_path))
@@ -306,6 +365,11 @@ impl Connection {
         } else {
             path
         };
+        if self.is_windows() {
+            return self
+                .rpc(json!({"op":"fs_list","path":path,"hidden":hidden}))
+                .await;
+        }
         let script = crate::remote_fs::list_script(&self.environment.home, path, hidden)?;
         let (out, err, status) = self.execute(script, &[]).await?;
         if status != Some(0) {
@@ -317,6 +381,11 @@ impl Connection {
         crate::remote_fs::parse_list(&out)
     }
     pub async fn mkdir(&self, parent: &str, name: &str) -> Result<Value> {
+        if self.is_windows() {
+            return self
+                .rpc(json!({"op":"fs_mkdir","path":parent,"name":name}))
+                .await;
+        }
         let cmd = crate::remote_fs::mkdir_script(&self.environment.home, parent, name)?;
         let (_, err, status) = self.execute(cmd, &[]).await?;
         if status != Some(0) {
@@ -328,6 +397,9 @@ impl Connection {
         self.browse(parent, false).await
     }
     pub async fn preview_file(&self, path: &str) -> Result<Value> {
+        if self.is_windows() {
+            return self.rpc(json!({"op":"fs_preview","path":path})).await;
+        }
         let cmd = crate::remote_fs::preview_script(&self.environment.home, path)?;
         let (out, err, status) = self.execute(cmd, &[]).await?;
         if status != Some(0) {
@@ -389,17 +461,35 @@ impl Connection {
                 .await
             {
                 let id = crate::repository::identity(&url).unwrap_or_default();
-                if repo["path"].as_str() != Some(&dest)
-                    || !repo["identities"]
-                        .as_array()
-                        .map(|a| a.iter().any(|v| v.as_str() == Some(&id)))
-                        .unwrap_or(false)
+                if !repo["path"].as_str().is_some_and(|p| {
+                    crate::remote_platform::within(p, &dest)
+                        && crate::remote_platform::within(&dest, p)
+                }) || !repo["identities"]
+                    .as_array()
+                    .map(|a| a.iter().any(|v| v.as_str() == Some(&id)))
+                    .unwrap_or(false)
                 {
                     bail!("同名目录已存在，但不是指定仓库，未覆盖")
                 }
                 prepared.push(
                     json!({"name":name,"path":dest,"state":"already_exists","repository":repo}),
                 );
+                if let Some(o) = &operation {
+                    o.patch(json!({"processed":index+1,"items":prepared}));
+                }
+                continue;
+            }
+            if self.is_windows() && !local_auth {
+                report(&format!("{name}：使用服务器 Git 认证克隆"), index, total);
+                let credential = self.remote_git_credential(&url).await?;
+                let cb = operation.clone().map(|o| {
+                    Arc::new(move |p: Value| o.patch(p)) as Arc<dyn Fn(Value) + Send + Sync>
+                });
+                self.rpc_progress(json!({"op":"git_native_clone","path":parent,"name":name,"url":url,"credential":credential}),cb).await?;
+                let repo = self
+                    .rpc(json!({"op":"repository_inspect","path":dest}))
+                    .await?;
+                prepared.push(json!({"name":name,"path":dest,"state":"cloned","repository":repo}));
                 if let Some(o) = &operation {
                     o.patch(json!({"processed":index+1,"items":prepared}));
                 }
@@ -425,8 +515,11 @@ impl Connection {
                 })
                 .await??;
                 report(&format!("{name}：通过 SSH 传输并导入仓库"), index, total);
-                let cmd =
-                    crate::transfer::import_script(&self.environment.home, parent, &name, &url)?;
+                let cmd = if self.is_windows() {
+                    crate::windows_bootstrap::import_bundle(parent, &name, &url)?
+                } else {
+                    crate::transfer::import_script(&self.environment.home, parent, &name, &url)?
+                };
                 let input = tokio::fs::File::open(&bundle.path).await?;
                 let total_bytes = input.metadata().await?.len();
                 if let Some(o) = &operation {
@@ -490,6 +583,11 @@ git_auth clone --progress -- {} "$dest"
         url: &str,
         cred: Option<crate::git_auth::Credential>,
     ) -> Result<Value> {
+        if self.is_windows() {
+            return self
+                .rpc(json!({"op":"git_native_access","url":url,"credential":cred}))
+                .await;
+        }
         let host = crate::git_auth::host(url)?;
         let (mut cmd, input) = crate::git_auth::remote_prefix(&host, cred.as_ref());
         cmd += &format!("git_auth ls-remote --heads -- {}\n", shell_quote(url));
@@ -549,6 +647,15 @@ git_auth clone --progress -- {} "$dest"
     ) -> Result<Value> {
         if remote.is_empty() || remote.starts_with('-') || remote.contains(['\n', '\r', '\0']) {
             bail!("远端名称无效")
+        }
+        if self.is_windows() {
+            let target = self
+                .rpc(json!({"op":"git_native_url","path":path,"remote":remote}))
+                .await?;
+            let credential = self
+                .remote_git_credential(target["url"].as_str().context("仓库地址无效")?)
+                .await?;
+            return self.rpc_progress(json!({"op":"git_native_fetch","path":path,"remote":remote,"credential":credential}),progress).await;
         }
         self.rpc(json!({"op":"branches","path":path})).await?;
         let mut guard = crate::remote_fs::guard(&self.environment.home, path)?;
@@ -685,6 +792,43 @@ git_auth clone --progress -- {} "$dest"
                 bail!("远端仍有任务运行或等待审批，请完成后再更新 Runner")
             }
         }
+        if self.is_windows() {
+            if !["Windows X64", "Windows AMD64"].contains(&self.environment.platform.as_str()) {
+                bail!("尚未打包此 Windows 架构：{}", self.environment.platform);
+            }
+            let exe = std::env::current_exe()?;
+            let resources = exe
+                .parent()
+                .and_then(|p| p.parent())
+                .context("无法确定 App 资源目录")?
+                .join("Resources");
+            let artifact = std::env::var_os("CCBRIDGE_WINDOWS_RUNNER")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| resources.join("ccbridge-windows-x86_64.exe"));
+            let bytes = std::fs::read(&artifact)
+                .with_context(|| format!("缺少 Windows Runner：{}", artifact.display()))?;
+            if let Some(o) = &operation {
+                o.patch(json!({"phase":"upload","name":"Windows Runner"}));
+            }
+            let command =
+                crate::windows_bootstrap::install(&self.runner_path, env!("CARGO_PKG_VERSION"))?;
+            let (_, err, status) = self
+                .execute_for(command, &bytes, Duration::from_secs(180))
+                .await?;
+            if status != Some(0) {
+                bail!("Windows Runner 安装失败：{}", String::from_utf8_lossy(&err));
+            }
+            if let Some(o) = &operation {
+                o.patch(json!({"phase":"verify","name":"Windows Runner"}));
+            }
+            self.refresh().await;
+            if self.probe["runner_version"].as_str() != Some(env!("CARGO_PKG_VERSION")) {
+                bail!("Windows Runner 上传完成，但 RPC 校验失败；请重新检测");
+            }
+            return Ok(
+                json!({"installed":true,"arch":self.environment.platform,"path":self.runner_path,"probe":self.probe}),
+            );
+        }
         let (out, err, code) = self.execute("uname -sm".into(), &[]).await?;
         if code != Some(0) {
             bail!("无法检测远端架构: {}", String::from_utf8_lossy(&err))
@@ -737,18 +881,28 @@ git_auth clone --progress -- {} "$dest"
         }
         Ok(json!({"installed":true,"arch":arch,"path":self.runner_path,"probe":self.probe}))
     }
-    pub async fn rpc(&self, v: Value) -> Result<Value> {
+    async fn rpc_progress(
+        &self,
+        v: Value,
+        progress: Option<Arc<dyn Fn(Value) + Send + Sync>>,
+    ) -> Result<Value> {
         let bytes = serde_json::to_vec(&v)?;
-        let (stdout, stderr, exit) = self
-            .execute(
-                format!(
-                    "env CCBRIDGE_RUNNER_HOME={} {} rpc",
-                    shell_quote(&format!("{}/.local/state/ccbridge", self.environment.home)),
-                    shell_quote(&self.runner_path)
-                ),
-                &bytes,
+        let (out, err, exit) = self
+            .execute_streaming(
+                self.rpc_command()?,
+                bytes.as_slice(),
+                Duration::from_secs(900),
+                progress,
             )
             .await?;
+        if exit != Some(0) {
+            bail!("Windows Runner 请求失败：{}", String::from_utf8_lossy(&err));
+        }
+        unwrap(serde_json::from_slice(&out).context("Windows Runner 返回格式无效")?)
+    }
+    pub async fn rpc(&self, v: Value) -> Result<Value> {
+        let bytes = serde_json::to_vec(&v)?;
+        let (stdout, stderr, exit) = self.execute(self.rpc_command()?, &bytes).await?;
         if exit != Some(0) {
             bail!(
                 "远端 Runner 调用失败 exit={exit:?}: {}",

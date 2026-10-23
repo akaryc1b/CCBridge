@@ -9,14 +9,20 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 pub fn home() -> Result<PathBuf> {
     Ok(PathBuf::from(
-        std::env::var("HOME").context("无法读取当前用户 HOME")?,
+        std::env::var(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .context("无法读取当前用户目录")?,
     ))
 }
 pub fn app_dir() -> Result<PathBuf> {
     let p = if let Ok(p) = std::env::var("CCBRIDGE_HOME") {
         PathBuf::from(p)
     } else {
-        home()?.join("Library/Application Support/CCBridge")
+        if cfg!(windows) {
+            PathBuf::from(std::env::var("LOCALAPPDATA").context("无法读取 LOCALAPPDATA")?)
+                .join("CCBridge")
+        } else {
+            home()?.join("Library/Application Support/CCBridge")
+        }
     };
     private_dir(&p)?;
     Ok(p)
@@ -25,16 +31,17 @@ pub fn runner_dir() -> Result<PathBuf> {
     let p = if let Ok(p) = std::env::var("CCBRIDGE_RUNNER_HOME") {
         PathBuf::from(p)
     } else {
-        home()?.join(".local/state/ccbridge")
+        if cfg!(windows) {
+            app_dir()?.join("state")
+        } else {
+            home()?.join(".local/state/ccbridge")
+        }
     };
     private_dir(&p)?;
     Ok(p)
 }
 pub fn private_dir(p: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::create_dir_all(p)?;
-    std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o700))?;
-    Ok(())
+    crate::platform::private_dir(p)
 }
 pub fn write_json(p: &Path, value: &impl Serialize) -> Result<()> {
     let tmp = p.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
@@ -44,7 +51,8 @@ pub fn write_json(p: &Path, value: &impl Serialize) -> Result<()> {
         .open(&tmp)?;
     f.write_all(&serde_json::to_vec_pretty(value)?)?;
     f.sync_all()?;
-    std::fs::rename(tmp, p)?;
+    crate::platform::private_file(&tmp)?;
+    crate::platform::replace(&tmp, p)?;
     Ok(())
 }
 pub fn read_json<T: serde::de::DeserializeOwned>(p: &Path) -> Result<T> {
@@ -246,7 +254,9 @@ impl Profile {
     }
     pub fn validate(&self) -> Result<()> {
         if !self.credential_store.is_empty() {
-            crate::secret_store::validate_store(&self.credential_store)?;
+            if !["keychain", "file"].contains(&self.credential_store.as_str()) {
+                bail!("保存方式无效");
+            }
         }
         if self.host.trim().is_empty() || self.user.trim().is_empty() || self.port == 0 {
             bail!("服务器、用户名和端口不能为空")
@@ -257,15 +267,14 @@ impl Profile {
             ("远端选中工作区", &self.active_remote_workspace),
             ("Claude", &self.claude),
         ] {
-            if !path.is_empty()
-                && (!path.starts_with('/') || path.contains('\0') || path.contains('\n'))
-            {
+            if !path.is_empty() && !crate::remote_platform::absolute(path) {
                 bail!("{name} 必须是远端绝对路径")
             }
         }
         Ok(())
     }
 }
+#[cfg(unix)]
 pub async fn local_call(mut v: Value) -> Result<Value> {
     v["client_protocol"] = json!(1);
     let path = app_dir()?.join("bridge.sock");
@@ -315,4 +324,9 @@ mod tests {
         p.runner = "~/bin/ccbridge".into();
         assert!(p.validate().is_err());
     }
+}
+
+#[cfg(windows)]
+pub async fn local_call(_v: Value) -> Result<Value> {
+    bail!("此构建是 Windows 远端 Runner，不提供本机 App IPC")
 }
