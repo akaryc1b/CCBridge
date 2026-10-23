@@ -11,7 +11,10 @@ use windows_sys::Win32::{
     Foundation::*,
     Security::{Authorization::*, *},
     Storage::FileSystem::*,
-    System::Threading::*,
+    System::{
+        SystemServices::{ACCESS_ALLOWED_ACE_TYPE, ACCESS_DENIED_ACE_TYPE},
+        Threading::*,
+    },
 };
 fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
     s.encode_wide().chain(Some(0)).collect()
