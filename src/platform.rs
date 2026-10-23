@@ -124,10 +124,26 @@ impl ProcessTree {
         }
     }
     pub fn try_wait(&mut self) -> std::io::Result<Option<std::process::ExitStatus>> {
-        self.child.try_wait()
+        #[cfg(unix)]
+        {
+            self.child.try_wait()
+        }
+        // Observe the root process, then explicitly terminate the job before draining pipes.
+        // Do not consume the JobObject completion port in a polling loop.
+        #[cfg(windows)]
+        {
+            self.child.inner_mut().try_wait()
+        }
     }
     pub fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
-        self.child.wait()
+        #[cfg(unix)]
+        {
+            self.child.wait()
+        }
+        #[cfg(windows)]
+        {
+            self.child.inner_mut().wait()
+        }
     }
     pub fn terminate(&mut self, force: bool) -> std::io::Result<()> {
         #[cfg(unix)]

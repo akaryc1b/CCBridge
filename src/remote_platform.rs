@@ -18,6 +18,9 @@ pub fn absolute(path: &str) -> bool {
     !path.contains(['\0', '\n', '\r']) && (path.starts_with('/') || windows_absolute(path))
 }
 pub fn powershell(script: &str) -> String {
+    let script = format!(
+        "$ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false); try {{\n{script}\n}} catch {{ [Console]::Error.WriteLine($_.Exception.Message); exit 1 }}"
+    );
     let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
     format!(
         "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {}",
@@ -108,7 +111,9 @@ mod tests {
             .chunks_exact(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
-        assert_eq!(String::from_utf16(&units).unwrap(), script);
+        let decoded = String::from_utf16(&units).unwrap();
+        assert!(decoded.contains(script));
+        assert!(decoded.contains("[Console]::Error.WriteLine"));
         assert_eq!(
             ps_literal("C:\\it's & files").unwrap(),
             "'C:\\it''s & files'"

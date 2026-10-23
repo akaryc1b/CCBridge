@@ -138,15 +138,11 @@ pub fn rpc(v: &Value) -> Result<Value> {
         "git_native_url" => {
             let p = inside(field(v, "path")?)?;
             let remote = remote(v)?;
-            let out = Command::new("git")
-                .arg("-C")
+            let mut cmd = Command::new("git");
+            cmd.arg("-C")
                 .arg(p)
-                .args(["remote", "get-url", "--", remote])
-                .output()?;
-            if !out.status.success() {
-                bail!("仓库未配置此远端");
-            }
-            let url = String::from_utf8(out.stdout)?.trim().to_string();
+                .args(["remote", "get-url", "--", remote]);
+            let url = String::from_utf8(run_prepared(cmd)?)?.trim().to_string();
             url_allowed(&url)?;
             Ok(json!({"url":url}))
         }

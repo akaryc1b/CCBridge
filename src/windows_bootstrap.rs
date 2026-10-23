@@ -22,7 +22,7 @@ function PrivateDirectory([string]$path) {{
     if (($p.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {{ throw 'CCBRIDGE_PATH_CONFLICT' }}
     $p=$p.Parent
   }}
-  $acl=Get-Acl -LiteralPath $path
+  $acl=[System.IO.Directory]::GetAccessControl($path)
   if ($created) {{ $acl.SetOwner($sid) }} elseif ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) {{ throw 'CCBRIDGE_OWNER_CONFLICT' }}
   $acl.SetAccessRuleProtection($true,$false)
   foreach ($rule in @($acl.Access)) {{ $acl.RemoveAccessRuleSpecific($rule) }}
@@ -30,7 +30,7 @@ function PrivateDirectory([string]$path) {{
     $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($who,'FullControl','ContainerInherit,ObjectInherit','None','Allow')
     $acl.AddAccessRule($rule)
   }}
-  Set-Acl -LiteralPath $path -AclObject $acl
+  [System.IO.Directory]::SetAccessControl($path,$acl)
 }}
 PrivateDirectory $parent
 if (Test-Path -LiteralPath $dest) {{ throw 'Runner target exists; refusing to replace an executable' }}

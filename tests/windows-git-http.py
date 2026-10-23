@@ -1,5 +1,5 @@
 """Local HTTPS Git fixture: no public repository, account or real token."""
-import contextlib, http.server, pathlib, shutil, ssl, subprocess, threading
+import http.server, pathlib, shutil, ssl, subprocess, threading, sys
 
 def exercise(root, project, env, rpc, bad):
     git=lambda *args: subprocess.run(['git',*map(str,args)],env=env,check=True,capture_output=True)
@@ -32,7 +32,7 @@ def exercise(root, project, env, rpc, bad):
         rpc(op='git_native_fetch',path=str(clone),remote='origin')
         rpc(op='git_update_apply',path=str(clone),expected=plan)
         assert (clone/'README.md').read_text()=='fixture updated'
-        print('PASS native Windows HTTPS access / clone / collision / fetch / fast-forward')
+        print(f'PASS {sys.platform} native HTTPS access / clone / collision / fetch / fast-forward')
     finally:
         server.shutdown();server.server_close();thread.join();env.pop('GIT_SSL_CAINFO',None)
     # Host-scoped fake credential only; never contacts Codeup.
@@ -43,4 +43,4 @@ def exercise(root, project, env, rpc, bad):
     assert 'password=fixture-token-not-real' in result.stdout
     rpc(op='git_vps_auth_remove',confirm=True)
     assert not rpc(op='git_vps_auth_status')['configured']
-    print('PASS native Windows account-local Codeup credential save / reuse / removal (fake token)')
+    print(f'PASS {sys.platform} native account-local Codeup credential save / reuse / removal (fake token)')

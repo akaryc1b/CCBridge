@@ -2,6 +2,13 @@
 use std::io::{Read, Write};
 fn main() {
     let args: Vec<_> = std::env::args().collect();
+    if args.get(1).is_some_and(|a| a == "--fixture-child") {
+        let file = args.get(2).unwrap();
+        loop {
+            std::fs::write(file, "heartbeat").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
     if args.iter().any(|a| a == "--version") {
         println!("fixture-claude-windows");
         return;
@@ -14,6 +21,11 @@ fn main() {
     let mut input = String::new();
     std::io::stdin().read_to_string(&mut input).unwrap();
     if input.contains("wait-for-cancel") {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--fixture-child", "task-child-heartbeat"])
+            .spawn()
+            .unwrap();
+        std::fs::write("task-child.pid", child.id().to_string()).unwrap();
         loop {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
