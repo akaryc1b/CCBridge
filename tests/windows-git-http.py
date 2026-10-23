@@ -1,5 +1,5 @@
 """Local HTTPS Git fixture: no public repository, account or real token."""
-import http.server, pathlib, shutil, ssl, subprocess, threading, sys
+import http.server, pathlib, shutil, ssl, subprocess, threading, sys, tempfile
 
 def exercise(root, project, env, rpc, bad):
     git=lambda *args: subprocess.run(['git',*map(str,args)],env=env,check=True,capture_output=True)
@@ -7,9 +7,12 @@ def exercise(root, project, env, rpc, bad):
     bare=web/'fixture.git';git('init','--bare','-b','main',bare)
     git('-C',project,'push',bare,'main')
     git('-C',bare,'update-server-info')
-    cert=root/'fixture-cert.pem';key=root/'fixture-key.pem'
+    tls=tempfile.TemporaryDirectory(prefix='ccbridge-tls-')
+    tlsroot=pathlib.Path(tls.name);cert=tlsroot/'fixture-cert.pem';key=tlsroot/'fixture-key.pem'
+    config=tlsroot/'openssl.cnf';config.write_text('[req]\ndistinguished_name=dn\n[dn]\n')
     openssl=shutil.which('openssl') or r'C:\Program Files\Git\usr\bin\openssl.exe'
-    subprocess.run([openssl,'req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(key),'-out',str(cert),'-days','1','-subj','/CN=127.0.0.1','-addext','subjectAltName=IP:127.0.0.1'],check=True,capture_output=True)
+    generated=subprocess.run([openssl,'req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(key),'-out',str(cert),'-days','1','-config',str(config),'-subj','/CN=127.0.0.1','-addext','subjectAltName=IP:127.0.0.1'],capture_output=True)
+    assert generated.returncode==0,generated.stderr.decode(errors='replace')
     class Handler(http.server.SimpleHTTPRequestHandler):
         def __init__(self,*args,**kwargs): super().__init__(*args,directory=str(web),**kwargs)
         def log_message(self,*args): pass
@@ -20,6 +23,7 @@ def exercise(root, project, env, rpc, bad):
     url=f'https://127.0.0.1:{server.server_port}/fixture.git'
     env['GIT_SSL_CAINFO']=str(cert)
     try:
+        bad(op='git_native_access',url=url.replace('fixture.git','missing.git'))
         assert rpc(op='git_native_access',url=url)['accessible']
         rpc(op='git_native_clone',path=str(root),name='克隆 with spaces',url=url)
         clone=root/'克隆 with spaces'
@@ -34,7 +38,7 @@ def exercise(root, project, env, rpc, bad):
         assert (clone/'README.md').read_text()=='fixture updated'
         print(f'PASS {sys.platform} native HTTPS access / clone / collision / fetch / fast-forward')
     finally:
-        server.shutdown();server.server_close();thread.join();env.pop('GIT_SSL_CAINFO',None)
+        server.shutdown();server.server_close();thread.join();env.pop('GIT_SSL_CAINFO',None);tls.cleanup()
     # Host-scoped fake credential only; never contacts Codeup.
     rpc(op='git_vps_auth_install',server_storage_ack=True,username='fixture-user',secret='fixture-token-not-real')
     assert rpc(op='git_vps_auth_status')['configured']

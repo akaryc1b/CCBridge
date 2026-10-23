@@ -74,27 +74,9 @@ fn run_prepared(mut cmd: Command) -> Result<Vec<u8>> {
         .join()
         .map_err(|_| anyhow::anyhow!("Git 错误读取失败"))??;
     if !status?.success() {
-        let text = String::from_utf8_lossy(&error).to_ascii_lowercase();
-        let auth = [
-            "authentication",
-            "username",
-            "access denied",
-            "403",
-            "401",
-            "repository not found",
-            "terminal prompts disabled",
-        ]
-        .iter()
-        .any(|s| text.contains(s));
-        return Err(coded(
-            if auth { "auth" } else { "git_failed" },
-            if auth {
-                "服务器 Git 没有获得仓库访问权限，请在 App 保存或同步认证后重试"
-            } else {
-                "服务器 Git 操作失败，请检查仓库状态、网络和磁盘空间；已有文件未覆盖"
-            },
-        ));
+        return Err(failure(&String::from_utf8_lossy(&error)));
     }
+
     Ok(output)
 }
 fn child_stderr(child: &mut ProcessTree) -> Result<std::process::ChildStderr> {
@@ -198,4 +180,65 @@ fn remote(v: &Value) -> Result<&str> {
         bail!("远端名称无效");
     }
     Ok(r)
+}
+
+fn failure(error: &str) -> anyhow::Error {
+    let text = error.to_ascii_lowercase();
+    let (code, message) = if text.contains("certificate") || text.contains("ssl peer") {
+        (
+            "certificate",
+            "服务器无法验证 Git 证书，请检查证书链；不要关闭证书验证",
+        )
+    } else if [
+        "could not resolve",
+        "failed to connect",
+        "timed out",
+        "connection refused",
+    ]
+    .iter()
+    .any(|s| text.contains(s))
+    {
+        ("network", "服务器无法连接 Git 服务，请检查网络、代理和 DNS")
+    } else if text.contains("not found") || text.contains("404") {
+        (
+            "repository",
+            "仓库不存在或当前账号不可见，请核对仓库地址与读取权限",
+        )
+    } else if [
+        "authentication",
+        "username",
+        "access denied",
+        "403",
+        "401",
+        "terminal prompts disabled",
+    ]
+    .iter()
+    .any(|s| text.contains(s))
+    {
+        (
+            "auth",
+            "服务器 Git 未通过认证或权限校验，请在 App 检测认证与仓库访问",
+        )
+    } else {
+        (
+            "git_failed",
+            "服务器 Git 操作失败，请检查仓库状态、网络和磁盘空间；已有文件未覆盖",
+        )
+    };
+    coded(code, message)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn address_and_network_failures_do_not_request_new_credentials() {
+        for (raw, code) in [
+            ("repository not found 404", "repository"),
+            ("Failed to connect localhost", "network"),
+            ("SSL certificate problem", "certificate"),
+            ("Authentication failed 401", "auth"),
+        ] {
+            assert_eq!(error_code(&failure(raw)), code);
+        }
+    }
 }

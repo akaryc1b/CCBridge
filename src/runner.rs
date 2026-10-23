@@ -334,11 +334,24 @@ pub fn worker(id: &str) -> Result<()> {
     let dir = task_dir(id)?;
     #[cfg(windows)]
     let _log = crate::platform::worker_log(&dir)?;
+    let claim = registry_guard()?;
     let mut t: Task = read_json(&dir.join("task.json"))?;
+    if t.state != "queued" {
+        return Ok(());
+    }
+    if dir.join("cancel").exists() {
+        t.state = "cancelled".into();
+        t.updated_at = now();
+        t.save()?;
+        drop(claim);
+        unlock(&t);
+        return Ok(());
+    }
     t.worker_pid = std::process::id();
     t.state = "running".into();
     t.updated_at = now();
     t.save()?;
+    drop(claim);
     let result = run_cc(&mut t, &dir);
     match result {
         Ok(()) => {}
@@ -508,13 +521,24 @@ fn run_cc(t: &mut Task, dir: &Path) -> Result<()> {
     Ok(())
 }
 fn reconcile(t: &mut Task) -> Result<()> {
-    if (t.state == "running" && !alive(t.worker_pid))
-        || (t.state == "queued" && now().saturating_sub(t.created_at) > 15)
-    {
-        t.state = "interrupted".into();
-        t.error = Some("Runner worker 已退出；不会自动重放任务".into());
-        t.save()?;
-        unlock(&t);
+    let stale = |t: &Task| {
+        (t.state == "running" && !alive(t.worker_pid))
+            || (t.state == "queued" && now().saturating_sub(t.created_at) > 15)
+    };
+    if stale(t) {
+        let guard = registry_guard()?;
+        // Startup and stale-state recovery cannot race to execute or overwrite the same task.
+        *t = read_json(&task_dir(&t.id)?.join("task.json"))?;
+        let interrupted = stale(t);
+        if interrupted {
+            t.state = "interrupted".into();
+            t.error = Some("Runner worker 已退出；不会自动重放任务".into());
+            t.save()?;
+        }
+        drop(guard);
+        if interrupted {
+            unlock(t);
+        }
     }
 
     if t.model_resolved.is_none() {

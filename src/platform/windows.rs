@@ -284,7 +284,9 @@ $ErrorActionPreference='Stop'
 $startup=([wmiclass]'Win32_ProcessStartup').CreateInstance()
 $startup.ShowWindow=0
 $startup.CreateFlags=16778760
-$startup.EnvironmentVariables=@([System.Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object {{ [string]$_.Key+'='+[string]$_.Value }})
+$environment=[string[]]@([System.Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object {{ [string]$_.Key+'='+[string]$_.Value }})
+[Array]::Sort($environment,[StringComparer]::OrdinalIgnoreCase)
+$startup.EnvironmentVariables=$environment
 $process=[wmiclass]'Win32_Process'
 $process.Scope.Options.Impersonation=[System.Management.ImpersonationLevel]::Impersonate
 $result=$process.Create({command},{directory},$startup)
@@ -295,10 +297,54 @@ if ($result.ReturnValue -ne 0) {{ throw ('Windows WMI 创建 Worker 失败，代
         directory = ps_literal(dir.to_str().context("任务目录编码无效")?)?
     );
     let encoded = powershell(&script);
-    let output = std::process::Command::new("powershell.exe")
+    use std::{
+        io::Read,
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+    let mut command = std::process::Command::new("powershell.exe");
+    command
         .args(encoded.split_whitespace().skip(1))
-        .output()
-        .context("无法启动 Windows Worker 引导")?;
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = super::ProcessTree::spawn(command).context("无法启动 Windows Worker 引导")?;
+    let stdout = child.stdout().context("Worker 引导输出不可用")?;
+    let stderr = child.stderr().context("Worker 引导诊断不可用")?;
+    let out = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        stdout.take(4096).read_to_end(&mut v).map(|_| v)
+    });
+    let err = std::thread::spawn(move || {
+        let mut v = Vec::new();
+        stderr.take(65536).read_to_end(&mut v).map(|_| v)
+    });
+    let end = Instant::now() + Duration::from_secs(30);
+    let status = loop {
+        if let Some(s) = child.try_wait()? {
+            break Ok(s);
+        }
+        if Instant::now() >= end {
+            break Err(coded(
+                "worker_launch_timeout",
+                "Windows 独立任务启动超时，请查询原任务状态；不要重复创建",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let _ = child.terminate(true);
+    let _ = child.wait();
+    let stdout = out
+        .join()
+        .map_err(|_| anyhow::anyhow!("Worker 引导输出读取失败"))??;
+    let stderr = err
+        .join()
+        .map_err(|_| anyhow::anyhow!("Worker 引导诊断读取失败"))??;
+    let output = std::process::Output {
+        status: status?,
+        stdout,
+        stderr,
+    };
     if !output.status.success() {
         return Err(coded(
             "worker_launch_failed",
