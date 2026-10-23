@@ -2259,3 +2259,133 @@ pre {
 .file-row > button:first-child svg {
   flex-shrink: 0;
 }
+
+/* Approved compact Codeup panes: configuration and access remain distinct. */
+.codeup-compact .dialog-body {
+  gap: 0;
+}
+.codeup-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  padding: 3px;
+  gap: 2px;
+  border-radius: 8px;
+  background: var(--soft);
+  margin-bottom: 20px;
+}
+.codeup-tabs button {
+  padding: 6px 20px;
+  font-size: 13px;
+  border-radius: 6px;
+  color: var(--muted-text);
+}
+.codeup-tabs button[data-state="on"] {
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.06);
+}
+.codeup-tabs button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+.codeup-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 20px;
+}
+.codeup-status-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 13px;
+  min-width: 0;
+}
+.codeup-status-copy strong {
+  font-size: 14px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.codeup-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.codeup-account {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  color: var(--muted-text);
+  font-size: 12px;
+  margin: -4px 0 18px;
+  overflow-wrap: anywhere;
+}
+.codeup-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding-bottom: 20px;
+}
+.codeup-form label {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.codeup-form > div {
+  min-width: 0;
+}
+.codeup-form-target {
+  grid-column: 1 / -1;
+  font-size: 13px;
+}
+.codeup-cancel-edit {
+  justify-self: start;
+}
+.codeup-legacy {
+  margin: -6px 0 18px;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.codeup-access {
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+.codeup-access > label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.codeup-access-input {
+  display: flex;
+  gap: 8px;
+}
+.codeup-access-input input {
+  min-width: 0;
+  flex: 1;
+}
+.codeup-access-result {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 8px 0 4px;
+}
+.codeup-access-result > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.codeup-access-result > svg {
+  flex-shrink: 0;
+}
+.codeup-access-result > button {
+  margin-left: auto;
+}
+.codeup-failed {
+  color: var(--destructive);
+  font-size: 13px;
+}
+.codeup-passed {
+  color: var(--success);
+}
