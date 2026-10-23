@@ -1288,6 +1288,9 @@ export default function App() {
                           : "还没有服务器")}
                     </h3>
                     <p className="muted">
+                      {connected && connection.environment?.platform
+                        ? `${connection.environment.platform} · `
+                        : ""}
                       {profile.host ? `端口 ${profile.port}` : ""}
                     </p>
                   </div>

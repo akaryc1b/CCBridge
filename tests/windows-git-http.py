@@ -1,5 +1,5 @@
 """Local HTTPS Git fixture: no public repository, account or real token."""
-import http.server, pathlib, shutil, ssl, subprocess, threading, sys, tempfile
+import http.server, pathlib, shutil, ssl, subprocess, threading, sys, tempfile, os
 
 def exercise(root, project, env, rpc, bad):
     git=lambda *args: subprocess.run(['git',*map(str,args)],env=env,check=True,capture_output=True)
@@ -22,6 +22,12 @@ def exercise(root, project, env, rpc, bad):
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     url=f'https://127.0.0.1:{server.server_port}/fixture.git'
     env['GIT_SSL_CAINFO']=str(cert)
+    # Windows Git defaults to Schannel, which intentionally ignores a custom CA file.
+    # Select its OpenSSL backend for this local fixture only; TLS verification stays enabled.
+    overrides={}
+    if os.name=='nt':
+        overrides={k:env.get(k) for k in ['GIT_CONFIG_COUNT','GIT_CONFIG_KEY_0','GIT_CONFIG_VALUE_0']}
+        env.update(GIT_CONFIG_COUNT='1',GIT_CONFIG_KEY_0='http.sslBackend',GIT_CONFIG_VALUE_0='openssl')
     try:
         bad(op='git_native_access',url=url.replace('fixture.git','missing.git'))
         assert rpc(op='git_native_access',url=url)['accessible']
@@ -39,6 +45,9 @@ def exercise(root, project, env, rpc, bad):
         print(f'PASS {sys.platform} native HTTPS access / clone / collision / fetch / fast-forward')
     finally:
         server.shutdown();server.server_close();thread.join();env.pop('GIT_SSL_CAINFO',None);tls.cleanup()
+        for k,v in overrides.items():
+            if v is None:env.pop(k,None)
+            else:env[k]=v
     # Host-scoped fake credential only; never contacts Codeup.
     rpc(op='git_vps_auth_install',server_storage_ack=True,username='fixture-user',secret='fixture-token-not-real')
     assert rpc(op='git_vps_auth_status')['configured']
