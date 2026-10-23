@@ -8,7 +8,7 @@ def rpc(**v):
     p = subprocess.run([binary,'rpc'],input=json.dumps(v,ensure_ascii=False),text=True,capture_output=True,env=env,timeout=40,encoding='utf-8')
     assert p.returncode == 0, p.stderr
     value=json.loads(p.stdout)
-    assert value['ok'],value
+    assert value['ok'],json.dumps(value,ensure_ascii=True)+'\n'+p.stderr
     return value['data']
 def bad(**v):
     p=subprocess.run([binary,'rpc'],input=json.dumps(v),text=True,capture_output=True,env=env,timeout=40,encoding='utf-8')

@@ -1,4 +1,6 @@
-use crate::{common, databases, integration, mcp, runner};
+#[cfg(unix)]
+use crate::integration;
+use crate::{common, databases, mcp, runner};
 use anyhow::{Result, bail};
 pub fn run_non_gui(args: Vec<String>) -> Result<bool> {
     #[cfg(unix)]
@@ -21,7 +23,12 @@ pub fn run_non_gui(args: Vec<String>) -> Result<bool> {
             }
             runner::worker(args.get(1).ok_or_else(|| anyhow::anyhow!("缺少任务编号"))?)
         }
-        Some("mcp") => tokio::runtime::Runtime::new()?.block_on(mcp::serve_bridge()),
+        Some("mcp") => {
+            #[cfg(windows)]
+            bail!("此构建是 Windows 远端 Runner；请在 Mac App 配置 Codex MCP");
+            #[cfg(unix)]
+            tokio::runtime::Runtime::new()?.block_on(mcp::serve_bridge())
+        }
         Some("permission-server") => {
             tokio::runtime::Runtime::new()?.block_on(mcp::serve_permissions(
                 args.get(1)
@@ -37,8 +44,13 @@ pub fn run_non_gui(args: Vec<String>) -> Result<bool> {
             Ok(())
         }),
         Some("configure-codex") => {
-            println!("{}", integration::configure()?);
-            Ok(())
+            #[cfg(windows)]
+            bail!("远端 Runner 无需写入 Codex 配置，请在 Mac App 配置 MCP");
+            #[cfg(unix)]
+            {
+                println!("{}", integration::configure()?);
+                Ok(())
+            }
         }
         Some("--version") => {
             println!("CCBridge {}", env!("CARGO_PKG_VERSION"));

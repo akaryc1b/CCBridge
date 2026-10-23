@@ -363,3 +363,57 @@ if ($result.ReturnValue -ne 0) {{ throw ('Windows WMI 创建 Worker 失败，代
     }
     Ok(pid)
 }
+
+/// Read-only credential ACL validation; status must not repair or rewrite configuration.
+pub fn check_private(path: &Path) -> Result<()> {
+    check_owner(path, false)?;
+    with_sid(|sid| {
+        let name = wide(path.as_os_str());
+        let mut acl = std::ptr::null_mut();
+        let mut descriptor = std::ptr::null_mut();
+        let result = unsafe {
+            GetNamedSecurityInfoW(
+                name.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut acl,
+                std::ptr::null_mut(),
+                &mut descriptor,
+            )
+        };
+        if result != 0 {
+            return Err(std::io::Error::from_raw_os_error(result as i32).into());
+        }
+        let _descriptor = Local(descriptor);
+        if acl.is_null() {
+            bail!("Windows 凭据没有私有访问控制，已停止操作");
+        }
+        let text = wide(std::ffi::OsStr::new("S-1-5-18"));
+        let mut system = std::ptr::null_mut();
+        if unsafe { ConvertStringSidToSidW(text.as_ptr(), &mut system) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let _system = Local(system);
+        for index in 0..unsafe { (*acl).AceCount } as u32 {
+            let mut ace = std::ptr::null_mut();
+            if unsafe { GetAce(acl, index, &mut ace) } == 0 {
+                return Err(std::io::Error::last_os_error().into());
+            }
+            let header = unsafe { &*ace.cast::<ACE_HEADER>() };
+            if header.AceType == ACCESS_DENIED_ACE_TYPE as u8 {
+                continue;
+            }
+            if header.AceType != ACCESS_ALLOWED_ACE_TYPE as u8 {
+                bail!("Windows 凭据访问控制类型异常，已停止操作");
+            }
+            let allowed = ace.cast::<ACCESS_ALLOWED_ACE>();
+            let target = unsafe { std::ptr::addr_of_mut!((*allowed).SidStart).cast() };
+            if unsafe { EqualSid(target, sid) == 0 && EqualSid(target, system) == 0 } {
+                bail!("Windows 凭据允许其他账号访问，请修复权限后重试");
+            }
+        }
+        Ok(())
+    })
+}

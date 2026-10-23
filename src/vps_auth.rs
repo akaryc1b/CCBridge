@@ -24,7 +24,7 @@ fn safe(p: &Path, private: bool) -> Result<()> {
 #[cfg(windows)]
 fn safe(p: &Path, private: bool) -> Result<()> {
     if private {
-        crate::platform::private_file(p)
+        crate::platform::check_private(p)
     } else {
         crate::platform::account_file(p)
     }

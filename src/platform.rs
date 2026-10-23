@@ -25,8 +25,8 @@ pub fn replace(from: &Path, to: &Path) -> Result<()> {
 mod windows;
 #[cfg(windows)]
 pub use windows::{
-    account_file, alive, created_private, ensure_worker_owner, move_exclusive, private_dir,
-    private_file, replace, spawn_worker, worker_log,
+    account_file, alive, check_private, created_private, ensure_worker_owner, move_exclusive,
+    private_dir, private_file, replace, spawn_worker, worker_log,
 };
 
 #[cfg(unix)]
@@ -40,6 +40,7 @@ pub fn created_private(path: &Path) -> Result<()> {
 }
 
 /// Only the long-lived Worker detaches; its Claude children belong to its own process tree.
+#[cfg(unix)]
 pub fn detach(command: &mut Command) {
     #[cfg(unix)]
     {
