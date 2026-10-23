@@ -1,6 +1,6 @@
 # Windows 原生远端开发与验收方案
 
-状态：开发中。基线为 main `4e3bdb0`（0.10.8）。本方案是 Mac 客户端连接 Windows 远端，不是 Windows 桌面客户端；后者见 WINDOWS_SUPPORT.md。
+状态：按用户要求暂停，仅保留独立开发分支；未合并、未正式发布。验收与恢复入口见 [WINDOWS_REMOTE_ACCEPTANCE.md](WINDOWS_REMOTE_ACCEPTANCE.md)。基线为 main `4e3bdb0`（0.10.8）。本方案是 Mac 客户端连接 Windows 远端，不是 Windows 桌面客户端；后者见 WINDOWS_SUPPORT.md。
 
 ## 使用路径
 
