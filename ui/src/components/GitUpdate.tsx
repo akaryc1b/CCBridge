@@ -1,3 +1,4 @@
+import { remoteBasename } from "@/lib/remotePath";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -157,7 +158,7 @@ export function GitUpdate({
             Git 更新
           </DialogTitle>
           <DialogDescription title={path}>
-            {path.split("/").pop()} ·{" "}
+            {remoteBasename(path)} ·{" "}
             {snap && !reviewing
               ? snap.total
               : checking && !plan.length
@@ -224,7 +225,7 @@ export function GitUpdate({
                     }
                   />
                   <div className="grow">
-                    <strong>{r.name || r.path.split("/").pop()}</strong>
+                    <strong>{r.name || remoteBasename(r.path)}</strong>
                     <small>
                       {r.branch || "分离 HEAD"} ← {r.upstream || "无上游"}
                     </small>

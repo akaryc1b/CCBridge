@@ -715,6 +715,17 @@ git_auth clone --progress -- {} "$dest"
     }
     pub async fn prepare_repositories(&self, group: &str, urls: &str) -> Result<Value> {
         let plan = crate::provision::plan(group, urls)?;
+        if self.is_windows() {
+            let projects = format!("{}\\projects", self.environment.home);
+            if self.browse(&projects, false).await.is_err() {
+                self.mkdir(&self.environment.home, "projects").await?;
+            }
+            let root = format!("{projects}\\{group}");
+            if self.browse(&root, false).await.is_err() {
+                self.mkdir(&projects, group).await?;
+            }
+            return self.clone_into(&root, urls, false).await;
+        }
         let root = format!("{}/projects/{group}", self.environment.home);
         let mut prepared = vec![];
         for (name, url) in plan {

@@ -25,11 +25,16 @@ pub fn replace(from: &Path, to: &Path) -> Result<()> {
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{alive, move_exclusive, private_dir, private_file, replace};
+pub use windows::{alive, created_private, move_exclusive, private_dir, private_file, replace};
 
 #[cfg(unix)]
 pub fn alive(pid: u32) -> bool {
     pid > 0 && unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(unix)]
+pub fn created_private(path: &Path) -> Result<()> {
+    private_file(path)
 }
 
 /// Only the long-lived Worker detaches; its Claude children belong to its own process tree.

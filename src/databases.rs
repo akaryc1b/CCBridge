@@ -248,8 +248,17 @@ fn verify_package(d: &Database) -> Result<()> {
     Ok(())
 }
 fn find_path(name: &str) -> Option<PathBuf> {
+    let extensions = if cfg!(windows) && Path::new(name).extension().is_none() {
+        vec![".exe", ".cmd", ".bat", ""]
+    } else {
+        vec![""]
+    };
     std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|d| d.join(name))
+        .flat_map(|d| {
+            extensions
+                .iter()
+                .map(move |ext| d.join(format!("{name}{ext}")))
+        })
         .find(|p| p.is_file())
         .and_then(|p| p.canonicalize().ok())
 }

@@ -1,12 +1,8 @@
+import { remoteContains } from "./remotePath";
 export function containingProject(path: string, projects: { path: string }[]) {
-  const normalized = path.replace(/\/$/, "");
   return (
     projects
-      .filter(
-        (p) =>
-          normalized === p.path ||
-          normalized.startsWith(p.path.replace(/\/$/, "") + "/"),
-      )
+      .filter((p) => remoteContains(p.path, path))
       .sort((a, b) => b.path.length - a.path.length)[0]?.path || ""
   );
 }

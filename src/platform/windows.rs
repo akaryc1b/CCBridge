@@ -135,6 +135,29 @@ pub fn private_file(path: &Path) -> Result<()> {
         Ok(())
     })
 }
+/// Only call for a path exclusively created by this operation, never an existing foreign file.
+pub fn created_private(path: &Path) -> Result<()> {
+    reject_reparse(path)?;
+    with_sid(|sid| {
+        let mut name = wide(path.as_os_str());
+        let status = unsafe {
+            SetNamedSecurityInfoW(
+                name.as_mut_ptr(),
+                SE_FILE_OBJECT,
+                OWNER_SECURITY_INFORMATION,
+                sid,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        if status != 0 {
+            return Err(std::io::Error::from_raw_os_error(status as i32).into());
+        }
+        Ok(())
+    })?;
+    private_file(path)
+}
 pub fn private_dir(path: &Path) -> Result<()> {
     if !path.exists() {
         let parent = path.parent().context("私有目录缺少父目录")?;
@@ -143,6 +166,7 @@ pub fn private_dir(path: &Path) -> Result<()> {
         }
         reject_reparse(parent)?;
         std::fs::create_dir(path)?;
+        return created_private(path);
     }
     if !path.is_dir() {
         bail!("私有目录路径被文件占用");

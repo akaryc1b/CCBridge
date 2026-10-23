@@ -70,7 +70,7 @@ fn private_write(p: &Path, bytes: &[u8]) -> Result<()> {
         #[cfg(unix)]
         options.mode(0o600);
         let mut f = options.open(&tmp)?;
-        crate::platform::private_file(&tmp)?;
+        crate::platform::created_private(&tmp)?;
         f.write_all(bytes)?;
         f.sync_all()?;
         crate::platform::replace(&tmp, p)?;
@@ -159,7 +159,7 @@ pub fn rpc_at(v: &Value, home: &Path) -> Result<Value> {
                 if !out.status.success() {
                     bail!("VPS 凭据写入失败；原认证未覆盖")
                 }
-                crate::platform::private_file(&staged)?;
+                crate::platform::created_private(&staged)?;
                 crate::platform::replace(&staged, &credentials)?;
                 Ok(())
             })();

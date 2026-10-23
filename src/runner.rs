@@ -170,6 +170,13 @@ pub fn dispatch(v: Value) -> Result<Value> {
     }
 }
 fn start(v: Value) -> Result<Value> {
+    #[cfg(windows)]
+    {
+        let executable = Path::new(field(&v, "claude")?);
+        if !executable.is_absolute() || !executable.is_file() {
+            bail!("Windows 上未安装 Claude Code；SSH、文件和 Git 功能仍可使用");
+        }
+    }
     let _guard = registry_guard()?;
     let id = field(&v, "task_id")?.to_owned();
     valid_id(&id)?;

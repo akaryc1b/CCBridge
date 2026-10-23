@@ -19,15 +19,16 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           shared-key: windows-native-runner-rust193-v1
+          cache-on-failure: true
       - name: Compile native Runner
         run: cargo build --locked --release --no-default-features
       - name: Compile all unit tests
-        run: cargo test --locked --no-default-features --no-run
+        run: cargo test --locked --release --no-default-features --no-run
       - name: Platform tests
         run: |
-          cargo test --locked --no-default-features remote_platform
+          cargo test --locked --release --no-default-features remote_platform
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          cargo test --locked --no-default-features native_fs
+          cargo test --locked --release --no-default-features native_fs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Native Windows acceptance (fixture, no Claude account)
         run: |
@@ -56,6 +57,10 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo test --locked --no-default-features
       - run: cargo check --locked --no-default-features --features bridge
-      - run: cargo build --locked --no-default-features
+      - run: cargo build --locked --no-default-features --features bridge
+      - name: Encrypted SSH and MCP regression
+        env:
+          CCBRIDGE_TEST_BIN: ${{ github.workspace }}/target/debug/ccbridge
+        run: cargo test --locked --no-default-features --features bridge encrypted_ssh_runner_and_mcp_acceptance -- --test-threads=1
       - name: Detached worker regression
         run: sh tests/linux-smoke.sh "$PWD/target/debug/ccbridge"

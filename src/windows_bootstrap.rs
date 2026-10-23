@@ -9,10 +9,12 @@ $dest={dest}
 $parent=Split-Path -Parent $dest
 $sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User
 function PrivateDirectory([string]$path) {{
+  $created=$false
   if (!(Test-Path -LiteralPath $path)) {{
     $up=Split-Path -Parent $path
     if (!(Test-Path -LiteralPath $up)) {{ PrivateDirectory $up }}
     [System.IO.Directory]::CreateDirectory($path) | Out-Null
+    $created=$true
   }}
   $entry=Get-Item -LiteralPath $path -Force
   $p=$entry
@@ -21,7 +23,7 @@ function PrivateDirectory([string]$path) {{
     $p=$p.Parent
   }}
   $acl=Get-Acl -LiteralPath $path
-  if ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) {{ throw 'CCBRIDGE_OWNER_CONFLICT' }}
+  if ($created) {{ $acl.SetOwner($sid) }} elseif ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) {{ throw 'CCBRIDGE_OWNER_CONFLICT' }}
   $acl.SetAccessRuleProtection($true,$false)
   foreach ($rule in @($acl.Access)) {{ $acl.RemoveAccessRuleSpecific($rule) }}
   foreach ($who in @($sid,[System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {{

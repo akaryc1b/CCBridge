@@ -49,9 +49,9 @@ pub fn write_json(p: &Path, value: &impl Serialize) -> Result<()> {
         .write(true)
         .create_new(true)
         .open(&tmp)?;
+    crate::platform::created_private(&tmp)?;
     f.write_all(&serde_json::to_vec_pretty(value)?)?;
     f.sync_all()?;
-    crate::platform::private_file(&tmp)?;
     crate::platform::replace(&tmp, p)?;
     Ok(())
 }
@@ -90,7 +90,7 @@ pub fn error_summary(raw: &str) -> String {
     for (needle, message) in [
         (
             "permission denied",
-            "访问被拒绝，请检查 SSH 账号权限或 macOS 文件与文件夹访问权限",
+            "访问被拒绝，请检查 SSH 账号和文件访问权限",
         ),
         (
             "connection refused",

@@ -1,3 +1,4 @@
+import { remoteContains, remoteBasename } from "./remotePath";
 export type RecordValue = Record<string, any>;
 export function normalizeTask(task: RecordValue) {
   return {
@@ -79,11 +80,7 @@ export function groupSessions(tasks: RecordValue[], projects: RecordValue[]) {
   for (const t of latestSessions(tasks)) {
     const workspace = String(t.workspace || "").replace(/\/$/, "");
     const project = projects
-      .filter(
-        (p) =>
-          workspace === p.path ||
-          workspace.startsWith(p.path.replace(/\/$/, "") + "/"),
-      )
+      .filter((p) => remoteContains(p.path, workspace))
       .sort((a, b) => b.path.length - a.path.length)[0];
     const path = project?.path || workspace;
     if (!groups.has(path))
@@ -92,7 +89,7 @@ export function groupSessions(tasks: RecordValue[], projects: RecordValue[]) {
         name:
           project?.name ||
           (workspace
-            ? `其他目录 · ${workspace.split("/").pop()}`
+            ? `其他目录 · ${remoteBasename(workspace)}`
             : "未记录项目"),
         registered: !!project,
         sessions: [],

@@ -1,3 +1,4 @@
+import { remoteParent, remoteBasename } from "@/lib/remotePath";
 import { AppIcon } from "@/components/AppIcon";
 import { useClaudeInfo } from "@/lib/useClaudeInfo";
 import {
@@ -1557,7 +1558,14 @@ export default function App() {
                     variant="ghost"
                     disabled={!locationReady}
                     onClick={() =>
-                      safe(browse(path.slice(0, path.lastIndexOf("/")) || "/"))
+                      safe(
+                        browse(
+                          remoteParent(
+                            path,
+                            connection.environment?.home || "/",
+                          ),
+                        ),
+                      )
                     }
                   >
                     <ArrowUp size={15} />
@@ -2776,8 +2784,8 @@ export default function App() {
             <DialogDescription>
               克隆到{" "}
               {cloneOperation.snap?.state === "running"
-                ? cloneOperation.snap.path.split("/").pop()
-                : listedPath.split("/").pop()}
+                ? remoteBasename(cloneOperation.snap.path)
+                : remoteBasename(listedPath)}
             </DialogDescription>
           </DialogHeader>
           <Textarea

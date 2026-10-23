@@ -1,3 +1,4 @@
+import { remoteParent, remoteContains, remoteBasename } from "@/lib/remotePath";
 import { time } from "@/lib/format";
 import { OperationBar } from "./common/Feedback";
 import { useOperation } from "@/lib/useOperation";
@@ -241,12 +242,7 @@ export function FileOperation({
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() =>
-                    void browse(
-                      folders.path.slice(0, folders.path.lastIndexOf("/")) ||
-                        home,
-                    )
-                  }
+                  onClick={() => void browse(remoteParent(folders.path, home))}
                 >
                   上一级
                 </Button>
@@ -259,10 +255,7 @@ export function FileOperation({
                       className="flex w-full justify-start"
                       variant="ghost"
                       key={f.path}
-                      disabled={
-                        f.path === entry.path ||
-                        f.path.startsWith(entry.path + "/")
-                      }
+                      disabled={remoteContains(entry.path, f.path)}
                       onClick={() => void browse(f.path)}
                     >
                       <Folder size={15} /> {f.name}
@@ -504,7 +497,7 @@ export function BranchDialog({
             <GitBranch className="inline" size={18} /> Git 分支
           </DialogTitle>
           <DialogDescription className="break-all">
-            <span title={path}>{path.split("/").pop()}</span>
+            <span title={path}>{remoteBasename(path)}</span>
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-wrap gap-2">

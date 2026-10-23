@@ -1,4 +1,4 @@
-#[cfg(all(test, feature = "desktop"))]
+#[cfg(all(test, feature = "bridge", unix))]
 mod acceptance;
 #[cfg(feature = "bridge")]
 pub mod backend;
