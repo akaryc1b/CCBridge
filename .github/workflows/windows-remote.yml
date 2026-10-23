@@ -30,6 +30,13 @@ jobs:
       - name: Compile native Runner
         id: native-build
         run: cargo build --locked --release --no-default-features
+      - name: Development candidate for parallel Mac integration
+        if: github.ref == 'refs/heads/codex/windows-native-remote'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: windows-remote-development-candidate
+          path: target/release/ccbridge.exe
+          retention-days: 3
       - name: Compile all unit tests
         run: cargo test --locked --release --no-default-features --no-run
       - name: Platform tests
