@@ -32,12 +32,18 @@ fn token() -> Result<OwnedHandle> {
     Ok(unsafe { OwnedHandle::from_raw_handle(h) })
 }
 fn with_sid<T>(f: impl FnOnce(PSID) -> Result<T>) -> Result<T> {
+    with_token_sid(TokenUser, f)
+}
+fn with_token_sid<T>(
+    class: TOKEN_INFORMATION_CLASS,
+    f: impl FnOnce(PSID) -> Result<T>,
+) -> Result<T> {
     let token = token()?;
     let mut len = 0;
     unsafe {
         GetTokenInformation(
             token.as_raw_handle(),
-            TokenUser,
+            class,
             std::ptr::null_mut(),
             0,
             &mut len,
@@ -49,7 +55,7 @@ fn with_sid<T>(f: impl FnOnce(PSID) -> Result<T>) -> Result<T> {
         || unsafe {
             GetTokenInformation(
                 token.as_raw_handle(),
-                TokenUser,
+                class,
                 data.as_mut_ptr().cast(),
                 len,
                 &mut len,
@@ -58,7 +64,14 @@ fn with_sid<T>(f: impl FnOnce(PSID) -> Result<T>) -> Result<T> {
     {
         return Err(std::io::Error::last_os_error().into());
     }
-    f(unsafe { (*(data.as_ptr().cast::<TOKEN_USER>())).User.Sid })
+    let sid = unsafe {
+        if class == TokenUser {
+            (*(data.as_ptr().cast::<TOKEN_USER>())).User.Sid
+        } else {
+            (*(data.as_ptr().cast::<TOKEN_OWNER>())).Owner
+        }
+    };
+    f(sid)
 }
 fn reject_reparse(path: &Path) -> Result<()> {
     for ancestor in path.ancestors() {
@@ -69,7 +82,7 @@ fn reject_reparse(path: &Path) -> Result<()> {
     }
     Ok(())
 }
-pub fn private_file(path: &Path) -> Result<()> {
+fn check_owner(path: &Path, allow_default: bool) -> Result<()> {
     reject_reparse(path)?;
     with_sid(|sid| {
         let path = wide(path.as_os_str());
@@ -91,9 +104,25 @@ pub fn private_file(path: &Path) -> Result<()> {
             return Err(std::io::Error::from_raw_os_error(status as i32).into());
         }
         let _descriptor = Local(descriptor);
-        if unsafe { EqualSid(owner, sid) } == 0 {
+        if unsafe { EqualSid(owner, sid) } == 0
+            && !(allow_default
+                && with_token_sid(TokenOwner, |default| {
+                    Ok(unsafe { EqualSid(owner, default) } != 0)
+                })?)
+        {
             bail!("私有存储不属于当前 Windows 账号，已停止操作");
         }
+        Ok(())
+    })
+}
+/// Global Git configuration contains no token; respect the token's standard owner, including elevated administrators.
+pub fn account_file(path: &Path) -> Result<()> {
+    check_owner(path, true)
+}
+pub fn private_file(path: &Path) -> Result<()> {
+    check_owner(path, false)?;
+    with_sid(|sid| {
+        let path = wide(path.as_os_str());
         let mut text = std::ptr::null_mut();
         if unsafe { ConvertSidToStringSidW(sid, &mut text) } == 0 {
             return Err(std::io::Error::last_os_error().into());

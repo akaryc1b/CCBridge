@@ -30,6 +30,9 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo test --locked --release --no-default-features native_fs
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          $env:CCBRIDGE_TEST_BIN=(Resolve-Path target/release/ccbridge.exe).Path
+          cargo test --locked --release --no-default-features windows_bootstrap
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Native Windows acceptance (fixture, no Claude account)
         run: |
           rustc tests/windows-claude-fixture.rs -o "$env:RUNNER_TEMP\ccbridge-claude-fixture.exe"

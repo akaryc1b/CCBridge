@@ -36,7 +36,8 @@ pub fn rpc(v: &Value) -> Result<Value> {
             if std::fs::symlink_metadata(raw)?.file_type().is_symlink() {
                 bail!("链接文件不提供预览");
             }
-            if !preview_allowed(raw) {
+            let root = home()?.canonicalize()?;
+            if !preview_allowed(&p.strip_prefix(&root)?.to_string_lossy()) {
                 bail!("隐藏文件、密钥与凭据文件不提供内容预览");
             }
             let mut bytes = Vec::new();
@@ -58,7 +59,7 @@ pub fn preview_allowed(path: &str) -> bool {
     let lower = path.to_lowercase();
     !lower
         .split(['/', '\\'])
-        .any(|s| s.starts_with('.') || ["appdata", "ntuser.dat"].contains(&s))
+        .any(|s| s.starts_with('.') || s == "appdata" || s.starts_with("ntuser"))
         && ![".pem", ".key", ".pfx", ".p12"]
             .iter()
             .any(|s| lower.ends_with(s))
@@ -86,6 +87,13 @@ fn list(path: &str, hidden: bool) -> Result<Value> {
             break;
         }
         let meta = std::fs::symlink_metadata(item.path())?;
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if !hidden && meta.file_attributes() & 6 != 0 {
+                continue;
+            }
+        }
         #[cfg(windows)]
         let link = {
             use std::os::windows::fs::MetadataExt;

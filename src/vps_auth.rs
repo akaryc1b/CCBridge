@@ -22,8 +22,12 @@ fn safe(p: &Path, private: bool) -> Result<()> {
     Ok(())
 }
 #[cfg(windows)]
-fn safe(p: &Path, _private: bool) -> Result<()> {
-    crate::platform::private_file(p)
+fn safe(p: &Path, private: bool) -> Result<()> {
+    if private {
+        crate::platform::private_file(p)
+    } else {
+        crate::platform::account_file(p)
+    }
 }
 fn paths(home: &Path, create: bool) -> Result<(PathBuf, PathBuf)> {
     let mut p = home.to_path_buf();

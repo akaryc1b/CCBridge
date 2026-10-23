@@ -25,7 +25,9 @@ pub fn replace(from: &Path, to: &Path) -> Result<()> {
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{alive, created_private, move_exclusive, private_dir, private_file, replace};
+pub use windows::{
+    account_file, alive, created_private, move_exclusive, private_dir, private_file, replace,
+};
 
 #[cfg(unix)]
 pub fn alive(pid: u32) -> bool {

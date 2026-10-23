@@ -1,5 +1,5 @@
 """Windows native process/RPC acceptance; uses no real Claude/Git credentials."""
-import json, os, pathlib, shutil, subprocess, sys, tempfile, time, uuid
+import json, os, pathlib, shutil, subprocess, sys, tempfile, time, uuid, importlib.util
 binary, fixture = map(lambda p: str(pathlib.Path(p).resolve()), sys.argv[1:])
 root = pathlib.Path(tempfile.mkdtemp(prefix='CCBridge Windows 测试 ')).resolve()
 env = dict(os.environ, USERPROFILE=str(root), HOME=str(root), LOCALAPPDATA=str(root/'AppData'/'Local'), CCBRIDGE_RUNNER_HOME=str(root/'state'))
@@ -57,5 +57,9 @@ try:
     rpc(**request);time.sleep(.5);rpc(op='cancel',task_id=third)
     assert wait(third)['state']=='cancelled'
     print('PASS native Windows detached Worker / automatic / resume / model / cancel (fixture only)')
+    spec=importlib.util.spec_from_file_location('git_http',pathlib.Path(__file__).with_name('windows-git-http.py'))
+    helper=importlib.util.module_from_spec(spec);spec.loader.exec_module(helper)
+    helper.exercise(root,project,env,rpc,bad)
+
 finally:
     shutil.rmtree(root,ignore_errors=True)

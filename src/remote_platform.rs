@@ -24,6 +24,13 @@ pub fn powershell(script: &str) -> String {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     )
 }
+pub fn runner_command(path: &str, state: &str) -> Result<String> {
+    Ok(powershell(&format!(
+        "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false); $OutputEncoding=[Console]::OutputEncoding; $env:CCBRIDGE_RUNNER_HOME={}; & {} rpc; exit $LASTEXITCODE",
+        ps_literal(state)?,
+        ps_literal(path)?
+    )))
+}
 pub fn ps_literal(value: &str) -> Result<String> {
     if value.contains(['\0', '\n', '\r']) {
         bail!("路径不能包含换行或空字符");
@@ -31,13 +38,22 @@ pub fn ps_literal(value: &str) -> Result<String> {
     Ok(format!("'{}'", value.replace('\'', "''")))
 }
 pub fn windows_name(name: &str) -> Result<()> {
-    let base = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let base = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end()
+        .to_ascii_uppercase();
     if name.is_empty()
         || name.ends_with(['.', ' '])
         || name
             .chars()
             .any(|c| c.is_control() || "<>:\"/\\|?*".contains(c))
-        || ["CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$"].contains(&base.as_str())
+        || [
+            "CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$", "COM¹", "COM²", "COM³",
+            "LPT¹", "LPT²", "LPT³",
+        ]
+        .contains(&base.as_str())
         || (base.len() == 4
             && (base.starts_with("COM") || base.starts_with("LPT"))
             && matches!(base.as_bytes()[3], b'1'..=b'9'))

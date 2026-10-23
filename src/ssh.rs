@@ -187,11 +187,7 @@ impl Connection {
     }
     fn rpc_command(&self) -> Result<String> {
         if self.is_windows() {
-            Ok(crate::remote_platform::powershell(&format!(
-                "$ErrorActionPreference='Stop'; $env:CCBRIDGE_RUNNER_HOME={}; & {} rpc; exit $LASTEXITCODE",
-                crate::remote_platform::ps_literal(&self.state_path())?,
-                crate::remote_platform::ps_literal(&self.runner_path)?
-            )))
+            crate::remote_platform::runner_command(&self.runner_path, &self.state_path())
         } else {
             Ok(format!(
                 "env CCBRIDGE_RUNNER_HOME={} {} rpc",
@@ -481,6 +477,9 @@ impl Connection {
             }
             if self.is_windows() && !local_auth {
                 report(&format!("{name}：使用服务器 Git 认证克隆"), index, total);
+                if let Some(o) = &operation {
+                    o.patch(json!({"phase":"fetch","name":name}));
+                }
                 let credential = self.remote_git_credential(&url).await?;
                 let cb = operation.clone().map(|o| {
                     Arc::new(move |p: Value| o.patch(p)) as Arc<dyn Fn(Value) + Send + Sync>

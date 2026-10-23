@@ -51,7 +51,6 @@ pub mod remote_platform;
 
 pub mod native_fs;
 
-#[cfg(feature = "bridge")]
 pub mod windows_bootstrap;
 
 pub mod git_protocol;

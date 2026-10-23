@@ -80,3 +80,75 @@ try {{
         url = ps_literal(url)?
     )))
 }
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::{
+        io::Write,
+        process::{Command, Stdio},
+    };
+    #[test]
+    fn native_powershell_bootstrap_and_repeat_install() -> Result<()> {
+        let binary = std::env::var("CCBRIDGE_TEST_BIN")?;
+        let root = std::env::temp_dir().join(format!("CCBridge 引导 {}", uuid::Uuid::new_v4()));
+        let dest = root.join("runner").join("0.10.8").join("ccbridge.exe");
+        let encoded = install(dest.to_str().unwrap(), env!("CARGO_PKG_VERSION"))?;
+        let execute = |bytes: &[u8]| -> Result<std::process::Output> {
+            let mut child = Command::new("powershell.exe")
+                .args(encoded.split_whitespace().skip(1))
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?;
+            child.stdin.take().unwrap().write_all(bytes)?;
+            Ok(child.wait_with_output()?)
+        };
+        let bytes = std::fs::read(binary)?;
+        let first = execute(&bytes)?;
+        assert!(
+            first.status.success(),
+            "{}",
+            String::from_utf8_lossy(&first.stderr)
+        );
+        let modified = dest.metadata()?.modified()?;
+        let second = execute(&[])?;
+        assert!(!second.status.success());
+        assert_eq!(dest.metadata()?.modified()?, modified);
+        assert_eq!(
+            Command::new(&dest).arg("--version").output()?.stdout,
+            format!("CCBridge {}\n", env!("CARGO_PKG_VERSION")).as_bytes()
+        );
+        let encoded = crate::remote_platform::runner_command(
+            dest.to_str().unwrap(),
+            root.join("状态").to_str().unwrap(),
+        )?;
+        let mut child = Command::new("powershell.exe")
+            .args(encoded.split_whitespace().skip(1))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(br#"{"op":"probe","claude":""}"#)?;
+        let output = child.wait_with_output()?;
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(value["ok"], true, "{value}");
+        assert!(
+            value["data"]["state_directory"]
+                .as_str()
+                .unwrap()
+                .contains("状态")
+        );
+        std::fs::remove_dir_all(root)?;
+        Ok(())
+    }
+}
