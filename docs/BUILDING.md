@@ -19,7 +19,7 @@ pnpm --dir ui audit --prod --audit-level=low
 cargo check --locked --manifest-path src-tauri/Cargo.toml
 ```
 
-默认 Cargo GUI 保留旧 egui 开发回退；正式 App 使用 `src-tauri` 宿主，与 CLI / MCP / Runner 共用 Rust 库。正式打包前将 Linux Runner 放入 `dist/ccbridge-linux-x86_64`，设置独立的更新签名密钥后运行 `scripts/package-tauri.sh`。签名密钥不进入源码。
+默认 Cargo GUI 保留旧 egui 开发回退；正式 App 使用 `src-tauri` 宿主，与 CLI / MCP / Runner 共用 Rust 库。正式打包前将 Linux Runner 放入 `dist/ccbridge-linux-x86_64`，将已通过 Windows 原生验收的 Runner 放入 `dist/ccbridge-windows-x86_64.exe`，设置独立的更新签名密钥后运行 `scripts/package-tauri.sh`。签名密钥不进入源码。
 
 服务器只构建 headless Runner：
 
@@ -52,3 +52,15 @@ CI 不保存 SSH/数据库密码，不连接开发或生产服务器，不自动
 
 
 安全检查范围、按目标与版本限定的公告复核策略见 [SECURITY.md](../SECURITY.md)。
+
+## Windows 原生远端 Runner
+
+这不是 Windows 桌面客户端。Windows 开发与实测范围见 [WINDOWS_REMOTE.md](WINDOWS_REMOTE.md)。在 Windows x64 上运行：
+
+```powershell
+cargo build --locked --release --no-default-features
+rustc tests/windows-claude-fixture.rs -o "$env:TEMP\ccbridge-claude-fixture.exe"
+python tests/windows-remote-smoke.py target/release/ccbridge.exe "$env:TEMP\ccbridge-claude-fixture.exe"
+```
+
+Windows 独立 CI 使用 Windows Server 2022，产出 `ccbridge-windows-x86_64.exe`。Mac 两架构复用同一份经过验收的 Runner；ARM 发布仍不等待 Intel App。该 exe 随 Mac App 打包，也作为 Release 独立附件。Windows 私有目录使用当前用户 SID / SYSTEM ACL，版本目录安装不覆盖正在使用的 exe。真实 OpenSSH 与真实 Claude 验收分开记录；fixture 不消耗模型额度。

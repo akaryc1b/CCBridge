@@ -1,9 +1,8 @@
 //! OS primitives used by the native Runner. No credentials or shell interpolation here.
 use anyhow::Result;
-use std::{
-    path::Path,
-    process::{Child, Command},
-};
+use std::process::Command;
+#[cfg(unix)]
+use std::{path::Path, process::Child};
 
 #[cfg(unix)]
 pub fn private_dir(path: &Path) -> Result<()> {
@@ -73,10 +72,11 @@ pub struct ProcessTree {
     child: Box<dyn process_wrap::std::ChildWrapper>,
 }
 impl ProcessTree {
-    pub fn spawn(mut command: Command) -> Result<Self> {
+    pub fn spawn(command: Command) -> Result<Self> {
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
+            let mut command = command;
             command.process_group(0);
             Ok(Self {
                 child: command.spawn()?,

@@ -13,6 +13,7 @@ import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCOPES = {
+    "runner-windows": ["--manifest-path", "Cargo.toml", "--no-default-features", "--target", "x86_64-pc-windows-msvc"],
     "runner-linux": ["--manifest-path", "Cargo.toml", "--no-default-features", "--target", "x86_64-unknown-linux-gnu"],
     "app-arm64": ["--manifest-path", "src-tauri/Cargo.toml", "--target", "aarch64-apple-darwin"],
     "app-x86_64": ["--manifest-path", "src-tauri/Cargo.toml", "--target", "x86_64-apple-darwin"],

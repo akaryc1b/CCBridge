@@ -101,8 +101,12 @@ mod tests {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()?;
-            child.stdin.take().unwrap().write_all(bytes)?;
-            Ok(child.wait_with_output()?)
+            let sent = child.stdin.take().unwrap().write_all(bytes);
+            let output = child.wait_with_output()?;
+            if output.status.success() {
+                sent?;
+            }
+            Ok(output)
         };
         let bytes = std::fs::read(binary)?;
         let first = execute(&bytes)?;

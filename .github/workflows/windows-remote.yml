@@ -3,6 +3,11 @@ on:
   push:
     branches: [codex/windows-native-remote]
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      skip_unix_regression:
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -21,6 +26,7 @@ jobs:
           shared-key: windows-native-runner-rust193-v1
           cache-on-failure: true
       - name: Compile native Runner
+        id: native-build
         run: cargo build --locked --release --no-default-features
       - name: Compile all unit tests
         run: cargo test --locked --release --no-default-features --no-run
@@ -34,17 +40,21 @@ jobs:
           cargo test --locked --release --no-default-features windows_bootstrap
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
       - name: Native Windows acceptance (fixture, no Claude account)
+        if: ${{ !cancelled() && steps.native-build.outcome == 'success' }}
         run: |
           rustc tests/windows-claude-fixture.rs -o "$env:RUNNER_TEMP\ccbridge-claude-fixture.exe"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           python tests/windows-remote-smoke.py target/release/ccbridge.exe "$env:RUNNER_TEMP\ccbridge-claude-fixture.exe"
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+      - name: Prepare versioned Windows Runner payload
+        run: New-Item -ItemType Directory -Force dist | Out-Null; Copy-Item target/release/ccbridge.exe dist/ccbridge-windows-x86_64.exe
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: windows-native-runner
-          path: target/release/ccbridge.exe
+          path: dist/ccbridge-windows-x86_64.exe
           retention-days: 14
   unix-regression:
+    if: ${{ !inputs.skip_unix_regression }}
     strategy:
       matrix:
         os: [macos-14, ubuntu-22.04]

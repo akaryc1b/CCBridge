@@ -22,7 +22,7 @@ files = {
     'darwin-x86_64': ['CCBridge-macos-x86_64.zip', 'CCBridge-macos-x86_64.app.tar.gz'],
 }[platform]
 arch = 'arm64' if platform == 'darwin-aarch64' else 'x86_64'
-for name in files + ['CCBridge-macos-' + arch + '.dmg', files[1] + '.sig', 'ccbridge-linux-x86_64']:
+for name in files + ['CCBridge-macos-' + arch + '.dmg', files[1] + '.sig', 'ccbridge-linux-x86_64', 'ccbridge-windows-x86_64.exe']:
     if not (root / name).is_file() or (root / name).stat().st_size == 0:
         raise SystemExit('Missing release artifact: ' + name)
 if not platforms[platform].get('signature') or not platforms[platform].get('url'):
@@ -45,7 +45,7 @@ else
   python3 scripts/merge-update-manifests.py "$DIR/latest.json" "$DIR"/latest-darwin-*.json
 fi
 # Upload binaries first: an advertised updater URL must already exist.
-for file in "$DIR"/*.dmg "$DIR"/*.zip "$DIR"/*.tar.gz "$DIR"/*.sig "$DIR"/ccbridge-linux-x86_64 "$DIR"/latest-darwin-*.json; do
+for file in "$DIR"/*.dmg "$DIR"/*.zip "$DIR"/*.tar.gz "$DIR"/*.sig "$DIR"/ccbridge-linux-x86_64 "$DIR"/ccbridge-windows-x86_64.exe "$DIR"/latest-darwin-*.json; do
   [ -f "$file" ] || continue
   gh release upload "$TAG" "$file" --repo "$REPO" --clobber
 done

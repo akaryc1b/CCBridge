@@ -16,7 +16,10 @@
         "title": "CCBridge",
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "trafficLightPosition": {"x":16,"y":18},
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 18
+        },
         "width": 1200,
         "height": 800,
         "minWidth": 1000,
@@ -41,7 +44,8 @@
       "../dist/ccbridge-linux-x86_64": "ccbridge-linux-x86_64",
       "../LICENSE": "LICENSE",
       "../licenses/": "licenses/",
-      "../ui/THIRD-PARTY.md": "UI-THIRD-PARTY.md"
+      "../ui/THIRD-PARTY.md": "UI-THIRD-PARTY.md",
+      "../dist/ccbridge-windows-x86_64.exe": "ccbridge-windows-x86_64.exe"
     },
     "icon": [
       "icons/32x32.png",

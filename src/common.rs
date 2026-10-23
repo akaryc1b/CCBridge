@@ -5,6 +5,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
 };
+#[cfg(unix)]
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 pub fn home() -> Result<PathBuf> {
@@ -296,6 +297,7 @@ pub async fn local_call(mut v: Value) -> Result<Value> {
     .context("App 请求超时；不要自动重试创建任务，请先查询任务列表")??;
     unwrap(serde_json::from_str(&line)?)
 }
+#[cfg(unix)]
 use tokio::io::AsyncReadExt;
 
 #[cfg(test)]

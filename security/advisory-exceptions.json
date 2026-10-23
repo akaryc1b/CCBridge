@@ -13,7 +13,8 @@
     "scopes": [
       "runner-linux",
       "app-arm64",
-      "app-x86_64"
+      "app-x86_64",
+      "runner-windows"
     ],
     "reason": "Both servers use stdio only (src/mcp.rs); HTTP server/client and OAuth transports are not enabled or called. Reassess before enabling them.",
     "reference": "https://rustsec.org/advisories/RUSTSEC-2026-0189.html",
@@ -29,7 +30,8 @@
     "scopes": [
       "runner-linux",
       "app-arm64",
-      "app-x86_64"
+      "app-x86_64",
+      "runner-windows"
     ],
     "reason": "Unmaintained build-time macro, not a reported exploitable vulnerability. Track migration in the Tauri dependency chain.",
     "reference": "https://rustsec.org/advisories/RUSTSEC-2024-0436.html",

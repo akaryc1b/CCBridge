@@ -11,6 +11,7 @@ cp -R licenses "$APP/Contents/Resources/"
 for arch in x86_64 aarch64; do
   if [ -f "dist/ccbridge-linux-$arch" ]; then cp "dist/ccbridge-linux-$arch" "$APP/Contents/Resources/"; fi
 done
+if [ -f dist/ccbridge-windows-x86_64.exe ]; then cp dist/ccbridge-windows-x86_64.exe "$APP/Contents/Resources/"; fi
 cp "${CARGO_TARGET_DIR:-target}/release/ccbridge" "$APP/Contents/MacOS/ccbridge"
 VERSION=$(awk -F '"' '/^version = / {print $2; exit}' Cargo.toml)
 cat > "$APP/Contents/Info.plist" <<PLIST

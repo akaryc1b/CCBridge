@@ -4,6 +4,7 @@ set -eu
 cd "$(dirname "$0")/.."
 : "${TAURI_SIGNING_PRIVATE_KEY:?Set the updater signing key path or secret}"
 test -f dist/ccbridge-linux-x86_64 || { echo 'Missing bundled Linux Runner' >&2; exit 1; }
+test -f dist/ccbridge-windows-x86_64.exe || { echo 'Missing bundled Windows Runner' >&2; exit 1; }
 TARGET_DIR="${CARGO_TARGET_DIR:-src-tauri/target}"
 case "${CCBRIDGE_TARGET:-}" in
   x86_64-apple-darwin) ARCH=x86_64; BUILD_SUBDIR=x86_64-apple-darwin/ ;;

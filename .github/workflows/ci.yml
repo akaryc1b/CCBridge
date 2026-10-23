@@ -18,6 +18,11 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  windows_runner:
+    uses: ./.github/workflows/windows-remote.yml
+    with:
+      skip_unix_regression: true
+
   linux:
     runs-on: ubuntu-22.04
     timeout-minutes: 30
@@ -89,7 +94,7 @@ jobs:
         run: chmod 700 "$CCBRIDGE_TEST_BIN" && python3 tests/database-acceptance.py "$ENGINE"
 
   macos_arm64:
-    needs: linux
+    needs: [linux, windows_runner]
     runs-on: macos-15
     timeout-minutes: 45
     env:
@@ -103,6 +108,10 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: linux-runner
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: windows-native-runner
           path: dist
       - name: Rust dependency cache (arm64)
         id: rust-cache
@@ -157,7 +166,7 @@ jobs:
           retention-days: 14
 
   macos_x86_64:
-    needs: linux
+    needs: [linux, windows_runner]
     runs-on: macos-15-intel
     timeout-minutes: 45
     env:
@@ -171,6 +180,10 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: linux-runner
+          path: dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: windows-native-runner
           path: dist
       - name: Rust dependency cache (x86_64)
         id: rust-cache
@@ -244,6 +257,10 @@ jobs:
         with:
           name: linux-runner
           path: release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: windows-native-runner
+          path: release
       - name: Publish available architecture
         env:
           GH_TOKEN: ${{ github.token }}
@@ -270,6 +287,10 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: linux-runner
+          path: release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: windows-native-runner
           path: release
       - name: Publish available architecture
         env:
