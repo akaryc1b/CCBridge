@@ -11,10 +11,16 @@ pub fn run_non_gui(args: Vec<String>) -> Result<bool> {
             args.get(2).ok_or_else(|| anyhow::anyhow!("缺少连接编号"))?,
         ),
         Some("rpc") => runner::rpc_stdio(),
-        Some("worker") => runner::worker(
-            args.get(1)
-                .ok_or_else(|| anyhow::anyhow!("missing task id"))?,
-        ),
+        Some("worker") => {
+            #[cfg(windows)]
+            if args.get(2).map(String::as_str) == Some("--owner-sid") {
+                crate::platform::ensure_worker_owner(
+                    args.get(3)
+                        .ok_or_else(|| anyhow::anyhow!("缺少 Worker 账号校验"))?,
+                )?;
+            }
+            runner::worker(args.get(1).ok_or_else(|| anyhow::anyhow!("缺少任务编号"))?)
+        }
         Some("mcp") => tokio::runtime::Runtime::new()?.block_on(mcp::serve_bridge()),
         Some("permission-server") => {
             tokio::runtime::Runtime::new()?.block_on(mcp::serve_permissions(

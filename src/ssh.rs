@@ -110,7 +110,15 @@ fi
 printf '%s\000%s\000%s\000%s\000' "$h" "$(id -un)" "$c" "$(uname -sm)"
 "#;
     let (out, err, status) = conn.execute(script.into(), &[]).await?;
-    conn.environment = if status == Some(0) && out.first() == Some(&b'/') {
+    let platform_hint = out.split(|b| *b == 0).nth(3).unwrap_or_default();
+    let windows_posix = [
+        b"MINGW".as_slice(),
+        b"MSYS".as_slice(),
+        b"CYGWIN".as_slice(),
+    ]
+    .iter()
+    .any(|prefix| platform_hint.starts_with(prefix));
+    conn.environment = if status == Some(0) && out.first() == Some(&b'/') && !windows_posix {
         let parts: Vec<_> = out.split(|b| *b == 0).collect();
         if parts.len() != 5 {
             bail!("远端登录环境返回无效；请检查 shell 是否向 stdout 输出额外文本")

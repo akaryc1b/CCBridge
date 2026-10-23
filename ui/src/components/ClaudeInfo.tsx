@@ -107,7 +107,9 @@ export function ClaudeUsage({
           variant="ghost"
           size="icon"
           aria-label="读取Claude用量"
-          disabled={!supported || data.loading}
+          disabled={
+            !supported || data.loading || data.state === "claude_unavailable"
+          }
           onClick={refresh}
         >
           <RefreshCw size={14} className={data.loading ? "spin" : ""} />
@@ -116,11 +118,15 @@ export function ClaudeUsage({
       {!supported && (
         <p className="hint">{connected ? "更新 Runner 后获取" : "未连接"}</p>
       )}
+      {supported && data.state === "claude_unavailable" && (
+        <p className="hint">未检测到 Claude Code</p>
+      )}
       {supported && data.state === "not_applicable" && (
         <p className="hint">当前登录方式不提供订阅额度。</p>
       )}
       {supported &&
         data.state !== "not_applicable" &&
+        data.state !== "claude_unavailable" &&
         (
           [
             "five_hour",

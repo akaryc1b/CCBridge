@@ -25,7 +25,8 @@ pub fn replace(from: &Path, to: &Path) -> Result<()> {
 mod windows;
 #[cfg(windows)]
 pub use windows::{
-    account_file, alive, created_private, move_exclusive, private_dir, private_file, replace,
+    account_file, alive, created_private, ensure_worker_owner, move_exclusive, private_dir,
+    private_file, replace, spawn_worker, worker_log,
 };
 
 #[cfg(unix)]
@@ -53,16 +54,22 @@ pub fn detach(command: &mut Command) {
             });
         }
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::System::Threading::{
-            CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, DETACHED_PROCESS,
-        };
-        command.creation_flags(
-            CREATE_BREAKAWAY_FROM_JOB | DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
-        );
-    }
+}
+
+#[cfg(unix)]
+pub fn spawn_worker(id: &str, dir: &Path) -> Result<u32> {
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("worker.log"))?;
+    let mut command = Command::new(std::env::current_exe()?);
+    command
+        .args(["worker", id])
+        .stdin(std::process::Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    detach(&mut command);
+    Ok(command.spawn()?.id())
 }
 
 pub struct ProcessTree {

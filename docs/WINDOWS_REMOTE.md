@@ -27,8 +27,8 @@ Windows 启用系统 OpenSSH Server → 在 Mac App 保存 SSH 连接 → 检测
 
 - `runner.rs` 继续复用 JSON RPC、任务 UUID、模型解析、审批 MCP、续聊会话及数据库快照，不另建任务状态机。
 - Windows Claude 子进程使用 process-wrap JobObject，挂起创建、分配 Job 后恢复，取消仅影响本任务进程树。
-- Worker 必须脱离 SSH 会话：以独立进程运行，验证断开 SSH 后仍可查询。不得把 Worker 放进随 RPC 退出而销毁的 Job。
-- 真实 OpenSSH 若不允许子进程 breakaway，报告具体限制并调整当前用户启动机制；不能以普通本机 spawn 通过就宣称 SSH 断线存活。
+- CI 已发现父 Job 禁止 breakaway，普通 detached spawn 返回访问拒绝。因此 Windows Worker 通过本机 WMI Win32_Process 创建，保留当前用户环境，并在执行前校验账号 SID；不安装系统服务，不使用 SYSTEM 任务，不保存或索取额外密码。需要该账号具备本地 WMI 方法执行权限；受策略限制时明确报错。
+- Worker 不属于 SSH 的子进程树；真实 OpenSSH 仍需验证断线后存活。Claude 子树单独属于 Worker 的 Job，取消不能影响其他任务。
 - Claude 未安装不能派发假任务；测试 fixture 明确标记模拟执行，不能当真实模型验收。
 
 ## 4. 文件、Git 与认证

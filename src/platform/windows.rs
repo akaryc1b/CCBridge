@@ -227,3 +227,93 @@ pub fn alive(pid: u32) -> bool {
     let mut code = 0;
     unsafe { GetExitCodeProcess(h.as_raw_handle(), &mut code) != 0 && code == STILL_ACTIVE as u32 }
 }
+
+fn current_sid() -> Result<String> {
+    with_sid(|sid| {
+        let mut text = std::ptr::null_mut();
+        if unsafe { ConvertSidToStringSidW(sid, &mut text) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let _text = Local(text.cast());
+        let mut len = 0;
+        unsafe {
+            while *text.add(len) != 0 {
+                len += 1;
+            }
+        }
+        Ok(String::from_utf16(unsafe {
+            std::slice::from_raw_parts(text, len)
+        })?)
+    })
+}
+pub fn ensure_worker_owner(expected: &str) -> Result<()> {
+    if current_sid()? != expected {
+        bail!("Worker 启动账号不一致，未执行任务");
+    }
+    Ok(())
+}
+pub fn worker_log(dir: &Path) -> Result<std::fs::File> {
+    use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, STD_OUTPUT_HANDLE, SetStdHandle};
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("worker.log"))?;
+    for handle in [STD_OUTPUT_HANDLE, STD_ERROR_HANDLE] {
+        if unsafe { SetStdHandle(handle, log.as_raw_handle()) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+    }
+    Ok(log)
+}
+/// WMI brokers creation outside the SSH/CI parent job. No service install, SYSTEM task or password.
+pub fn spawn_worker(id: &str, dir: &Path) -> Result<u32> {
+    use crate::common::{coded, valid_id};
+    use crate::remote_platform::{powershell, ps_literal};
+    valid_id(id)?;
+    let exe = std::env::current_exe()?;
+    let exe = exe.to_str().context("Runner 路径编码无效")?;
+    // Win32 filenames cannot contain quotes. Only the executable path and validated UUID/SID occur here.
+    if exe.contains(['"', '\r', '\n', '\0']) {
+        bail!("Runner 路径无效");
+    }
+    let sid = current_sid()?;
+    let command = format!("\"{exe}\" worker {id} --owner-sid {sid}");
+    let script = format!(
+        r#"
+$ErrorActionPreference='Stop'
+$startup=([wmiclass]'Win32_ProcessStartup').CreateInstance()
+$startup.ShowWindow=0
+$startup.CreateFlags=16778760
+$startup.EnvironmentVariables=@([System.Environment]::GetEnvironmentVariables().GetEnumerator() | ForEach-Object {{ [string]$_.Key+'='+[string]$_.Value }})
+$process=[wmiclass]'Win32_Process'
+$process.Scope.Options.Impersonation=[System.Management.ImpersonationLevel]::Impersonate
+$result=$process.Create({command},{directory},$startup)
+if ($result.ReturnValue -ne 0) {{ throw ('Windows WMI 创建 Worker 失败，代码：'+$result.ReturnValue) }}
+[Console]::WriteLine([string]$result.ProcessId)
+"#,
+        command = ps_literal(&command)?,
+        directory = ps_literal(dir.to_str().context("任务目录编码无效")?)?
+    );
+    let encoded = powershell(&script);
+    let output = std::process::Command::new("powershell.exe")
+        .args(encoded.split_whitespace().skip(1))
+        .output()
+        .context("无法启动 Windows Worker 引导")?;
+    if !output.status.success() {
+        return Err(coded(
+            "worker_launch_failed",
+            format!(
+                "Windows 独立任务启动失败：{}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            ),
+        ));
+    }
+    let pid = String::from_utf8(output.stdout)?
+        .trim()
+        .parse::<u32>()
+        .context("Windows Worker 未返回有效进程编号")?;
+    if pid == 0 {
+        bail!("Windows Worker 未启动");
+    }
+    Ok(pid)
+}

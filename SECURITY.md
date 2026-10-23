@@ -17,7 +17,9 @@
 
 App不使用Developer ID或Apple公证。应用内更新独立校验签名，验签失败不替换App；安装前保护本机操作与MCP等待；SSH已连接时检查远端任务，未连接时允许离线安装，不停止远端独立任务。签名私钥不得进入仓库或日志，只有公钥随App发布。
 
-CI使用锁文件并检查正式Linux Runner、Mac ARM及Intel的实际正常/构建依赖图，向OSV查询已知公告；网络失败、未知告警或过期豁免会阻止发布。前端生产依赖另执行pnpm audit。
+Windows 远端私有配置使用当前用户 SID 与 SYSTEM 的保护 DACL，拒绝凭据路径中的重解析点；普通 Git 全局配置仍保留 Windows 的标准账号归属。密码与令牌不是跨同账号进程的隔离边界。
+
+CI使用锁文件并检查正式Linux/Windows Runner、Mac ARM及Intel的实际正常/构建依赖图，向OSV查询已知公告；网络失败、未知告警或过期豁免会阻止发布。前端生产依赖另执行pnpm audit。
 
 已核实不适用的公告记录在 [security/advisory-exceptions.json](security/advisory-exceptions.json)，每项限制包、版本、目标、公告ID，附依据、复核日期和到期时间。rmcp的HTTP/OAuth豁免只对当前stdio路径有效；开启相关feature会使检查失败，必须先重新审查。维护告警与可利用漏洞分别处理，不用全局忽略列表清空风险。
 

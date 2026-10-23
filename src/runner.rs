@@ -271,19 +271,9 @@ fn start(v: Value) -> Result<Value> {
     };
     crate::databases::save_snapshot(&dir, &databases)?;
     t.save()?;
-    let log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("worker.log"))?;
-    let mut cmd = Command::new(std::env::current_exe()?);
-    cmd.args(["worker", &id])
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log);
-    crate::platform::detach(&mut cmd);
-    match cmd.spawn() {
-        Ok(child) => {
-            t.worker_pid = child.id(); /* worker owns subsequent writes */
+    match crate::platform::spawn_worker(&id, &dir) {
+        Ok(pid) => {
+            t.worker_pid = pid; /* worker owns subsequent writes */
         }
         Err(e) => {
             t.state = "failed".into();
@@ -303,7 +293,7 @@ fn registry_guard() -> Result<File> {
         .truncate(false)
         .write(true)
         .open(runner_dir()?.join("registry.lock"))?;
-    f.lock()?;
+    f.lock().context("获取任务注册锁失败")?;
     Ok(f)
 }
 fn alive(pid: u32) -> bool {
@@ -342,6 +332,8 @@ fn unlock(t: &Task) {
 }
 pub fn worker(id: &str) -> Result<()> {
     let dir = task_dir(id)?;
+    #[cfg(windows)]
+    let _log = crate::platform::worker_log(&dir)?;
     let mut t: Task = read_json(&dir.join("task.json"))?;
     t.worker_pid = std::process::id();
     t.state = "running".into();

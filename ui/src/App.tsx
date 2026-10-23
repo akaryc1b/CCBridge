@@ -353,11 +353,14 @@ export default function App() {
   const connected = connection.connected === true,
     task = details[selected] || tasks.find((t) => t.task_id === selected),
     runner = connection.probe || {};
-  const claudeInfoSupported =
+  const claudeProtocolSupported =
     connected && runner.capabilities?.includes("claude_info_v1");
+  const claudeDetected = !!runner.claude_version;
+  const claudeInfoSupported = claudeProtocolSupported && claudeDetected;
   const claudeInfo = useClaudeInfo(
     connected ? connection.connection_id : "",
-    !!claudeInfoSupported,
+    !!claudeProtocolSupported,
+    claudeDetected,
   );
   useEffect(() => {
     if (["servers", "overview"].includes(page) && connected)
@@ -1254,7 +1257,7 @@ export default function App() {
                 <ClaudeUsage
                   connected={connected}
                   data={claudeInfo.usage}
-                  supported={!!claudeInfoSupported}
+                  supported={!!claudeProtocolSupported}
                   refresh={() => void claudeInfo.refreshUsage()}
                 />
               }
@@ -1434,9 +1437,8 @@ export default function App() {
                     Claude Code
                   </Label>
                   <span className="grow" />
-                  <span className="muted">
+                  <span className="muted" title={runner.claude_error || ""}>
                     {runner.claude_version?.replace(" (Claude Code)", "") ||
-                      runner.claude_error ||
                       "未检测到"}
                   </span>
                 </div>
@@ -1464,7 +1466,7 @@ export default function App() {
               <ClaudeUsage
                 connected={connected}
                 data={claudeInfo.usage}
-                supported={!!claudeInfoSupported}
+                supported={!!claudeProtocolSupported}
                 refresh={() => void claudeInfo.refreshUsage()}
               />
               <Panel title="启动与密码">
@@ -2555,7 +2557,11 @@ export default function App() {
             {claudeInfo.catalog.loading ? "获取模型…" : "刷新列表"}
           </Button>
           {!claudeInfoSupported && (
-            <InlineAlert kind="warning">更新 Runner 后获取模型列表</InlineAlert>
+            <InlineAlert kind="warning">
+              {claudeProtocolSupported
+                ? "未检测到 Claude Code"
+                : "更新 Runner 后获取模型列表"}
+            </InlineAlert>
           )}
           {claudeInfo.catalog.error && (
             <InlineAlert>{claudeInfo.catalog.error}</InlineAlert>

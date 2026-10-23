@@ -19,11 +19,11 @@ function PrivateDirectory([string]$path) {{
   $entry=Get-Item -LiteralPath $path -Force
   $p=$entry
   while ($p) {{
-    if (($p.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {{ throw 'CCBRIDGE_PATH_CONFLICT' }}
+    if (($p.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {{ throw '安装路径包含目录联接或符号链接，已停止操作' }}
     $p=$p.Parent
   }}
   $acl=[System.IO.Directory]::GetAccessControl($path)
-  if ($created) {{ $acl.SetOwner($sid) }} elseif ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) {{ throw 'CCBRIDGE_OWNER_CONFLICT' }}
+  if ($created) {{ $acl.SetOwner($sid) }} elseif ($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -ne $sid.Value) {{ throw '安装目录不属于当前 Windows 账号，已停止操作' }}
   $acl.SetAccessRuleProtection($true,$false)
   foreach ($rule in @($acl.Access)) {{ $acl.RemoveAccessRuleSpecific($rule) }}
   foreach ($who in @($sid,[System.Security.Principal.SecurityIdentifier]::new('S-1-5-18'))) {{
@@ -33,13 +33,13 @@ function PrivateDirectory([string]$path) {{
   [System.IO.Directory]::SetAccessControl($path,$acl)
 }}
 PrivateDirectory $parent
-if (Test-Path -LiteralPath $dest) {{ throw 'Runner target exists; refusing to replace an executable' }}
+if (Test-Path -LiteralPath $dest) {{ throw '目标路径已有 Runner，未覆盖；请检测版本或使用新的版本目录' }}
 $tmp=Join-Path $parent ([Guid]::NewGuid().ToString()+'.upload.exe')
 try {{
   $file=[System.IO.File]::Open($tmp,[System.IO.FileMode]::CreateNew)
   try {{ [Console]::OpenStandardInput().CopyTo($file); $file.Flush($true) }} finally {{ $file.Dispose() }}
   $actual=& $tmp --version
-  if ($LASTEXITCODE -ne 0 -or $actual -ne {expected}) {{ throw 'Runner version verification failed' }}
+  if ($LASTEXITCODE -ne 0 -or $actual -ne {expected}) {{ throw 'Runner 版本校验失败，原版本未替换' }}
   [System.IO.File]::Move($tmp,$dest)
 }} finally {{ if (Test-Path -LiteralPath $tmp) {{ Remove-Item -LiteralPath $tmp }} }}
 "#,
@@ -58,7 +58,7 @@ $home=[System.IO.Path]::GetFullPath($env:USERPROFILE).TrimEnd('\')+'\'
 if (!$root.StartsWith($home,[System.StringComparison]::OrdinalIgnoreCase) -and $root.TrimEnd('\') -ne $home.TrimEnd('\')) {{ throw 'CCBRIDGE_OUTSIDE_HOME' }}
 $dir=Get-Item -LiteralPath $root -Force
 $p=$dir
-while ($p) {{ if (($p.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {{ throw 'CCBRIDGE_PATH_CONFLICT' }}; $p=$p.Parent }}
+while ($p) {{ if (($p.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {{ throw '安装路径包含目录联接或符号链接，已停止操作' }}; $p=$p.Parent }}
 $dest=Join-Path $root {name}
 if (Test-Path -LiteralPath $dest) {{ throw 'CCBRIDGE_ALREADY_EXISTS' }}
 $tmp=Join-Path $root ('.ccbridge-bundle-'+[Guid]::NewGuid().ToString())

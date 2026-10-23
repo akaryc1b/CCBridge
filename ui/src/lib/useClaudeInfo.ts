@@ -3,7 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { errorText } from "@/components/CodeupAuth";
 export type RemoteModel = { value: string; label: string; resolved?: string };
 type State = { models: RemoteModel[]; loading: boolean; error: string };
-export function useClaudeInfo(connectionId: string, supported: boolean) {
+export function useClaudeInfo(
+  connectionId: string,
+  supported: boolean,
+  available = true,
+) {
   const [catalog, setCatalog] = useState<State>({
     models: [],
     loading: false,
@@ -13,7 +17,8 @@ export function useClaudeInfo(connectionId: string, supported: boolean) {
   const generation = useRef(0);
   const pending = useRef(new Set<string>());
   async function load(op: "claude_models" | "claude_usage") {
-    if (!connectionId || !supported || pending.current.has(op)) return;
+    if (!connectionId || !supported || !available || pending.current.has(op))
+      return;
     const seq = generation.current;
     pending.current.add(op);
     if (op === "claude_models")
@@ -40,15 +45,19 @@ export function useClaudeInfo(connectionId: string, supported: boolean) {
     generation.current++;
     pending.current = new Set();
     setCatalog({ models: [], loading: false, error: "" });
-    setUsage({});
-    if (connectionId && supported) {
+    setUsage(
+      connectionId && supported && !available
+        ? { state: "claude_unavailable" }
+        : {},
+    );
+    if (connectionId && supported && available) {
       void load("claude_models");
       void load("claude_usage");
     }
     return () => {
       generation.current++;
     };
-  }, [connectionId, supported]);
+  }, [connectionId, supported, available]);
   return {
     catalog,
     usage,
