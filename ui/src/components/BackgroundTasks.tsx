@@ -240,7 +240,7 @@ export function BackgroundTasks({
                     )}
                     {detail.started && (
                       <>
-                        <dt>耗时</dt>
+                        <dt>{detail.finished ? "总用时" : "距发起"}</dt>
                         <dd>
                           {elapsed(
                             (detail.finished || Date.now()) - detail.started,
@@ -262,7 +262,11 @@ export function BackgroundTasks({
                         </dd>
                       </>
                     )}
-                    <dt>当前阶段</dt>
+                    <dt>
+                      {["unknown", "interrupted"].includes(state(detail))
+                        ? "上次阶段"
+                        : "当前阶段"}
+                    </dt>
                     <dd>{detail.phase || detail.summary}</dd>
                     {!!detail.total && (
                       <>

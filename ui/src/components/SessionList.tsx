@@ -141,12 +141,12 @@ export function SessionList({
             </div>
           )}
           {groupSessions(sessions.items, projects).map((g) => (
-            <section className="session-project" key={g.path}>
-              <h3 className="session-group-label">
+            <details className="session-project" key={g.path} open>
+              <summary className="session-group-label">
                 <FolderGit2 size={14} />
                 {g.name}
                 <small>{g.sessions.length}</small>
-              </h3>
+              </summary>
               {g.sessions.map((s) => (
                 <div
                   className={`session-row ${selected === s.task_id ? "active" : ""}`}
@@ -216,7 +216,7 @@ export function SessionList({
                   )}
                 </div>
               ))}
-            </section>
+            </details>
           ))}
           {!sessions.items.length && !sessions.loading && !sessions.error && (
             <p className="empty">
