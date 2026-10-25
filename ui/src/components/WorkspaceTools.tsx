@@ -466,7 +466,7 @@ export function BranchDialog({
     }
   }
   useEffect(() => {
-    if (open) void load();
+    if (open && !info.current && !error) void load();
   }, [open, path, connectionId]);
   async function change() {
     setBusy(true);
@@ -588,12 +588,13 @@ export function BranchDialog({
           </p>
         )}
 
-        {operation.snap?.state === "running" ? (
+        {operation.snap &&
+        ["running", "failed", "unknown"].includes(operation.snap.state) ? (
           <OperationBar operation={operation.snap} />
         ) : (
           message && <p role="status">{message}</p>
         )}
-        {error && (
+        {error && error !== operation.snap?.error && (
           <p role="alert" className="text-destructive">
             {error}
           </p>
@@ -624,7 +625,7 @@ export function BranchDialog({
             </Button>
           )}
           <Button variant="outline" onClick={onClose}>
-            关闭
+            {busy ? "后台运行" : "关闭"}
           </Button>
           <Button
             disabled={

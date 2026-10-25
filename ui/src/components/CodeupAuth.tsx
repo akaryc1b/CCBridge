@@ -44,6 +44,8 @@ export function CodeupAuth({
   onSaved,
   consented = false,
   onConsent,
+  onActivity,
+  requestVersion = 0,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
@@ -54,6 +56,8 @@ export function CodeupAuth({
   onSaved?: () => void;
   consented?: boolean;
   onConsent?: () => void;
+  onActivity?: (activity: string) => void;
+  requestVersion?: number;
 }) {
   const [scope, setScope] = useState(initialScope),
     [url, setUrl] = useState(initialUrl);
@@ -72,11 +76,11 @@ export function CodeupAuth({
     runLock = useRef(false);
   const remote = scope === "remote";
   useEffect(() => {
-    if (open) {
+    if (open && !runLock.current) {
       setScope(initialScope);
       setUrl(initialUrl);
     }
-  }, [open, initialScope, initialUrl]);
+  }, [initialScope, initialUrl, requestVersion]);
   async function inspect(seq: number, pane: string) {
     const current = () => seq === generation.current;
     const app = invoke<AuthStatus>("git_auth_status", {
@@ -116,7 +120,8 @@ export function CodeupAuth({
     setVps(v);
   }
   useEffect(() => {
-    const seq = ++generation.current;
+    ++generation.current;
+    onActivity?.("");
     configIdentity.current = "";
     setEditor(null);
     setUsername("");
@@ -128,10 +133,13 @@ export function CodeupAuth({
     setStatus({ loading: true });
     setLocal({ loading: true });
     setVps({ loading: remote && connected });
-    if (open && (!remote || connected)) void inspect(seq, scope);
     return () => {
       generation.current++;
     };
+  }, [scope, account, connected]);
+  useEffect(() => {
+    if (open && !runLock.current && (!remote || connected))
+      void inspect(generation.current, scope);
   }, [open, scope, account, connected]);
   useEffect(() => {
     setAccess({});
@@ -171,6 +179,8 @@ export function CodeupAuth({
     runLock.current = true;
     const seq = generation.current;
     setBusy(op);
+    setConfirmation(null);
+    onActivity?.("认证处理中…");
     setError("");
     if (op === "git_access" || op === "git_vps_auth_test")
       setAccess({ testing: true });
@@ -207,12 +217,14 @@ export function CodeupAuth({
         }
       }
       setConfirmation(null);
+      onActivity?.("认证操作完成");
     } catch (e) {
       if (seq !== generation.current) return;
+      onActivity?.("认证操作失败");
       if (op === "git_access" || op === "git_vps_auth_test")
         setAccess({ error: errorText(e) });
       else setError(errorText(e));
-      // A failed write remains in its confirmation; acknowledgement is never persisted.
+      // A retry requires a fresh confirmation; acknowledgement is never persisted.
     } finally {
       runLock.current = false;
       if (seq === generation.current) setBusy("");
@@ -306,7 +318,7 @@ export function CodeupAuth({
       <Dialog
         open={open}
         onOpenChange={(v) => {
-          if (!busy) onOpenChange(v);
+          onOpenChange(v);
         }}
       >
         <DialogContent className="codeup-dialog codeup-compact">
@@ -502,12 +514,8 @@ export function CodeupAuth({
             )}
           </div>
           <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={!!busy}
-              onClick={() => onOpenChange(false)}
-            >
-              关闭
+            <Button variant="outline" onClick={() => onOpenChange(false)}>
+              {busy ? "后台运行" : "关闭"}
             </Button>
             {!offline && showForm ? (
               <Button

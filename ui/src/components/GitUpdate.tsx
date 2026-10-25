@@ -159,7 +159,7 @@ export function GitUpdate({
           <DialogDescription title={path}>
             {path.split("/").pop()} ·{" "}
             {snap && !reviewing
-              ? snap.total
+              ? snap.total || plan.length || "…"
               : checking && !plan.length
                 ? "…"
                 : plan.length}{" "}
@@ -262,9 +262,8 @@ export function GitUpdate({
           )}
         </div>
         <DialogFooter>
-          <span className="muted grow">{running ? "后台继续执行" : ""}</span>
           <Button variant={completed ? "default" : "outline"} onClick={onClose}>
-            {completed ? "完成" : "关闭"}
+            {running ? "后台运行" : completed ? "完成" : "关闭"}
           </Button>
           {!running && (
             <>

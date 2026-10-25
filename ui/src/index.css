@@ -2389,3 +2389,10 @@ pre {
 .codeup-passed {
   color: var(--success);
 }
+
+/* Background results stay reachable without squeezing the page heading. */
+header > h1 { flex-shrink: 0; white-space: nowrap; }
+.background-task-menu { min-width: 280px; }
+.background-task-menu [role="menuitem"] { display: flex; justify-content: space-between; gap: 24px; }
+.page-projects { flex-direction: column; }
+.page-projects > .project-grid { flex: 1; }

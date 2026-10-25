@@ -1,3 +1,8 @@
+import {
+  BackgroundTasks,
+  type BackgroundTask,
+} from "./components/BackgroundTasks";
+import { operationSummary } from "./lib/backgroundOperation";
 import { AppIcon } from "@/components/AppIcon";
 import { useClaudeInfo } from "@/lib/useClaudeInfo";
 import {
@@ -251,11 +256,11 @@ export default function App() {
     [integrationState, setIntegrationState] = useState("idle"),
     [cloneProgress, setCloneProgress] = useState<Data>({}),
     [cloneError, setCloneError] = useState("");
-  const [authOpen, setAuthOpen] = useState(false),
+  const [authOpen, setAuthVisible] = useState(false),
     [authScope, setAuthScope] = useState("local"),
     [fileOperation, setFileOperation] = useState<Data | null>(null),
     [trashOpen, setTrashOpen] = useState(false),
-    [branchesOpen, setBranchesOpen] = useState(false);
+    [branchesOpen, setBranchesVisible] = useState(false);
   const [cloneResults, setCloneResults] = useState<Data[]>([]),
     [cloneElapsed, setCloneElapsed] = useState(0);
   const cloneRetry = useRef<{ signature: string; urls: string[] } | null>(null);
@@ -263,9 +268,13 @@ export default function App() {
   const [theme, setTheme] = useState(
     localStorage.getItem("ccbridge-theme") || "system",
   );
-  const [gitUpdateOpen, setGitUpdateOpen] = useState(false);
+  const [gitUpdateOpen, setGitUpdateVisible] = useState(false);
+  const [gitDialogPath, setGitDialogPath] = useState("");
+  const [branchDialogPath, setBranchDialogPath] = useState("");
   const [gitOperation, setGitOperation] = useState<Data | null>(null);
   const [branchOperation, setBranchOperation] = useState<Data | null>(null);
+  const [authActivity, setAuthActivity] = useState("");
+  const [authRequestVersion, setAuthRequestVersion] = useState(0);
   const [cloneId, setCloneId] = useState<string>();
   const [installId, setInstallId] = useState<string>();
   const [updateTransfer, setUpdateTransfer] = useState<Data>({});
@@ -415,6 +424,53 @@ export default function App() {
     !!installId,
     installId,
   );
+  const backgroundTasks: BackgroundTask[] = [];
+  if (authActivity && !authOpen)
+    backgroundTasks.push({
+      id: "auth",
+      label: "Codeup 认证",
+      summary: authActivity,
+      running: authActivity === "认证处理中…",
+      open: () => setAuthOpen(true, true),
+    });
+  if (
+    gitOperation?.id &&
+    gitOperation.connection_id === connection.connection_id &&
+    !gitUpdateOpen
+  )
+    backgroundTasks.push({
+      id: gitOperation.id,
+      label: gitOperation.source === "mcp" ? "Git 更新（MCP）" : "Git 更新",
+      summary: operationSummary(gitOperation),
+      running: gitOperation.state === "running",
+      open: () => {
+        setPage("projects");
+        setGitUpdateOpen(true, gitOperation.path);
+      },
+    });
+  if (
+    branchOperation?.id &&
+    branchOperation.connection_id === connection.connection_id &&
+    !branchesOpen
+  )
+    backgroundTasks.push({
+      id: branchOperation.id,
+      label: "获取分支",
+      summary: operationSummary(branchOperation),
+      running: branchOperation.state === "running",
+      open: () => {
+        setPage("projects");
+        setBranchesOpen(true, branchOperation.path);
+      },
+    });
+  if (cloneOperation.snap?.id && !cloneOpen)
+    backgroundTasks.push({
+      id: cloneOperation.snap.id,
+      label: "克隆仓库",
+      summary: operationSummary(cloneOperation.snap),
+      running: cloneOperation.snap.state === "running",
+      open: () => setCloneOpen(true),
+    });
   const connecting = isConnecting(busy);
   const request = async (
     command: string,
@@ -492,12 +548,41 @@ export default function App() {
       setIntegrationState("error");
     }
   }
+  function setAuthOpen(open: boolean, resume = false) {
+    if (open && !resume) setAuthRequestVersion((v) => v + 1);
+    setAuthVisible(open);
+  }
+  function setGitUpdateOpen(open: boolean, target = listedPath) {
+    if (
+      open &&
+      gitOperation?.state === "running" &&
+      gitOperation.path !== target
+    ) {
+      toast.info("另一目录的 Git 更新正在进行，已打开该操作");
+      target = gitOperation.path;
+    }
+    if (open) setGitDialogPath(target);
+    setGitUpdateVisible(open);
+  }
+  function setBranchesOpen(open: boolean, target = listedPath) {
+    if (
+      open &&
+      branchOperation?.state === "running" &&
+      branchOperation.path !== target
+    ) {
+      toast.info("另一目录的分支获取正在进行，已打开该操作");
+      target = branchOperation.path;
+    }
+    if (open) setBranchDialogPath(target);
+    setBranchesVisible(open);
+  }
   async function cloneRepositories() {
     setCloneError("");
     setCloneProgress({ stage: "检查目录", path: listedPath });
     const operationId = crypto.randomUUID();
     setCloneId(operationId);
-    const destination = listedPath;
+    const destination = cloneProgress.path || listedPath;
+    const cloneConnection = connection.connection_id;
     const signature = JSON.stringify([destination, cloneUrls, localAuth]);
     const urls =
       cloneRetry.current?.signature === signature
@@ -529,9 +614,14 @@ export default function App() {
         );
       setCloneProgress({
         stage: `已处理 ${r.repositories?.length || 0} 个仓库`,
+        path: destination,
       });
 
-      await browse(destination);
+      if (
+        locationRef.current.path === destination &&
+        locationRef.current.connection === cloneConnection
+      )
+        await browse(destination);
     } catch (e) {
       const message =
         e instanceof Error
@@ -540,7 +630,6 @@ export default function App() {
             ? String((e as Data).message)
             : String(e);
       setCloneError(message);
-      setCloneId(undefined);
     } finally {
       clearInterval(timer);
     }
@@ -626,6 +715,14 @@ export default function App() {
     await browserNavigation.current!(p);
   }
   const listedPath = listing.path || "";
+  const locationRef = useRef({
+    path: listedPath,
+    connection: connection.connection_id,
+  });
+  locationRef.current = {
+    path: listedPath,
+    connection: connection.connection_id,
+  };
   const visibleEntries = (listing.entries || []).filter((entry: Data) =>
     entry.name.toLowerCase().includes(fileFilter.toLowerCase()),
   );
@@ -1042,43 +1139,7 @@ export default function App() {
             {pages.find((p) => p[0] === page)?.[1]}
           </h1>
           <div className="page-actions">
-            {gitOperation?.state === "running" && (
-              <Button
-                className="op-chip"
-                variant="ghost"
-                onClick={() => {
-                  setPage("projects");
-                  safe(browse(gitOperation.path));
-                  setGitUpdateOpen(true);
-                }}
-              >
-                Git 更新{gitOperation.source === "mcp" ? "（MCP）" : ""}{" "}
-                {gitOperation.processed}/{gitOperation.total || "…"}
-              </Button>
-            )}
-            {branchOperation?.state === "running" && (
-              <Button
-                className="op-chip"
-                variant="ghost"
-                onClick={() => {
-                  setPage("projects");
-                  safe(browse(branchOperation.path));
-                  setBranchesOpen(true);
-                }}
-              >
-                获取分支
-              </Button>
-            )}
-            {cloneOperation.snap?.state === "running" && (
-              <Button
-                className="op-chip"
-                variant="ghost"
-                onClick={() => setCloneOpen(true)}
-              >
-                克隆 {cloneOperation.snap.processed}/
-                {cloneOperation.snap.total || "…"}
-              </Button>
-            )}
+            <BackgroundTasks tasks={backgroundTasks} />
             {(page === "overview" || page === "chat") && (
               <Button onClick={() => startDraft(currentProject)}>
                 <Plus size={15} />
@@ -1130,7 +1191,15 @@ export default function App() {
                 </Menu.Root>
                 <Button
                   disabled={!locationReady}
-                  onClick={() => setCloneOpen(true)}
+                  onClick={() => {
+                    if (!busy.has("clone_repository")) {
+                      setCloneId(undefined);
+                      setCloneError("");
+                      setCloneResults([]);
+                      setCloneProgress({ path: listedPath });
+                    }
+                    setCloneOpen(true);
+                  }}
                 >
                   克隆仓库
                 </Button>
@@ -2430,12 +2499,16 @@ export default function App() {
       </Dialog>
       <GitUpdate
         open={gitUpdateOpen}
-        path={listedPath}
+        path={gitDialogPath || listedPath}
         connectionId={connection.connection_id || ""}
         onOperation={setGitOperation}
         onClose={() => setGitUpdateOpen(false)}
         onUpdated={() => {
-          void browse(listedPath);
+          if (
+            locationRef.current.path === gitDialogPath &&
+            locationRef.current.connection === connection.connection_id
+          )
+            void browse(gitDialogPath);
         }}
         onAuth={(url) => {
           setGitUpdateOpen(false);
@@ -2449,8 +2522,9 @@ export default function App() {
         open={authOpen}
         onOpenChange={(v) => {
           setAuthOpen(v);
-          if (!v) setAuthUrl("");
         }}
+        requestVersion={authRequestVersion}
+        onActivity={setAuthActivity}
         connected={connected}
         account={
           connected
@@ -2486,10 +2560,10 @@ export default function App() {
         }}
       />
       <BranchDialog
-        key={listedPath}
+        key={`${connection.connection_id || "offline"}:${branchDialogPath || listedPath}`}
         open={branchesOpen}
         onClose={() => setBranchesOpen(false)}
-        path={listedPath}
+        path={branchDialogPath || listedPath}
         connectionId={connection.connection_id || ""}
         onOperation={setBranchOperation}
         onChanged={async () => {
@@ -2774,10 +2848,7 @@ export default function App() {
           <DialogHeader>
             <DialogTitle>克隆仓库</DialogTitle>
             <DialogDescription>
-              克隆到{" "}
-              {cloneOperation.snap?.state === "running"
-                ? cloneOperation.snap.path.split("/").pop()
-                : listedPath.split("/").pop()}
+              克隆到 {(cloneProgress.path || listedPath).split("/").pop()}
             </DialogDescription>
           </DialogHeader>
           <Textarea
@@ -2822,7 +2893,7 @@ export default function App() {
           ))}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCloneOpen(false)}>
-              关闭
+              {busy.has("clone_repository") ? "后台运行" : "关闭"}
             </Button>
             <Button
               disabled={!cloneUrls.trim() || busy.has("clone_repository")}
