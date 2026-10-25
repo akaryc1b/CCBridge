@@ -29,3 +29,11 @@
 新增 `session_list` / `session_search` / `session_turns` / `session_meta_get` / `session_meta_set` / `active_tasks`。会话正文仍通过原 `status/result` 按需读取；`session_turns` 返回每页 20 条轻量摘要。`list/status/result/cc_*` 原语义不变，旧 `list` 只追加 `session_meta`。
 
 元数据写入仅限人工 App；远端 `sessions/<session_id>.json` 使用独立短锁、原子写和 `expected_revision`。不修改 worker 的 `task.json`。分页游标绑定查询条件、元数据世代和快照，不接受客户端指定别的账号。全自动默认及现有安全授权不变。
+
+## 从文件夹开始一个项目
+
+在“项目与文件”浏览到目标文件夹，点击路径旁的 `… → 添加为项目`，确认名称即可。普通文件夹也可登记，一个项目可以包含多个 Git 仓库。
+
+在“会话”侧栏点击 `项目 + → 添加项目`，选择当前服务器下的文件夹并确认名称。没有会话的项目仍保留分组；点击该项目旁的 `+` 或分组中的“新建会话”，新任务就使用这个目录。普通查询可选择“新建普通会话”，使用当前 SSH 账号 HOME，无需仓库。
+
+已登记目录显示“已添加为项目”，不会重复登记或覆盖名称。添加项目不移动文件、不拉取代码、不改变 MCP 默认项目。打开其他项目不会改变已有会话的目录。

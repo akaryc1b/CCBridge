@@ -34,6 +34,9 @@ pub fn rpc(v: &Value) -> Result<Value> {
         ),
         "project_save" => {
             let path = canonical(field(v, "workspace")?)?;
+            if v["create_only"] == true && projects.contains_key(&path) {
+                bail!("此目录已添加为项目，请刷新项目列表")
+            }
             let name = field(v, "name")?.trim();
             if name.is_empty() || projects.iter().any(|(p, n)| p != &path && n == name) {
                 bail!("项目名称不能为空或与其他项目重复")

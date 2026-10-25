@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "ccbridge"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "keyring",
@@ -431,7 +431,7 @@ dependencies = [
 
 [[package]]
 name = "ccbridge-desktop"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "ccbridge",
  "serde",

@@ -11,6 +11,16 @@ with tempfile.TemporaryDirectory(prefix='ccbridge-sessions-') as tmp:
   return json.loads(p.stdout)
  def call(op,**kw):
   r=rpc(op,**kw);assert r['ok'],r;return r['data']
+ # Project entrypoints reuse the registry; create-only does not change legacy upsert.
+ call('project_save', workspace=str(work), name='普通目录', create_only=True)
+ assert not rpc('project_save', workspace=str(work), name='意外覆盖', create_only=True)['ok']
+ assert call('project_list')['projects'][0]['name']=='普通目录'
+ call('project_save', workspace=str(work), name='已有接口改名')
+ assert call('project_list')['projects'][0]['name']=='已有接口改名'
+ other=root/'other';other.mkdir()
+ assert not rpc('project_save', workspace=str(other), name='已有接口改名', create_only=True)['ok']
+ assert not rpc('project_save', workspace='/', name='越界', create_only=True)['ok']
+ print('PASS project create-only duplicate protection, ordinary directory, legacy upsert and HOME boundary')
  session=str(uuid.uuid4());first=None
  def seed(i):
   global first

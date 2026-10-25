@@ -16,6 +16,9 @@ import {
   RefreshCw,
   Search,
   FolderGit2,
+  FolderPlus,
+  Plus,
+  MessagesSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
@@ -26,21 +29,28 @@ import {
   DialogTitle,
   DialogDescription,
 } from "./ui/dialog";
-import { groupSessions, type RecordValue as Data } from "../lib/conversation";
+import { projectSessionGroups } from "../lib/projectEntries";
+import { type RecordValue as Data } from "../lib/conversation";
 import { time } from "../lib/format";
 import type { useSessions } from "../lib/useSessions";
 export function SessionList({
   sessions,
   projects,
   selected,
+  selectedProject,
   onSelect,
   onUpdateRunner,
+  onAddProject,
+  onNewSession,
 }: {
   sessions: ReturnType<typeof useSessions>;
   projects: Data[];
   selected: string;
+  selectedProject: string;
   onSelect: (id: string) => void;
   onUpdateRunner: () => void;
+  onAddProject: () => void;
+  onNewSession: (path: string) => void;
 }) {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [rename, setRename] = useState<Data | null>(null),
@@ -66,6 +76,28 @@ export function SessionList({
   }
   return (
     <>
+      <div className="session-project-heading">
+        <strong>项目</strong>
+        <Menu.Root>
+          <Menu.Trigger asChild>
+            <Button variant="ghost" size="icon" aria-label="添加项目或会话">
+              <Plus size={16} />
+            </Button>
+          </Menu.Trigger>
+          <Menu.Portal>
+            <Menu.Content className="context-menu" align="end">
+              <Menu.Item disabled={sessions.offline} onSelect={onAddProject}>
+                <FolderPlus size={15} />
+                添加项目
+              </Menu.Item>
+              <Menu.Item onSelect={() => onNewSession("")}>
+                <MessagesSquare size={15} />
+                新建普通会话
+              </Menu.Item>
+            </Menu.Content>
+          </Menu.Portal>
+        </Menu.Root>
+      </div>
       <div className="sessions-heading">
         <div className="session-search">
           <Search size={15} />
@@ -145,13 +177,46 @@ export function SessionList({
               </Button>
             </div>
           )}
-          {groupSessions(sessions.items, projects).map((g) => (
+          {projectSessionGroups(
+            sessions.items,
+            projects,
+            sessions.query,
+            sessions.archive,
+            sessions.project,
+          ).map((g) => (
             <details className="session-project" key={g.path} open>
-              <summary className="session-group-label">
+              <summary
+                className={`session-group-label ${selectedProject === g.path ? "active-project" : ""}`}
+              >
                 <FolderGit2 size={14} />
-                {g.name}
-                <small>{g.sessions.length}</small>
+                <span className="session-group-name">{g.name}</span>
+                {g.registered && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={`在${g.name}新建会话`}
+                    disabled={sessions.offline}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onNewSession(g.path);
+                    }}
+                  >
+                    <Plus size={14} />
+                  </Button>
+                )}
               </summary>
+              {!g.sessions.length && (
+                <Button
+                  className="session-empty-add"
+                  variant="ghost"
+                  disabled={sessions.offline}
+                  onClick={() => onNewSession(g.path)}
+                >
+                  <Plus size={14} />
+                  新建会话
+                </Button>
+              )}
               {g.sessions.map((s) => (
                 <div
                   className={`session-row ${selected === s.task_id ? "active" : ""}`}
@@ -223,15 +288,18 @@ export function SessionList({
               ))}
             </details>
           ))}
-          {!sessions.items.length && !sessions.loading && !sessions.error && (
-            <p className="empty">
-              {sessions.query
-                ? "没有匹配的会话"
-                : sessions.archive
-                  ? "没有已归档会话"
-                  : "还没有会话"}
-            </p>
-          )}
+          {!sessions.items.length &&
+            !sessions.loading &&
+            !sessions.error &&
+            (!!sessions.query || sessions.archive || !projects.length) && (
+              <p className="empty">
+                {sessions.query
+                  ? "没有匹配的会话"
+                  : sessions.archive
+                    ? "没有已归档会话"
+                    : "还没有会话"}
+              </p>
+            )}
           {sessions.loading && <p className="empty">加载会话…</p>}
           {sessions.cursor && (
             <Button

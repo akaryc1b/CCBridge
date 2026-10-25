@@ -1,3 +1,5 @@
+import { ProjectDialog } from "./components/ProjectDialog";
+import { projectAtPath } from "./lib/projectEntries";
 import { useTaskCenter } from "./lib/useTaskCenter";
 import { useSessions } from "./lib/useSessions";
 import { SessionList } from "./components/SessionList";
@@ -241,8 +243,7 @@ export default function App() {
     [cloneOpen, setCloneOpen] = useState(false),
     [cloneUrls, setCloneUrls] = useState(""),
     [localAuth, setLocalAuth] = useState(false),
-    [folderName, setFolderName] = useState(""),
-    [projectName, setProjectName] = useState("");
+    [folderName, setFolderName] = useState("");
   const [tasks, setTasks] = useState<Data[]>([]),
     [selected, setSelected] = useState(""),
     [details, setDetails] = useState<Data>({}),
@@ -349,6 +350,18 @@ export default function App() {
     setDraftProject(project);
     setPage("chat");
   }
+  const [projectEntry, setProjectEntry] = useState<{
+    path: string;
+    currentOnly: boolean;
+    connectionId: string;
+  } | null>(null);
+  function openProject(currentOnly = false) {
+    setProjectEntry({
+      path: currentOnly ? listedPath : connection.environment?.home || "",
+      currentOnly,
+      connectionId: connection.connection_id || "",
+    });
+  }
   const drafts = useRef<Record<string, string>>({});
   const messagesRef = useRef<HTMLDivElement>(null),
     following = useRef(true);
@@ -358,6 +371,12 @@ export default function App() {
   detailsRef.current = details;
 
   function switchConversation(id: string) {
+    setErrors((old) => {
+      const next = { ...old };
+      delete next.task_start;
+      delete next.task_reply;
+      return next;
+    });
     following.current = true;
     drafts.current[selected || "__new__"] = draft;
     composerStates.current[selected || "__new__"] = {
@@ -1403,8 +1422,16 @@ export default function App() {
                   </Menu.Trigger>
                   <Menu.Portal>
                     <Menu.Content className="context-menu" sideOffset={5}>
-                      <Menu.Item onSelect={() => setUtilityDialog("project")}>
-                        添加为项目…
+                      <Menu.Item
+                        disabled={
+                          !locationReady ||
+                          !!projectAtPath(listedPath, projects)
+                        }
+                        onSelect={() => openProject(true)}
+                      >
+                        {projectAtPath(listedPath, projects)
+                          ? "已添加为项目"
+                          : "添加为项目…"}
                       </Menu.Item>
                       <Menu.Item
                         disabled={
@@ -1775,7 +1802,7 @@ export default function App() {
                     variant="ghost"
                     size="icon"
                     aria-label="添加项目"
-                    onClick={() => setUtilityDialog("project")}
+                    onClick={() => openProject()}
                   >
                     <Plus size={14} />
                   </Button>
@@ -1831,6 +1858,30 @@ export default function App() {
                   >
                     <RefreshCw className={browsing ? "spin" : ""} size={15} />
                   </Button>
+                  <Menu.Root>
+                    <Menu.Trigger asChild>
+                      <Button
+                        variant="outline"
+                        aria-label="当前目录操作"
+                        disabled={!locationReady}
+                      >
+                        <MoreHorizontal size={16} />
+                      </Button>
+                    </Menu.Trigger>
+                    <Menu.Portal>
+                      <Menu.Content className="context-menu" align="end">
+                        <Menu.Item
+                          disabled={!!projectAtPath(listedPath, projects)}
+                          onSelect={() => openProject(true)}
+                        >
+                          <FolderOpen size={15} />
+                          {projectAtPath(listedPath, projects)
+                            ? "已添加为项目"
+                            : "添加为项目"}
+                        </Menu.Item>
+                      </Menu.Content>
+                    </Menu.Portal>
+                  </Menu.Root>
                   <Input
                     className="file-filter"
                     aria-label="筛选文件"
@@ -1945,8 +1996,17 @@ export default function App() {
                   sessions={sessionManager}
                   projects={projects}
                   selected={selected}
+                  selectedProject={
+                    !newConversation && task
+                      ? task.workspace
+                      : draftProject || currentProject
+                  }
                   onSelect={(id) => switchConversation(id)}
                   onUpdateRunner={() => setPage("servers")}
+                  onAddProject={() => openProject()}
+                  onNewSession={(p) =>
+                    startDraft(p || connection.environment?.home || "")
+                  }
                 />
                 {!sessionManager.supported && groupSessionsFallback}
               </aside>
@@ -2128,23 +2188,41 @@ export default function App() {
                       ))}
                     </>
                   ) : (
-                    <div className="chat-empty">
-                      <FolderOpen size={22} />
-                      <Select
-                        value={draftProject || currentProject || undefined}
-                        onValueChange={setDraftProject}
+                    <div className="chat-empty project-chat-empty">
+                      <FolderOpen size={28} />
+                      <h2>
+                        {projects.find(
+                          (p) => p.path === (draftProject || currentProject),
+                        )?.name
+                          ? `从${projects.find((p) => p.path === (draftProject || currentProject))?.name}开始`
+                          : "开始新会话"}
+                      </h2>
+                      <p>
+                        {draftProject || currentProject
+                          ? "新会话将在此目录运行"
+                          : "无需项目也可以开始分析"}
+                      </p>
+                      <Button
+                        disabled={!connected}
+                        onClick={() =>
+                          projects.some(
+                            (p) => p.path === (draftProject || currentProject),
+                          )
+                            ? document
+                                .querySelector<HTMLTextAreaElement>(
+                                  '[aria-label="任务指令"]',
+                                )
+                                ?.focus()
+                            : openProject()
+                        }
                       >
-                        <SelectTrigger aria-label="新任务项目">
-                          <SelectValue placeholder="选择项目" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {projects.map((p) => (
-                            <SelectItem key={p.path} value={p.path}>
-                              {p.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                        <Plus size={15} />
+                        {projects.some(
+                          (p) => p.path === (draftProject || currentProject),
+                        )
+                          ? "新建会话"
+                          : "添加项目"}
+                      </Button>
                     </div>
                   )}
                   {task?.state === "waiting_approval" &&
@@ -2586,6 +2664,26 @@ export default function App() {
           )}
         </div>
       </main>
+      {projectEntry &&
+        projectEntry.connectionId === connection.connection_id && (
+          <ProjectDialog
+            key={`${projectEntry.connectionId}:${projectEntry.path}:${projectEntry.currentOnly}`}
+            open
+            onClose={() => setProjectEntry(null)}
+            connected={connected}
+            connectionId={connection.connection_id || ""}
+            home={connection.environment?.home || ""}
+            account={`${connection.profile?.user || ""}@${connection.profile?.host || ""}`}
+            projects={projects}
+            initialPath={projectEntry.path}
+            currentOnly={projectEntry.currentOnly}
+            onAdded={async (p) => {
+              await refreshProjects();
+              toast.success("已添加项目");
+              if (page === "chat") startDraft(p.path);
+            }}
+          />
+        )}
       <Dialog
         open={!!utilityDialog}
         onOpenChange={(v) => !v && setUtilityDialog("")}
@@ -2593,11 +2691,7 @@ export default function App() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {utilityDialog === "folder"
-                ? "新建文件夹"
-                : utilityDialog === "draft-project"
-                  ? "新任务项目"
-                  : "添加为项目"}
+              {utilityDialog === "draft-project" ? "新任务项目" : "新建文件夹"}
             </DialogTitle>
             <DialogDescription>
               {utilityDialog === "draft-project"
@@ -2628,39 +2722,21 @@ export default function App() {
             <>
               <Input
                 aria-label="名称"
-                value={utilityDialog === "folder" ? folderName : projectName}
-                onChange={(e) =>
-                  utilityDialog === "folder"
-                    ? setFolderName(e.target.value)
-                    : setProjectName(e.target.value)
-                }
+                value={folderName}
+                onChange={(e) => setFolderName(e.target.value)}
               />
               <DialogFooter>
                 <Button
-                  disabled={
-                    !locationReady ||
-                    !(
-                      utilityDialog === "folder" ? folderName : projectName
-                    ).trim()
-                  }
+                  disabled={!locationReady || !folderName.trim()}
                   onClick={() =>
                     safe(
-                      (utilityDialog === "folder"
-                        ? request("create_directory", {
-                            path: listedPath,
-                            name: folderName,
-                          })
-                        : request("project_save", {
-                            path: listedPath,
-                            workspace: listedPath,
-                            name: projectName,
-                          })
-                      ).then(async () => {
+                      request("create_directory", {
+                        path: listedPath,
+                        name: folderName,
+                      }).then(async () => {
                         await browse(listedPath);
-                        await refreshProjects();
                         setUtilityDialog("");
                         setFolderName("");
-                        setProjectName("");
                       }),
                     )
                   }
