@@ -44,3 +44,5 @@ pub mod vps_auth;
 pub mod operations;
 
 pub mod claude_info;
+
+pub mod sessions;

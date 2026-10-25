@@ -2,7 +2,19 @@
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-pub type Store = Arc<Mutex<BTreeMap<String, Value>>>;
+#[derive(Clone, Default)]
+pub struct Store {
+    inner: Arc<Mutex<BTreeMap<String, Value>>>,
+    history: Option<std::path::PathBuf>,
+    history_error: Arc<Mutex<Option<String>>>,
+}
+impl Store {
+    pub fn lock(
+        &self,
+    ) -> std::sync::LockResult<std::sync::MutexGuard<'_, BTreeMap<String, Value>>> {
+        self.inner.lock()
+    }
+}
 #[derive(Clone)]
 pub struct Operation {
     pub(crate) store: Store,
@@ -28,7 +40,7 @@ impl Operation {
         if map.len() >= 100 {
             if let Some(k) = map
                 .iter()
-                .filter(|(_, v)| v["state"] != "running")
+                .filter(|(_, v)| v["state"] != "running" && v["state"] != "unknown")
                 .min_by_key(|(_, v)| v["started_at_ms"].as_u64().unwrap_or(0))
                 .map(|(k, _)| k.clone())
             {
@@ -37,6 +49,7 @@ impl Operation {
         }
         map.insert(id.clone(),json!({"id":id,"kind":kind,"account":account,"connection_id":connection,"path":path,"source":if human{"app"}else{"mcp"},"state":"running","started_at_ms":millis(),"updated_at_ms":millis(),"revision":0,"phase":"checking","processed":0,"total":0,"items":[]}));
         drop(map);
+        persist(&store);
         Self { store, id }
     }
     pub fn patch(&self, p: Value) {
@@ -47,6 +60,10 @@ impl Operation {
             }
             v["updated_at_ms"] = json!(millis());
             v["revision"] = json!(v["revision"].as_u64().unwrap_or(0) + 1);
+        }
+        drop(m);
+        if p.get("phase").is_some() || p.get("state").is_some() || p.get("verified_at").is_some() {
+            persist(&self.store);
         }
     }
     pub fn item(&self, index: usize, result: Value) {
@@ -76,6 +93,7 @@ impl Operation {
                 self.patch(json!({"state":if m.contains("超时")||m.contains("不确定")||m.contains("断开"){"unknown"}else{"failed"},"error":m,"finished_at_ms":millis()}));
             }
         }
+        persist(&self.store);
     }
 }
 pub fn snapshot(
@@ -147,5 +165,132 @@ mod tests {
         );
         assert!(git_progress("Receiving objects: 5% (5/0)").is_none());
         assert!(git_progress("fatal: https://secret@host").is_none());
+    }
+}
+
+/// Account scoped history; old connection states are observations, never replay instructions.
+pub fn list(store: &Store, account: &str, connection: &str) -> Value {
+    let map = store.lock().unwrap();
+    let mut values: Vec<Value> = map
+        .values()
+        .filter(|v| v["account"] == account)
+        .cloned()
+        .map(|mut v| {
+            v.as_object_mut().unwrap().remove("result");
+            v.as_object_mut().unwrap().remove("items");
+            if v["connection_id"] != connection && v["state"] == "running" {
+                v["state"] = json!("unknown");
+            }
+            v
+        })
+        .collect();
+    values.sort_by_key(|v| std::cmp::Reverse(v["started_at_ms"].as_u64().unwrap_or(0)));
+    json!({"operations":values,"history_error":store.history_error.lock().unwrap().clone()})
+}
+
+/// Persist only a small allow-list. Never serialize request/result/items/stderr.
+fn persist(store: &Store) {
+    let Some(path) = &store.history else { return };
+    let map = store.lock().unwrap();
+    let rows: Vec<Value> = map
+        .values()
+        .map(|v| {
+            let mut out = json!({});
+            for k in [
+                "id",
+                "kind",
+                "account",
+                "connection_id",
+                "path",
+                "source",
+                "state",
+                "started_at_ms",
+                "finished_at_ms",
+                "updated_at_ms",
+                "revision",
+                "phase",
+                "processed",
+                "total",
+                "verified_at",
+                "verification",
+            ] {
+                if !v[k].is_null() {
+                    out[k] = v[k].clone();
+                }
+            }
+            out
+        })
+        .collect();
+    *store.history_error.lock().unwrap() = crate::common::write_json(path, &rows)
+        .err()
+        .map(|_| "操作历史未保存，重启后可能无法找回".to_string());
+}
+pub fn restore() -> Store {
+    let Ok(root) = crate::common::app_dir() else {
+        return Store::default();
+    };
+    restore_at(root.join("operation-history.json"))
+}
+fn restore_at(path: std::path::PathBuf) -> Store {
+    let store = Store {
+        history: Some(path.clone()),
+        ..Store::default()
+    };
+    {
+        if let Ok(rows) = crate::common::read_json::<Vec<Value>>(&path) {
+            let mut map = store.lock().unwrap();
+            for mut row in rows {
+                if let Some(id) = row["id"]
+                    .as_str()
+                    .filter(|id| uuid::Uuid::parse_str(id).is_ok())
+                    .map(str::to_owned)
+                {
+                    if row["state"] == "running" {
+                        row["state"] = json!("unknown");
+                    }
+                    map.insert(id, row);
+                }
+            }
+        }
+    }
+    store
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+    #[test]
+    fn private_history_has_no_secret_payload_and_never_replays() {
+        let dir = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        crate::common::private_dir(&dir).unwrap();
+        let path = dir.join("history.json");
+        let store = restore_at(path.clone());
+        let id = uuid::Uuid::new_v4().to_string();
+        let op = Operation::begin(
+            store.clone(),
+            id.clone(),
+            "git_vps_auth_install",
+            "a",
+            "c",
+            "/home/a",
+            true,
+        );
+        op.patch(json!({"phase":"syncing","request":{"secret":"NEVER_PERSIST"},"items":[{"secret":"NEVER_PERSIST"}]}));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("NEVER_PERSIST"));
+        let restored = restore_at(path);
+        assert_eq!(restored.lock().unwrap()[&id]["state"], "unknown");
+        assert_eq!(
+            list(&restored, "other", "c")["operations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            list(&restored, "a", "new")["operations"][0]["state"],
+            "unknown"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

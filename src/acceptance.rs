@@ -686,6 +686,52 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
         .contains("只能由人在 App")
     );
     backend::dispatch(shared.clone(), json!({"op":"set_auto","allow":true}), true).await?;
+    // Session metadata is human-owned; archiving never changes the MCP execution contract.
+    let analysis=backend::dispatch(shared.clone(),json!({"op":"start","task_id":uuid::Uuid::new_v4().to_string(),"remote_project":"项目B","prompt":"Session acceptance Read README.md","mode":"automatic"}),false).await?;
+    {
+        let g = shared.connection.lock().await;
+        poll(
+            g.as_ref().unwrap(),
+            field(&analysis, "task_id")?,
+            "completed",
+        )
+        .await?;
+    }
+    let session = field(&analysis, "session_id")?;
+    let named = json!({"op":"session_meta_set","session_id":session,"expected_revision":0,"title":"稳定分析名称","archived":true});
+    assert!(
+        backend::dispatch(shared.clone(), named.clone(), false)
+            .await
+            .is_err()
+    );
+    backend::dispatch(shared.clone(), named, true).await?;
+    let archived = backend::dispatch(
+        shared.clone(),
+        json!({"op":"session_search","q":"稳定分析","archive_filter":"archived"}),
+        true,
+    )
+    .await?;
+    assert_eq!(archived["sessions"][0]["title"], "稳定分析名称");
+    let next=backend::dispatch(shared.clone(),json!({"op":"reply","reply_to":analysis["task_id"],"task_id":uuid::Uuid::new_v4().to_string(),"prompt":"continued Read README.md"}),false).await?;
+    assert_eq!(next["session_id"], analysis["session_id"]);
+    assert_eq!(next["workspace"], analysis["workspace"]);
+    assert_eq!(next["mode"], "automatic");
+    {
+        let g = shared.connection.lock().await;
+        poll(g.as_ref().unwrap(), field(&next, "task_id")?, "completed").await?;
+    }
+    assert_eq!(
+        backend::dispatch(
+            shared.clone(),
+            json!({"op":"session_meta_get","session_id":session}),
+            true
+        )
+        .await?["archived"],
+        true
+    );
+    println!(
+        "PASS session search / human metadata / archived MCP automatic continuation / unchanged session and directory"
+    );
     let socket = tokio::net::UnixListener::bind(app_dir()?.join("bridge.sock"))?;
     let cloned = shared.clone();
     let broker = tokio::spawn(async move {
@@ -760,7 +806,7 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
             .as_array()
             .unwrap()
             .len()
-            == 12
+            == 14 // Original twelve plus the new archived-session start/reply pair.
     );
     println!(
         "PASS host pin / wrong password / encrypted SSH / remote code / approve / deny / automatic / cancellation / failure / workspace lock / reconnect / human-only policy"

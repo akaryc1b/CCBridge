@@ -29,6 +29,7 @@ export function GitUpdate({
   onUpdated,
   onAuth,
   onOperation,
+  operationId,
 }: {
   open: boolean;
   path: string;
@@ -37,6 +38,7 @@ export function GitUpdate({
   onUpdated: () => void;
   onAuth: (url: string) => void;
   onOperation?: (op: D) => void;
+  operationId?: string;
 }) {
   const [plan, setPlan] = useState<D[]>([]),
     [result, setResult] = useState<D[]>([]),
@@ -62,7 +64,10 @@ export function GitUpdate({
     setPlan([]);
     setResult([]);
     setError("");
-  }, [path, connectionId]);
+  }, [path, connectionId, operationId]);
+  useEffect(() => {
+    if (open) setId(operationId);
+  }, [open, operationId, path, connectionId]);
   useEffect(() => {
     if (snap) {
       onOperation?.(snap);

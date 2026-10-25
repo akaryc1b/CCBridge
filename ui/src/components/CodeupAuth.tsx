@@ -56,7 +56,7 @@ export function CodeupAuth({
   onSaved?: () => void;
   consented?: boolean;
   onConsent?: () => void;
-  onActivity?: (activity: string) => void;
+  onActivity?: (activity: string, id?: string) => void;
   requestVersion?: number;
 }) {
   const [scope, setScope] = useState(initialScope),
@@ -178,14 +178,18 @@ export function CodeupAuth({
     }
     runLock.current = true;
     const seq = generation.current;
+    const operationId = crypto.randomUUID();
     setBusy(op);
     setConfirmation(null);
-    onActivity?.("认证处理中…");
+    onActivity?.("认证处理中…", operationId);
     setError("");
     if (op === "git_access" || op === "git_vps_auth_test")
       setAccess({ testing: true });
     try {
-      if (!op.endsWith("status")) await invoke<Data>(op, { request: req });
+      if (!op.endsWith("status"))
+        await invoke<Data>(op, {
+          request: { ...req, operation_id: operationId },
+        });
       if (seq !== generation.current) return;
       if (op === "git_access" || op === "git_vps_auth_test") {
         setAccess({
@@ -217,10 +221,10 @@ export function CodeupAuth({
         }
       }
       setConfirmation(null);
-      onActivity?.("认证操作完成");
+      onActivity?.("认证操作完成", operationId);
     } catch (e) {
       if (seq !== generation.current) return;
-      onActivity?.("认证操作失败");
+      onActivity?.("认证操作失败", operationId);
       if (op === "git_access" || op === "git_vps_auth_test")
         setAccess({ error: errorText(e) });
       else setError(errorText(e));

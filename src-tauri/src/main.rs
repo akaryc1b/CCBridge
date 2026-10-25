@@ -34,6 +34,7 @@ macro_rules! commands { ($($name:ident => $op:literal),* $(,)?) => {$ (
 async fn $name(bridge: State<'_, Bridge>, request: Value) -> Result<Value,Value> { call(&bridge,$op,request).await }
 )*}; }
 commands! {
+ session_list=>"session_list", session_search=>"session_search", session_turns=>"session_turns", session_meta_set=>"session_meta_set", session_meta_get=>"session_meta_get", active_tasks=>"active_tasks", operation_list=>"operation_list", operation_verify=>"operation_verify",
  operation_progress=>"operation_progress", git_update_plan=>"git_update_plan", git_update=>"git_update",
  git_vps_auth_test=>"git_vps_auth_test", git_vps_auth_status=>"git_vps_auth_status", git_vps_auth_install=>"git_vps_auth_install", git_vps_auth_remove=>"git_vps_auth_remove",
  preferences_save=>"preferences_save", auto_connect=>"auto_connect",
@@ -226,6 +227,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             initial_state,
+            session_list, session_search, session_turns, session_meta_set, session_meta_get, active_tasks, operation_list, operation_verify,
             operation_progress, git_update_plan, git_update, git_vps_auth_status, git_vps_auth_test, git_vps_auth_install, git_vps_auth_remove,
             set_window_theme,
             codex_configuration_status,

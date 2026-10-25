@@ -2391,8 +2391,321 @@ pre {
 }
 
 /* Background results stay reachable without squeezing the page heading. */
-header > h1 { flex-shrink: 0; white-space: nowrap; }
-.background-task-menu { min-width: 280px; }
-.background-task-menu [role="menuitem"] { display: flex; justify-content: space-between; gap: 24px; }
-.page-projects { flex-direction: column; }
-.page-projects > .project-grid { flex: 1; }
+header > h1 {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.background-task-menu {
+  min-width: 280px;
+}
+.background-task-menu [role="menuitem"] {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+}
+.page-projects {
+  flex-direction: column;
+}
+.page-projects > .project-grid {
+  flex: 1;
+}
+
+/* Task center: one shared Radix sheet, neutral tokens in both themes. */
+.task-center-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(0 0 0 / 0.32);
+  z-index: 65;
+}
+.task-center {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(880px, 100vw);
+  background: var(--background);
+  color: var(--foreground);
+  z-index: 66;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  box-shadow: -12px 0 50px rgb(0 0 0 / 0.16);
+  outline: none;
+}
+.task-center > header {
+  padding: 24px;
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--line);
+}
+.task-center header h2 {
+  font-size: 20px;
+  font-weight: 650;
+  margin: 0 0 5px;
+}
+.task-center header p {
+  font-size: 13px;
+  color: var(--muted-text);
+}
+.task-center-body {
+  display: grid;
+  grid-template-columns: 390px minmax(0, 1fr);
+  min-height: 0;
+  flex: 1;
+}
+.task-center-list {
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.task-center-search {
+  display: flex;
+  align-items: center;
+  margin: 20px 16px 12px;
+  gap: 8px;
+}
+.task-filters {
+  display: flex;
+  padding: 0 16px 16px;
+  gap: 2px;
+}
+.task-filters button {
+  padding-inline: 10px;
+}
+.task-rows {
+  overflow: auto;
+  flex: 1;
+}
+.task-center-row {
+  width: 100%;
+  display: flex;
+  text-align: left;
+  gap: 10px;
+  padding: 18px 16px;
+  border-top: 1px solid var(--line);
+  background: transparent;
+}
+.task-center-row.selected {
+  background: var(--selection);
+}
+.task-center-row > span:nth-child(2) {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.task-center-row strong {
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-center-row small,
+.task-center-row .muted {
+  font-size: 13px;
+  color: var(--muted-text);
+}
+.task-row-end {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+.task-state-icon {
+  padding-top: 2px;
+  color: var(--muted-text);
+}
+.task-state-icon.attention {
+  color: var(--warning);
+}
+.task-center-detail {
+  padding: 28px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 16px;
+}
+.task-center-detail h2 {
+  font-size: 22px;
+  overflow-wrap: anywhere;
+}
+.task-type {
+  color: var(--muted-text);
+  font-size: 13px;
+}
+.task-center-detail dl {
+  display: grid;
+  grid-template-columns: 75px minmax(0, 1fr);
+  gap: 18px 12px;
+  width: 100%;
+  font-size: 14px;
+  margin-top: 12px;
+}
+.task-center-detail dt {
+  color: var(--muted-text);
+}
+.task-center-detail dd {
+  overflow-wrap: anywhere;
+}
+.task-detail-action {
+  margin-top: auto;
+}
+.task-back {
+  display: none;
+}
+.task-count {
+  background: var(--selection);
+  padding: 0 6px;
+  border-radius: 8px;
+}
+.session-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.session-tabs {
+  display: flex;
+  padding: 0 12px 12px;
+  gap: 4px;
+}
+.session-group-label {
+  font-size: 13px;
+  color: var(--muted-text);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 12px 16px;
+}
+.session-group-label small {
+  margin-left: auto;
+}
+.session-row {
+  display: flex;
+  align-items: flex-start;
+  padding-right: 8px;
+}
+.sessions .session-row > button {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+}
+.session-row.active {
+  background: var(--selection);
+  border-radius: 8px;
+}
+.session-row > [data-slot="button"] {
+  width: 28px;
+  flex: none;
+  margin-top: 12px;
+}
+.session-hit {
+  font-size: 12px !important;
+  display: -webkit-box !important;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: normal !important;
+}
+.archive-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+}
+@media (max-width: 1250px) {
+  .task-center {
+    width: min(560px, 100vw);
+  }
+  .task-center-body {
+    display: block;
+    overflow: hidden;
+  }
+  .task-center-list {
+    height: 100%;
+    border: 0;
+  }
+  .task-center-detail {
+    display: none;
+    height: 100%;
+  }
+  .task-center.has-detail .task-center-list {
+    display: none;
+  }
+  .task-center.has-detail .task-center-detail {
+    display: flex;
+  }
+  .task-back {
+    display: inline-flex;
+  }
+}
+/* Session rows keep readable titles and snippets; long input placeholders are not labels. */
+.sessions {
+  width: 304px;
+}
+.session-row > button {
+  padding: 12px 10px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: transparent;
+  min-width: 0;
+}
+.session-row strong {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+.session-row > button > span {
+  font-size: 13px;
+  color: var(--muted-text);
+}
+.session-row:hover {
+  background: var(--soft);
+  border-radius: 8px;
+}
+@media (max-width: 1100px) {
+  .sessions {
+    width: 266px;
+  }
+}
+.sessions .session-row > .session-select {
+  min-width: 0;
+  flex: 1;
+}
+.sessions .session-row > [data-slot="button"] {
+  flex: 0 0 28px;
+  width: 28px;
+  padding: 0;
+}
+.session-select > button:not(.session-hit) {
+  width: 100%;
+  padding: 12px 10px;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: transparent;
+  min-width: 0;
+}
+.session-select > button > span {
+  margin: 0;
+  font-size: 13px;
+}
+.session-select > .session-hit {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0 10px 10px;
+  font-size: 13px !important;
+  color: var(--muted-text);
+}

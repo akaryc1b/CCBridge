@@ -17,7 +17,7 @@ impl BackendState {
     pub fn new(connection: Option<ssh::Connection>) -> Self {
         Self {
             connection: Mutex::new(connection),
-            operations: Default::default(),
+            operations: crate::operations::restore(),
             clone_progress: std::sync::Mutex::new(json!({})),
             gate: Default::default(),
             writes: Mutex::new(()),
@@ -43,6 +43,12 @@ fn auto_target(p: &Profile) -> Value {
     json!({"user":p.user,"host":p.host,"port":p.port})
 }
 fn ensure_update_tasks_idle(value: &Value) -> Result<()> {
+    if value["legacy_truncated"] == true {
+        bail!("旧 Runner 只能检查最近100条任务，请更新 Runner，或断开 SSH 后离线安装");
+    }
+    if value["incomplete"] == true {
+        bail!("部分远端任务无法读取，请核实后再安装");
+    }
     let tasks = value["tasks"]
         .as_array()
         .context("无法读取远端任务状态，请刷新会话后重试安装")?;
@@ -98,6 +104,27 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
         }
         state.gate.lock().unwrap().prepare()?;
         return Ok(state.gate.lock().unwrap().snapshot());
+    }
+    if op == "operation_list" {
+        if !human {
+            bail!("操作历史仅供 App 查询");
+        }
+        let mut local = crate::operations::list(&state.operations, "local", "local");
+        let connection = state.connection.lock().await.clone();
+        if let Some(c) =
+            connection.filter(|c| v["connection_id"].as_str() == Some(&c.connection_id))
+        {
+            let remote = crate::operations::list(
+                &state.operations,
+                &c.operation_account(),
+                &c.connection_id,
+            );
+            local["operations"]
+                .as_array_mut()
+                .unwrap()
+                .extend(remote["operations"].as_array().cloned().unwrap_or_default());
+        }
+        return Ok(local);
     }
     if op == "auto_connect" {
         if !human {
@@ -166,10 +193,12 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             let checked = async {
                 let connection = state.connection.lock().await.clone();
                 if let Some(c) = connection.filter(|c| !c.handle.is_closed()) {
-                    let tasks = c
-                        .rpc(json!({"op":"list"}))
+                    let sessions_supported=c.probe["capabilities"].as_array().is_some_and(|a|a.iter().any(|x|x=="sessions_v1"));
+                    let mut tasks = c
+                        .rpc(json!({"op":if c.probe["capabilities"].as_array().is_some_and(|a|a.iter().any(|x|x=="sessions_v1")){"active_tasks"}else{"list"}}))
                         .await
                         .context("无法检查远端任务，请刷新连接状态后重试安装")?;
+                    if !sessions_supported && tasks["tasks"].as_array().is_some_and(|a|a.len()>=100) {tasks["legacy_truncated"]=json!(true);}
                     ensure_update_tasks_idle(&tasks)?;
                 }
                 // Updating the local App does not stop detached remote Runner tasks.
@@ -236,7 +265,16 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
     } else {
         None
     };
-    let _activity = if writing || ["db_test", "db_protocol_test"].contains(&op) {
+    let _activity = if writing
+        || [
+            "db_test",
+            "db_protocol_test",
+            "session_meta_set",
+            "git_access",
+            "git_vps_auth_test",
+        ]
+        .contains(&op)
+    {
         state.gate.lock().unwrap().begin(op)?;
         Some(Activity(state.clone(), op.to_string()))
     } else {
@@ -248,15 +286,25 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
         "clone_into_directory",
         "branch_fetch",
         "install_runner",
+        "git_access",
+        "git_vps_auth_test",
+        "git_vps_auth_install",
+        "git_vps_auth_remove",
     ]
     .contains(&op);
     let operation = if tracked {
-        let c = state
-            .connection
-            .lock()
-            .await
-            .clone()
-            .context("请先连接 SSH")?;
+        let local = op == "git_access" && v["scope"] != "remote";
+        let (account, connection) = if local {
+            ("local".to_owned(), "local".to_owned())
+        } else {
+            let c = state
+                .connection
+                .lock()
+                .await
+                .clone()
+                .context("请先连接 SSH")?;
+            (c.operation_account(), c.connection_id.clone())
+        };
         let id = v["operation_id"]
             .as_str()
             .map(str::to_string)
@@ -264,8 +312,8 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
         uuid::Uuid::parse_str(&id).context("操作标识无效")?;
         if !crate::operations::snapshot(
             &state.operations,
-            &c.profile.account_key(),
-            &c.connection_id,
+            &account,
+            &connection,
             Some(&id),
             None,
             None,
@@ -279,8 +327,8 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             state.operations.clone(),
             id,
             op,
-            &c.profile.account_key(),
-            &c.connection_id,
+            &account,
+            &connection,
             v["path"].as_str().unwrap_or(""),
             human,
         ))
@@ -626,7 +674,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         return Ok(match guard.as_ref() {
             Some(c) => {
                 let mut r = c.info();
-                r["operations"] = json!({"git_update":crate::operations::snapshot(&state.operations,&c.profile.account_key(),&c.connection_id,None,Some("git_update"),None),"branch_fetch":crate::operations::snapshot(&state.operations,&c.profile.account_key(),&c.connection_id,None,Some("branch_fetch"),None)});
+                r["operations"] = json!({"git_update":crate::operations::snapshot(&state.operations,&c.operation_account(),&c.connection_id,None,Some("git_update"),None),"branch_fetch":crate::operations::snapshot(&state.operations,&c.operation_account(),&c.connection_id,None,Some("branch_fetch"),None)});
                 r
             }
             None => {
@@ -659,13 +707,111 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         }
         return c.rpc(json!({"op":op,"claude":c.claude_path})).await;
     }
+    if [
+        "session_list",
+        "session_search",
+        "session_turns",
+        "session_meta_set",
+        "session_meta_get",
+        "active_tasks",
+    ]
+    .contains(&op.as_str())
+    {
+        if op == "session_meta_set" && !human {
+            bail!("会话命名和归档只能由用户在 App 操作");
+        }
+        if !c.probe["capabilities"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|x| x == "sessions_v1"))
+        {
+            return Err(coded(
+                "sessions_unsupported",
+                "请更新当前账号 Runner 后使用会话搜索、命名和归档",
+            ));
+        }
+        let mut request = v.clone();
+        request["allowed_home"] = json!(c.environment.home);
+        request["allowed_workspace"] = json!(c.profile.workspace);
+        if ["session_turns", "session_meta_set", "session_meta_get"].contains(&op.as_str()) {
+            let turns = c
+                .rpc(json!({"op":"session_turns","session_id":v["session_id"]}))
+                .await?;
+            if !turns["turns"].as_array().is_some_and(|a| {
+                !a.is_empty()
+                    && a.iter()
+                        .all(|t| c.permits_workspace(t["workspace"].as_str().unwrap_or("")))
+            }) {
+                bail!("会话不属于当前账号允许目录");
+            }
+        }
+        return c.rpc(request).await;
+    }
+    if op == "operation_verify" {
+        if !human {
+            bail!("操作核实只能在 App 执行");
+        }
+        let id = field(&v, "operation_id")?;
+        valid_id(id)?;
+        let old = state
+            .operations
+            .lock()
+            .unwrap()
+            .get(id)
+            .filter(|r| r["account"] == c.operation_account())
+            .cloned()
+            .context("未找到当前账号的操作记录")?;
+        let path = old["path"].as_str().unwrap_or("");
+        let kind = old["kind"].as_str().unwrap_or("");
+        let message = match kind {
+            "git_update" => {
+                if !c.permits_workspace(path) {
+                    bail!("操作目录不属于当前账号允许范围");
+                }
+                let r = c.rpc(json!({"op":"git_update_plan","path":path})).await?;
+                format!(
+                    "已读取当前 {} 个仓库的状态；原操作结果仍待确认",
+                    r["repositories"].as_array().map_or(0, Vec::len)
+                )
+            }
+            "branch_fetch" => {
+                c.rpc(json!({"op":"branches","path":path})).await?;
+                "已读取当前分支状态；原获取结果仍待确认".into()
+            }
+            "clone_into_directory" => {
+                c.browse(path, false).await?;
+                "目标目录当前可读取；请打开目录核对仓库".into()
+            }
+            "git_vps_auth_install" | "git_vps_auth_remove" | "git_access" | "git_vps_auth_test" => {
+                let r = c.rpc(json!({"op":"git_vps_auth_status"})).await?;
+                if r["configured"] == true {
+                    "服务器当前已配置认证；仓库权限需在认证窗口检测".into()
+                } else {
+                    "服务器当前未配置认证".into()
+                }
+            }
+            "install_runner" => {
+                let r = c.rpc(json!({"op":"probe"})).await?;
+                format!(
+                    "当前 Runner {}",
+                    r["runner_version"].as_str().unwrap_or("未上报")
+                )
+            }
+            _ => bail!("此操作请在原入口核实"),
+        };
+        let operation = crate::operations::Operation {
+            store: state.operations.clone(),
+            id: id.into(),
+        };
+        operation.patch(json!({"verified_at":now(),"verification":message}));
+        return Ok(json!({"message":message,"verified_at":now()}));
+    }
     if op == "operation_progress" {
         if !human {
             bail!("操作快照仅供 App 查询")
         }
         return Ok(crate::operations::snapshot(
             &state.operations,
-            &c.profile.account_key(),
+            &c.operation_account(),
             &c.connection_id,
             v["operation_id"].as_str(),
             v["kind"].as_str(),

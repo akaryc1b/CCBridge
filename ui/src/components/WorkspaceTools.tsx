@@ -413,15 +413,20 @@ export function BranchDialog({
   connectionId,
   onOperation,
   onChanged,
+  operationId,
 }: {
   open: boolean;
   onClose: () => void;
   path: string;
   connectionId: string;
   onOperation?: (operation: Data) => void;
+  operationId?: string;
   onChanged?: () => Promise<void>;
 }) {
   const [fetchId, setFetchId] = useState<string>();
+  useEffect(() => {
+    if (open) setFetchId(operationId);
+  }, [open, operationId, path, connectionId]);
   const operation = useOperation(
     "branch_fetch",
     path,

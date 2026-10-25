@@ -156,6 +156,13 @@ impl Connection {
     pub fn info(&self) -> Value {
         json!({"connection_id":self.connection_id,"app_version":env!("CARGO_PKG_VERSION"),"bridge_protocol":1,"bridge_capabilities":["client_activity_lease","update_drain","models_v1"],"connected":!self.handle.is_closed(),"profile":self.profile,"probe":self.probe,"environment":self.environment,"resolved_paths":{"runner":self.runner_path,"claude":self.claude_path,"state":format!("{}/.local/state/ccbridge",self.environment.home)}})
     }
+    pub fn operation_account(&self) -> String {
+        format!(
+            "{}|{}",
+            self.profile.account_key(),
+            self.profile.fingerprint
+        )
+    }
     pub fn permits_workspace(&self, path: &str) -> bool {
         (!self.profile.workspace.is_empty() && path == self.profile.workspace)
             || std::path::Path::new(path).starts_with(&self.environment.home)

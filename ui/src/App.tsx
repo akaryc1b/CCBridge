@@ -1,3 +1,6 @@
+import { useTaskCenter } from "./lib/useTaskCenter";
+import { useSessions } from "./lib/useSessions";
+import { SessionList } from "./components/SessionList";
 import {
   BackgroundTasks,
   type BackgroundTask,
@@ -17,7 +20,7 @@ import {
 } from "@/components/common/Feedback";
 import { Confirm } from "@/components/common/Confirm";
 import { useOperation } from "@/lib/useOperation";
-import { time, elapsed, bytes } from "@/lib/format";
+import { time, elapsed, bytes, phaseText } from "@/lib/format";
 import { GitUpdate } from "@/components/GitUpdate";
 import {
   isConnecting,
@@ -39,7 +42,6 @@ import { Databases } from "@/components/Databases";
 import {
   normalizeTask,
   conversationTurns,
-  groupSessions,
   nextModelLabel,
   displayModel,
   eventText,
@@ -271,9 +273,12 @@ export default function App() {
   const [gitUpdateOpen, setGitUpdateVisible] = useState(false);
   const [gitDialogPath, setGitDialogPath] = useState("");
   const [branchDialogPath, setBranchDialogPath] = useState("");
+  const [gitCenterId, setGitCenterId] = useState<string>();
+  const [branchCenterId, setBranchCenterId] = useState<string>();
   const [gitOperation, setGitOperation] = useState<Data | null>(null);
   const [branchOperation, setBranchOperation] = useState<Data | null>(null);
   const [authActivity, setAuthActivity] = useState("");
+  const [authOperationId, setAuthOperationId] = useState("");
   const [authRequestVersion, setAuthRequestVersion] = useState(0);
   const [cloneId, setCloneId] = useState<string>();
   const [installId, setInstallId] = useState<string>();
@@ -301,7 +306,7 @@ export default function App() {
   const [utilityDialog, setUtilityDialog] = useState("");
   const [draftProject, setDraftProject] = useState("");
   const [fileFilter, setFileFilter] = useState("");
-  const [sessionFilter, setSessionFilter] = useState("");
+
   const [dataDirectory, setDataDirectory] = useState("");
   const autoStarted = useRef(false);
   const composerStates = useRef<Record<string, Data>>({});
@@ -354,6 +359,8 @@ export default function App() {
     const previous = details[id] || tasks.find((t) => t.task_id === id);
     setMode(stored?.mode || previous?.mode || "automatic");
   }
+  const connectionIdentity = useRef(connection.connection_id);
+  connectionIdentity.current = connection.connection_id;
   const requestSequence = useRef(new Map<string, number>());
   const inflight = useRef(new Map<string, number>()),
     selectedRef = useRef(selected);
@@ -424,10 +431,93 @@ export default function App() {
     !!installId,
     installId,
   );
+  const taskCenter = useTaskCenter(connection);
   const backgroundTasks: BackgroundTask[] = [];
-  if (authActivity && !authOpen)
+  for (const op of taskCenter.operations) {
+    const labels: Data = {
+      git_update: "Git 更新",
+      clone_into_directory: "克隆仓库",
+      branch_fetch: "获取分支",
+      install_runner: "安装 Runner",
+      git_access: "仓库访问检测",
+      git_vps_auth_test: "服务器认证检测",
+      git_vps_auth_install: "同步服务器认证",
+      git_vps_auth_remove: "移除服务器认证",
+    };
     backgroundTasks.push({
-      id: "auth",
+      id: op.id,
+      local: op.account === "local",
+      label: labels[op.kind] || op.kind,
+      kind: labels[op.kind] || op.kind,
+      project:
+        op.account === "local"
+          ? "本机 Git"
+          : projects.find(
+              (p) => op.path === p.path || op.path?.startsWith(p.path + "/"),
+            )?.name || op.path?.split("/").pop(),
+      workspace: op.path,
+      phase: phaseText[op.phase] || op.phase,
+      started: op.started_at_ms,
+      finished: op.finished_at_ms,
+      state: op.state,
+      running: op.state === "running",
+      summary: operationSummary(op),
+      error: op.error,
+      verification: op.verification,
+      verifiedAt: op.verified_at,
+      processed: op.processed,
+      total: op.total,
+      action:
+        op.account === "local"
+          ? "查看本机认证"
+          : op.connection_id !== connection.connection_id
+            ? "核实当前状态"
+            : op.kind === "clone_into_directory" && op.id !== cloneId
+              ? "查看目标目录"
+              : op.kind.startsWith("git_vps_auth") || op.kind === "git_access"
+                ? "查看认证"
+                : "打开原操作",
+      open: () => {
+        if (op.account === "local") {
+          setAuthScope("local");
+          setAuthOpen(true);
+          return;
+        }
+        if (op.connection_id !== connection.connection_id) {
+          safe(
+            request("operation_verify", {
+              operation_id: op.id,
+              connection_id: connection.connection_id,
+            }).then((r) => {
+              if (r) toast.info(r.message);
+            }),
+          );
+          return;
+        }
+        if (op.kind === "git_update") {
+          setGitUpdateOpen(true, op.path, op.id);
+        } else if (op.kind === "branch_fetch") {
+          setBranchesOpen(true, op.path, op.id);
+        } else if (op.kind === "clone_into_directory") {
+          if (op.id === cloneId) setCloneOpen(true);
+          else {
+            setPage("projects");
+            safe(browse(op.path));
+          }
+        } else if (op.kind.startsWith("git_")) {
+          setAuthOpen(true, true);
+        } else setPage("servers");
+      },
+    });
+  }
+
+  if (
+    authActivity &&
+    !authOpen &&
+    !taskCenter.operations.some((o) => o.id === authOperationId)
+  )
+    backgroundTasks.push({
+      id: authOperationId || "auth",
       label: "Codeup 认证",
       summary: authActivity,
       running: authActivity === "认证处理中…",
@@ -552,9 +642,15 @@ export default function App() {
     if (open && !resume) setAuthRequestVersion((v) => v + 1);
     setAuthVisible(open);
   }
-  function setGitUpdateOpen(open: boolean, target = listedPath) {
+  function setGitUpdateOpen(
+    open: boolean,
+    target = listedPath,
+    operationId?: string,
+  ) {
+    if (open) setGitCenterId(operationId);
     if (
       open &&
+      !operationId &&
       gitOperation?.state === "running" &&
       gitOperation.path !== target
     ) {
@@ -564,9 +660,15 @@ export default function App() {
     if (open) setGitDialogPath(target);
     setGitUpdateVisible(open);
   }
-  function setBranchesOpen(open: boolean, target = listedPath) {
+  function setBranchesOpen(
+    open: boolean,
+    target = listedPath,
+    operationId?: string,
+  ) {
+    if (open) setBranchCenterId(operationId);
     if (
       open &&
+      !operationId &&
       branchOperation?.state === "running" &&
       branchOperation.path !== target
     ) {
@@ -650,13 +752,28 @@ export default function App() {
     }
     return c;
   }
+  const sessionManager = useSessions(
+    connection,
+    (command, args) => invoke(command, { request: args || {} }),
+    tasks.map((t) => `${t.task_id}:${t.state}`).join("|"),
+  );
+  const selectedSession = sessionManager.metadata[task?.session_id];
+  const groupSessionsFallback = tasks.map((t) => (
+    <button key={t.task_id} onClick={() => switchConversation(t.task_id)}>
+      {t.title || t.prompt}
+    </button>
+  ));
   async function refreshTasks() {
+    const identity = connectionIdentity.current;
     const r = await request("task_list", {}, true);
-    if (r) setTasks((r.tasks || []).map(normalizeTask));
+    if (r && identity === connectionIdentity.current)
+      setTasks((r.tasks || []).map(normalizeTask));
   }
   async function refreshProjects() {
+    const identity = connectionIdentity.current;
     const r = await request("project_list", {}, true);
-    if (r) setProjects(r.projects || []);
+    if (r && identity === connectionIdentity.current)
+      setProjects(r.projects || []);
   }
   const browserNavigation = useRef<ReturnType<
     typeof latestNavigation<Data>
@@ -737,7 +854,8 @@ export default function App() {
   async function fetchTask(id: string) {
     let currentId: string | undefined = id;
     const seen = new Set<string>();
-    while (currentId && !seen.has(currentId)) {
+    const account = connection.connection_id;
+    while (currentId && !seen.has(currentId) && seen.size < 20) {
       seen.add(currentId);
       const r = await request(
         "task_status",
@@ -747,7 +865,7 @@ export default function App() {
         },
         true,
       );
-      if (!r) break;
+      if (!r || account !== connectionIdentity.current) break;
       const key = currentId;
       setDetails((d) => ({
         ...d,
@@ -964,6 +1082,8 @@ export default function App() {
   async function send() {
     const prompt = draft.trim();
     if (
+      (task && !newConversation && !task.session_id) ||
+      (selectedSession?.archived && !newConversation) ||
       !prompt ||
       !connected ||
       busy.has("task_start") ||
@@ -1139,7 +1259,59 @@ export default function App() {
             {pages.find((p) => p[0] === page)?.[1]}
           </h1>
           <div className="page-actions">
-            <BackgroundTasks tasks={backgroundTasks} />
+            <BackgroundTasks
+              tasks={[
+                ...backgroundTasks.filter(
+                  (t, i, a) => a.findIndex((x) => x.id === t.id) === i,
+                ),
+                ...[
+                  ...taskCenter.tasks,
+                  ...tasks.filter(
+                    (t) =>
+                      !taskCenter.tasks.some((x) => x.task_id === t.task_id),
+                  ),
+                ].map((t) => ({
+                  id: t.task_id,
+                  label:
+                    sessionManager.metadata[t.session_id]?.title ||
+                    t.session_meta?.title ||
+                    t.title ||
+                    "Claude 任务",
+                  summary: statusLabels[t.state] || t.state,
+                  error: details[t.task_id]?.error || t.error,
+                  running: active(t),
+                  state: t.state,
+                  kind: "Claude 分析",
+                  project:
+                    projects.find(
+                      (p) =>
+                        t.workspace === p.path ||
+                        t.workspace?.startsWith(p.path + "/"),
+                    )?.name || t.workspace?.split("/").pop(),
+                  workspace: t.workspace,
+                  started: t.created_at ? t.created_at * 1000 : undefined,
+                  finished: active(t)
+                    ? undefined
+                    : t.updated_at
+                      ? t.updated_at * 1000
+                      : undefined,
+                  model:
+                    details[t.task_id]?.model_resolved ||
+                    t.model_resolved ||
+                    (active(t) ? "等待上报" : "未上报"),
+                  mode: t.mode,
+                  action: "打开会话",
+                  open: () => {
+                    setPage("chat");
+                    switchConversation(t.task_id);
+                  },
+                })),
+              ]}
+              warning={taskCenter.error}
+              account={`${profile.user}@${profile.host}`}
+              connected={connected}
+              onConnect={() => setPage("servers")}
+            />
             {(page === "overview" || page === "chat") && (
               <Button onClick={() => startDraft(currentProject)}>
                 <Plus size={15} />
@@ -1748,94 +1920,26 @@ export default function App() {
           {page === "chat" && (
             <div className="chat-layout">
               <aside className="sessions">
-                <div className="sessions-heading">
-                  <Input
-                    aria-label="搜索会话"
-                    placeholder="搜索会话…"
-                    value={sessionFilter}
-                    onChange={(e) => setSessionFilter(e.target.value)}
-                  />
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    disabled={!connected || busy.has("task_list")}
-                    onClick={() => safe(refreshTasks())}
-                  >
-                    <RefreshCw size={15} />
-                  </Button>
-                </div>
-                {groupSessions(tasks, projects).map((group) => (
-                  <details
-                    className="session-project"
-                    key={group.path || "__unknown"}
-                    open
-                  >
-                    <summary>
-                      <FolderGit2 size={15} />
-                      <span>{group.name}</span>
-                      <Badge variant="secondary">{group.sessions.length}</Badge>
-                    </summary>
-                    <Button
-                      className="group-new"
-                      disabled={!group.registered}
-                      title={
-                        group.registered ? "新任务" : "请先在项目页注册此目录"
-                      }
-                      variant="ghost"
-                      aria-label={`为${group.name}新建任务`}
-                      onClick={() =>
-                        startDraft(
-                          group.registered ? group.path : currentProject,
-                        )
-                      }
-                    >
-                      <Plus size={13} />
-                    </Button>
-                    {group.sessions
-                      .filter((t) =>
-                        (t.prompt || t.title || "")
-                          .toLowerCase()
-                          .includes(sessionFilter.toLowerCase()),
-                      )
-                      .map((t) => (
-                        <button
-                          className={selected === t.task_id ? "active" : ""}
-                          key={t.task_id}
-                          onClick={() => switchConversation(t.task_id)}
-                        >
-                          <strong>
-                            {String(t.title || t.prompt || t.task_id)
-                              .split("\n")
-                              .find((s) => s.trim())
-                              ?.replace(/^#+\s*/, "")
-                              .slice(0, 48)}
-                          </strong>
-                          <span>
-                            {t.state !== "completed" && (
-                              <>
-                                <i
-                                  className={`dot ${active(t) ? "live" : ""}`}
-                                />
-                                {statusLabels[t.state] || t.state} ·{" "}
-                              </>
-                            )}
-                            {time(t.updated_at || t.created_at)}
-                          </span>
-                          {t.workspace !== group.path && (
-                            <small>{t.workspace}</small>
-                          )}
-                        </button>
-                      ))}
-                  </details>
-                ))}
-                {!tasks.length && <p className="empty">还没有会话</p>}
+                <SessionList
+                  sessions={sessionManager}
+                  projects={projects}
+                  selected={selected}
+                  onSelect={(id) => switchConversation(id)}
+                  onUpdateRunner={() => setPage("servers")}
+                />
+                {!sessionManager.supported && groupSessionsFallback}
               </aside>
               <section className="conversation">
                 <div className="conversation-heading">
                   <div>
                     <strong>
                       {task && !newConversation
-                        ? String(task.title || task.prompt || "会话")
+                        ? String(
+                            selectedSession?.title ||
+                              task.title ||
+                              task.prompt ||
+                              "会话",
+                          )
                             .split("\n")[0]
                             .slice(0, 40)
                         : "新任务"}
@@ -1868,6 +1972,34 @@ export default function App() {
                     项目数据库配置已更改，本会话仍使用旧配置。
                   </div>
                 )}
+                {task && !newConversation && !task.session_id && (
+                  <div className="archive-banner">
+                    旧记录缺少会话标识
+                    <Button
+                      variant="outline"
+                      onClick={() => startDraft(task.workspace)}
+                    >
+                      新建任务
+                    </Button>
+                  </div>
+                )}
+                {selectedSession?.archived && !newConversation && (
+                  <div className="archive-banner">
+                    已归档
+                    <Button
+                      variant="outline"
+                      onClick={() =>
+                        safe(
+                          sessionManager.edit(selectedSession, {
+                            archived: false,
+                          }),
+                        )
+                      }
+                    >
+                      恢复会话
+                    </Button>
+                  </div>
+                )}
                 <div
                   className="messages"
                   ref={messagesRef}
@@ -1879,6 +2011,17 @@ export default function App() {
                 >
                   {task && !newConversation ? (
                     <>
+                      {timeline[0]?.reply_to &&
+                        !details[timeline[0].reply_to] && (
+                          <Button
+                            variant="ghost"
+                            onClick={() =>
+                              safe(fetchTask(timeline[0].reply_to))
+                            }
+                          >
+                            加载更早轮次
+                          </Button>
+                        )}
                       {timeline.map((turn) => (
                         <div key={turn.task_id}>
                           <article className="message user">
@@ -2122,11 +2265,20 @@ export default function App() {
                     <InlineAlert>{claudeInfo.catalog.error}</InlineAlert>
                   )}
                   <Textarea
+                    disabled={
+                      !!task &&
+                      !newConversation &&
+                      (!task.session_id || !!selectedSession?.archived)
+                    }
                     aria-label="任务指令"
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
                     placeholder={
-                      task && !newConversation ? "继续追问…" : "描述任务…"
+                      selectedSession?.archived && !newConversation
+                        ? "恢复会话后继续追问"
+                        : task && !newConversation
+                          ? "继续追问…"
+                          : "描述任务…"
                     }
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -2155,6 +2307,8 @@ export default function App() {
                       )}
                       <Button
                         disabled={
+                          (!!task && !newConversation && !task.session_id) ||
+                          (!!selectedSession?.archived && !newConversation) ||
                           !connected ||
                           !draft.trim() ||
                           busy.has("task_start") ||
@@ -2501,6 +2655,7 @@ export default function App() {
         open={gitUpdateOpen}
         path={gitDialogPath || listedPath}
         connectionId={connection.connection_id || ""}
+        operationId={gitCenterId}
         onOperation={setGitOperation}
         onClose={() => setGitUpdateOpen(false)}
         onUpdated={() => {
@@ -2524,7 +2679,10 @@ export default function App() {
           setAuthOpen(v);
         }}
         requestVersion={authRequestVersion}
-        onActivity={setAuthActivity}
+        onActivity={(activity, id) => {
+          setAuthActivity(activity);
+          if (id) setAuthOperationId(id);
+        }}
         connected={connected}
         account={
           connected
@@ -2565,6 +2723,7 @@ export default function App() {
         onClose={() => setBranchesOpen(false)}
         path={branchDialogPath || listedPath}
         connectionId={connection.connection_id || ""}
+        operationId={branchCenterId}
         onOperation={setBranchOperation}
         onChanged={async () => {
           await browse(listedPath);

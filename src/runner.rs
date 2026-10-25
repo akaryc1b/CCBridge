@@ -14,6 +14,7 @@ use std::{
 #[derive(Clone, Serialize, Deserialize, Debug)]
 pub struct Task {
     pub id: String,
+    #[serde(default)]
     pub session_id: String,
     pub workspace: String,
     pub claude: String,
@@ -55,6 +56,8 @@ pub fn rpc_stdio() -> Result<()> {
 }
 pub fn dispatch(v: Value) -> Result<Value> {
     match field(&v, "op")? {
+        "session_list" | "session_search" | "session_turns" | "session_meta_set"
+        | "session_meta_get" | "active_tasks" => crate::sessions::rpc(&v),
         "git_update_plan" | "git_update_preflight" | "git_update_apply" => {
             crate::git_update::rpc(&v)
         }
@@ -101,7 +104,7 @@ pub fn dispatch(v: Value) -> Result<Value> {
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
             Ok(
-                json!({"runner_version":env!("CARGO_PKG_VERSION"),"protocol_version":1,"capabilities":["models_v1","projects_v1","session_identity_v1","claude_info_v1","vps_auth_v1"],"workspace":work,"claude_version":version,"claude_error":if version.is_none(){Some("当前账号未找到可运行的 Claude，请在高级设置填写绝对路径，或在远端安装并登录")}else{None},"account_home":home()?,"state_directory":runner_dir()?,"code_access":"remote_directory","warning":"工作目录不是 OS 沙箱；全自动模式拥有该 SSH 账号的文件与命令权限"}),
+                json!({"runner_version":env!("CARGO_PKG_VERSION"),"protocol_version":1,"capabilities":["models_v1","projects_v1","session_identity_v1","claude_info_v1","vps_auth_v1","sessions_v1"],"workspace":work,"claude_version":version,"claude_error":if version.is_none(){Some("当前账号未找到可运行的 Claude，请在高级设置填写绝对路径，或在远端安装并登录")}else{None},"account_home":home()?,"state_directory":runner_dir()?,"code_access":"remote_directory","warning":"工作目录不是 OS 沙箱；全自动模式拥有该 SSH 账号的文件与命令权限"}),
             )
         }
         "claude_models" => crate::claude_info::models(field(&v, "claude")?),
@@ -127,9 +130,13 @@ pub fn dispatch(v: Value) -> Result<Value> {
                 }
             }
             tasks.sort_by_key(|t| std::cmp::Reverse(t.created_at));
+            let mut first_prompts = std::collections::BTreeMap::new();
+            for t in &tasks {
+                first_prompts.insert(t.session_id.clone(), t.prompt.clone());
+            }
             tasks.truncate(100);
             Ok(
-                json!({"tasks":tasks.into_iter().map(|t| json!({"id":t.id,"session_id":t.session_id,"state":t.state,"mode":t.mode,"workspace":t.workspace,"created_at":t.created_at,"title":t.prompt.chars().take(64).collect::<String>(),"resume":t.resume,"reply_to":t.reply_to})).collect::<Vec<_>>()}),
+                json!({"tasks":tasks.into_iter().map(|t| json!({"session_meta":crate::sessions::task_metadata(&t.session_id,first_prompts.get(&t.session_id).map(String::as_str).unwrap_or(&t.prompt)),"id":t.id,"session_id":t.session_id,"state":t.state,"mode":t.mode,"workspace":t.workspace,"created_at":t.created_at,"title":t.prompt.chars().take(64).collect::<String>(),"resume":t.resume,"reply_to":t.reply_to})).collect::<Vec<_>>()}),
             )
         }
         "cancel" => {
@@ -211,6 +218,7 @@ fn start(v: Value) -> Result<Value> {
         if old.result.is_none() {
             bail!("上一轮没有有效 CC 会话结果，无法保证续接")
         }
+        valid_id(&old.session_id).context("旧记录缺少有效会话标识，请新建任务")?;
         session_id = old.session_id;
         resume = true;
     }

@@ -3,10 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { createElement } from "react";
 import { BackgroundTasks } from "../components/BackgroundTasks";
 describe("background tasks entry", () => {
-  it("does not add an empty status shell", () => {
+  it("keeps one task center entry without a false active count", () => {
     expect(
       renderToStaticMarkup(createElement(BackgroundTasks, { tasks: [] })),
-    ).toBe("");
+    ).toContain('aria-label="任务中心"');
   });
   it("groups several operations behind one accessible entry", () => {
     const tasks = ["clone", "git", "auth", "branch"].map((id) => ({
@@ -19,7 +19,7 @@ describe("background tasks entry", () => {
     const html = renderToStaticMarkup(
       createElement(BackgroundTasks, { tasks }),
     );
-    expect(html).toContain('aria-label="后台任务 4"');
+    expect(html).toContain('aria-label="任务中心"');
     expect((html.match(/<button/g) || []).length).toBe(1);
   });
 });

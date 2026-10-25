@@ -58,6 +58,8 @@ jobs:
         run: cargo test --locked --no-default-features
       - name: Detached worker smoke
         run: sh tests/linux-smoke.sh "$PWD/target/release/ccbridge"
+      - name: Session search and metadata acceptance
+        run: python3 tests/sessions-acceptance.py "$PWD/target/release/ccbridge"
       - name: Prepare Runner
         run: mkdir -p dist && cp target/release/ccbridge dist/ccbridge-linux-x86_64
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
