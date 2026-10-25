@@ -136,7 +136,7 @@ pub fn dispatch(v: Value) -> Result<Value> {
             }
             tasks.truncate(100);
             Ok(
-                json!({"tasks":tasks.into_iter().map(|t| json!({"session_meta":crate::sessions::task_metadata(&t.session_id,first_prompts.get(&t.session_id).map(String::as_str).unwrap_or(&t.prompt)),"id":t.id,"session_id":t.session_id,"state":t.state,"mode":t.mode,"workspace":t.workspace,"created_at":t.created_at,"title":t.prompt.chars().take(64).collect::<String>(),"resume":t.resume,"reply_to":t.reply_to})).collect::<Vec<_>>()}),
+                json!({"tasks":tasks.into_iter().map(|t| json!({"session_meta":crate::sessions::task_metadata(&t.session_id,first_prompts.get(&t.session_id).map(String::as_str).unwrap_or(&t.prompt)),"id":t.id,"session_id":t.session_id,"state":t.state,"mode":t.mode,"workspace":t.workspace,"created_at":t.created_at,"updated_at":t.updated_at,"model_requested":t.model_requested,"model_resolved":t.model_resolved,"title":t.prompt.chars().take(64).collect::<String>(),"resume":t.resume,"reply_to":t.reply_to})).collect::<Vec<_>>()}),
             )
         }
         "cancel" => {
