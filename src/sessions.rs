@@ -46,10 +46,11 @@ fn title(text: &str) -> String {
         .collect()
 }
 /// Reads every legal task, never the legacy list's latest-100 window.
-fn scan(root: &Path, q: &str) -> Result<(Vec<Value>, usize)> {
+fn scan(root: &Path, q: &str) -> Result<(Vec<Value>, usize, Vec<Value>)> {
     let lower = q.to_lowercase();
     let mut tasks = vec![];
     let mut unreadable = 0;
+    let mut diagnostics = vec![];
     for e in std::fs::read_dir(root)? {
         let e = e?;
         if valid_id(&e.file_name().to_string_lossy()).is_err() {
@@ -57,12 +58,18 @@ fn scan(root: &Path, q: &str) -> Result<(Vec<Value>, usize)> {
         }
         if !e.file_type()?.is_dir() {
             unreadable += 1;
+            if diagnostics.len() < 100 {
+                diagnostics.push(json!({"task_id":e.file_name().to_string_lossy(),"reason":"记录不可读取或格式无效"}));
+            }
             continue;
         }
         match read_json::<Value>(&e.path().join("task.json")) {
             Ok(mut t) => {
                 if t["id"].as_str() != e.file_name().to_str() {
                     unreadable += 1;
+                    if diagnostics.len() < 100 {
+                        diagnostics.push(json!({"task_id":e.file_name().to_string_lossy(),"reason":"记录不可读取或格式无效"}));
+                    }
                     continue;
                 }
                 let mut hits = vec![];
@@ -102,7 +109,12 @@ fn scan(root: &Path, q: &str) -> Result<(Vec<Value>, usize)> {
                 });
                 tasks.push(t);
             }
-            Err(_) => unreadable += 1,
+            Err(_) => {
+                unreadable += 1;
+                if diagnostics.len() < 100 {
+                    diagnostics.push(json!({"task_id":e.file_name().to_string_lossy(),"reason":"记录不可读取或格式无效"}));
+                }
+            }
         }
     }
     tasks.sort_by_key(|t| {
@@ -111,7 +123,7 @@ fn scan(root: &Path, q: &str) -> Result<(Vec<Value>, usize)> {
             t["id"].as_str().unwrap_or("").to_owned(),
         )
     });
-    Ok((tasks, unreadable))
+    Ok((tasks, unreadable, diagnostics))
 }
 fn snippet(text: &str, q: &str) -> String {
     // Character-indexed truncation keeps Chinese and emoji intact.
@@ -147,7 +159,7 @@ fn rpc_at(root: &Path, v: &Value) -> Result<Value> {
     if op == "session_meta_set" || op == "session_meta_get" {
         let id = field(v, "session_id")?;
         valid_id(id)?;
-        let (tasks, _) = scan(root, "")?;
+        let (tasks, _, _) = scan(root, "")?;
         if let Some(home) = v["allowed_home"].as_str() {
             if tasks.iter().filter(|t| t["session_id"] == id).any(|t| {
                 let w = t["workspace"].as_str().unwrap_or("");
@@ -197,7 +209,7 @@ fn rpc_at(root: &Path, v: &Value) -> Result<Value> {
     if q.chars().count() > 200 {
         bail!("搜索内容最多200个字符");
     }
-    let (mut tasks, mut unreadable) = scan(root, q)?;
+    let (mut tasks, mut unreadable, mut diagnostics) = scan(root, q)?;
     if let Some(home) = v["allowed_home"].as_str() {
         tasks.retain(|t| {
             let w = t["workspace"].as_str().unwrap_or("");
@@ -232,7 +244,9 @@ fn rpc_at(root: &Path, v: &Value) -> Result<Value> {
                 }
             }
         }
-        return Ok(json!({"tasks":active,"incomplete":unreadable>0,"unreadable_count":unreadable}));
+        return Ok(
+            json!({"tasks":active,"incomplete":unreadable>0,"unreadable_count":unreadable,"diagnostics":diagnostics}),
+        );
     }
     if op == "session_turns" {
         let id = field(v, "session_id")?;
@@ -274,6 +288,10 @@ fn rpc_at(root: &Path, v: &Value) -> Result<Value> {
             Ok(m) => m,
             Err(_) => {
                 unreadable += 1;
+                if diagnostics.len() < 100 {
+                    diagnostics
+                        .push(json!({"session_id":id,"reason":"会话元数据不可读取或格式无效"}));
+                }
                 continue;
             }
         };
@@ -388,7 +406,7 @@ fn rpc_at(root: &Path, v: &Value) -> Result<Value> {
         .filter_map(|id| sessions.iter().find(|s| s["session_id"] == *id).cloned())
         .collect();
     Ok(
-        json!({"sessions":page,"snapshot_id":snapshot_id,"next_cursor":if offset+limit<ids.len(){Some(format!("{snapshot_id}:{}",offset+limit))}else{None},"total":ids.len(),"incomplete":unreadable>0,"unreadable_count":unreadable,"read_at":now()}),
+        json!({"sessions":page,"snapshot_id":snapshot_id,"next_cursor":if offset+limit<ids.len(){Some(format!("{snapshot_id}:{}",offset+limit))}else{None},"total":ids.len(),"incomplete":unreadable>0,"unreadable_count":unreadable,"read_at":now(),"diagnostics":diagnostics}),
     )
 }
 

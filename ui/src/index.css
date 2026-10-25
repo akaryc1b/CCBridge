@@ -2716,3 +2716,8 @@ header > h1 {
 .theme-changing *::after {
   transition: none !important;
 }
+.session-hit mark {
+  background: var(--warning-bg);
+  color: var(--foreground);
+  border-radius: 2px;
+}

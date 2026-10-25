@@ -14,6 +14,7 @@ export function useSessions(
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false),
     [incomplete, setIncomplete] = useState(0),
+    [diagnostics, setDiagnostics] = useState<Data[]>([]),
     [metadata, setMetadata] = useState<Record<string, Data>>({});
   const lastConnection = useRef(connection);
   if (connection.connection_id) lastConnection.current = connection;
@@ -74,8 +75,12 @@ export function useSessions(
       setHasUpdates(false);
       setCursor(r.next_cursor || null);
       setIncomplete(r.unreadable_count || 0);
+      setDiagnostics(r.diagnostics || []);
     } catch (e: any) {
-      if (current === generation.current) setError(e.message || "会话读取失败");
+      if (current === generation.current) {
+        setError(e.message || "会话读取失败");
+        if (e.detail?.code === "search_expired") setCursor(null);
+      }
     } finally {
       if (current === generation.current) setLoading(false);
     }
@@ -83,7 +88,11 @@ export function useSessions(
   useEffect(() => {
     generation.current++;
     setItems([]);
+    setQuery("");
+    setProject("");
+    setArchive(false);
     setMetadata({});
+    setDiagnostics([]);
     setCursor(null);
     setError("");
     setLoading(false);
@@ -132,6 +141,7 @@ export function useSessions(
     error,
     loading,
     incomplete,
+    diagnostics,
     supported,
     load,
     edit,

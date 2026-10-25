@@ -772,7 +772,12 @@ export default function App() {
     (command, args) => invoke(command, { request: args || {} }),
     tasks.map((t) => `${t.task_id}:${t.state}`).join("|"),
   );
-  const selectedSession = sessionManager.metadata[task?.session_id];
+  const selectedSummary = tasks.find((t) => t.session_id === task?.session_id);
+  const selectedSession =
+    sessionManager.metadata[task?.session_id] ||
+    (selectedSummary?.session_meta
+      ? { ...selectedSummary, ...selectedSummary.session_meta }
+      : undefined);
   const groupSessionsFallback = tasks.map((t) => (
     <button key={t.task_id} onClick={() => switchConversation(t.task_id)}>
       {t.title || t.prompt}
@@ -1936,6 +1941,7 @@ export default function App() {
             <div className="chat-layout">
               <aside className="sessions">
                 <SessionList
+                  key={connection.connection_id || "offline"}
                   sessions={sessionManager}
                   projects={projects}
                   selected={selected}

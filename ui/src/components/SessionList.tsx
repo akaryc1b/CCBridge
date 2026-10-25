@@ -1,3 +1,4 @@
+import { searchHighlight } from "../lib/searchHighlight";
 import {
   Select,
   SelectContent,
@@ -41,6 +42,7 @@ export function SessionList({
   onSelect: (id: string) => void;
   onUpdateRunner: () => void;
 }) {
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [rename, setRename] = useState<Data | null>(null),
     [name, setName] = useState(""),
     [saving, setSaving] = useState(false),
@@ -138,6 +140,9 @@ export function SessionList({
           {!!sessions.incomplete && (
             <div className="notice">
               结果不完整 · {sessions.incomplete} 条记录无法读取
+              <Button variant="ghost" onClick={() => setDiagnosticsOpen(true)}>
+                查看诊断
+              </Button>
             </div>
           )}
           {groupSessions(sessions.items, projects).map((g) => (
@@ -175,7 +180,7 @@ export function SessionList({
                           : hit.field === "prompt"
                             ? "用户输入"
                             : "标题"}{" "}
-                        · {hit.snippet}
+                        · {searchHighlight(hit.snippet, sessions.query)}
                       </button>
                     ))}
                   </div>
@@ -239,6 +244,20 @@ export function SessionList({
           )}
         </>
       )}
+      <Dialog open={diagnosticsOpen} onOpenChange={setDiagnosticsOpen}>
+        <DialogContent>
+          <DialogTitle>会话读取诊断</DialogTitle>
+          <DialogDescription>
+            {sessions.incomplete} 条记录未包含在结果中
+            {sessions.incomplete > sessions.diagnostics.length
+              ? `，显示前 ${sessions.diagnostics.length} 条诊断`
+              : ""}
+          </DialogDescription>
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">
+            {JSON.stringify(sessions.diagnostics, null, 2)}
+          </pre>
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={!!rename}
         onOpenChange={(v) => {

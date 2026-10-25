@@ -27,7 +27,10 @@ export function Workbench({
   onSession: (id: string) => void;
   onPage: (p: string) => void;
 }) {
-  const recent: D[] = groupSessions(tasks, projects)
+  const recent: D[] = groupSessions(
+    tasks.filter((t) => !t.session_meta?.archived),
+    projects,
+  )
     .flatMap((g) => g.sessions.map((t) => ({ ...t, projectName: g.name }) as D))
     .sort(
       (a, b) => (b.updated_at || b.created_at) - (a.updated_at || a.created_at),
@@ -121,7 +124,12 @@ export function Workbench({
                 {recent.map((t) => (
                   <tr key={t.task_id} onClick={() => onSession(t.task_id)}>
                     <td>
-                      {String(t.prompt || t.title || t.task_id)
+                      {String(
+                        t.session_meta?.title ||
+                          t.title ||
+                          t.prompt ||
+                          t.task_id,
+                      )
                         .split("\n")
                         .find((s) => s.trim())
                         ?.slice(0, 32)}
