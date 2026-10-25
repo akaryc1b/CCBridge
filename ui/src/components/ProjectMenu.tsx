@@ -19,7 +19,10 @@ export function ProjectMenu({
           size="icon"
           aria-label={`管理项目 ${project.name}`}
           disabled={disabled}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+          }}
         >
           <MoreHorizontal size={15} />
         </Button>
