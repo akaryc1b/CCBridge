@@ -29,7 +29,10 @@ export function ProjectMenu({
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content className="context-menu" align="end">
-          <Menu.Item onSelect={() => onRemove(project)}>
+          <Menu.Item
+            className="flex items-center gap-2 whitespace-nowrap"
+            onSelect={() => onRemove(project)}
+          >
             <FolderMinus size={15} />
             从项目列表移除
           </Menu.Item>
