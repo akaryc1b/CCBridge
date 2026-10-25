@@ -312,22 +312,37 @@ export default function App() {
   const composerStates = useRef<Record<string, Data>>({});
   useEffect(() => {
     const media = matchMedia("(prefers-color-scheme: dark)");
+    const root = document.documentElement;
+    let disposed = false,
+      frame = 0;
+    // Change the palette atomically: native appearance changes can interrupt WebKit color transitions.
+    root.classList.add("theme-changing");
     const apply = () => {
-      document.documentElement.dataset.theme =
+      root.dataset.theme =
         theme === "system" ? (media.matches ? "dark" : "light") : theme;
-      document.documentElement.classList.toggle(
-        "dark",
-        document.documentElement.dataset.theme === "dark",
-      );
+      root.classList.toggle("dark", root.dataset.theme === "dark");
+    };
+    const finish = () => {
+      if (disposed) return;
+      void getComputedStyle(root).color;
+      frame = requestAnimationFrame(() => {
+        if (!disposed) root.classList.remove("theme-changing");
+      });
     };
     apply();
     localStorage.setItem("ccbridge-theme", theme);
     if (isTauri())
-      void invoke("set_window_theme", { theme }).catch((e) =>
-        toast.error(String(e)),
-      );
+      void invoke("set_window_theme", { theme })
+        .catch((e) => toast.error(String(e)))
+        .finally(finish);
+    else finish();
     media.addEventListener("change", apply);
-    return () => media.removeEventListener("change", apply);
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+      root.classList.remove("theme-changing");
+      media.removeEventListener("change", apply);
+    };
   }, [theme]);
   function startDraft(project: string) {
     switchConversation("");

@@ -2709,3 +2709,10 @@ header > h1 {
   font-size: 13px !important;
   color: var(--muted-text);
 }
+
+/* Palette switches are immediate; normal control and progress animations remain enabled. */
+.theme-changing *,
+.theme-changing *::before,
+.theme-changing *::after {
+  transition: none !important;
+}
