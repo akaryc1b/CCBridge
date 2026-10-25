@@ -57,3 +57,26 @@ describe("project entry contract", () => {
     expect(parentDirectory("/home/u", "/home/u")).toBe("/home/u");
   });
 });
+
+it("removed projects lose empty groups but retain history under original directory", () => {
+  const p = [{ path: "/home/u/keep", name: "保留" }];
+  const tasks = [
+    {
+      task_id: "t",
+      session_id: "s",
+      workspace: "/home/u/removed",
+      created_at: 1,
+    },
+  ];
+  const groups = projectSessionGroups(tasks, p, "", false, "");
+  expect(groups.find((g) => g.path === "/home/u/removed")).toMatchObject({
+    registered: false,
+    sessions: tasks,
+  });
+  expect(groups.find((g) => g.path === "/home/u/keep")?.sessions).toEqual([]);
+  expect(
+    projectSessionGroups([], p, "", false, "").some(
+      (g) => g.path === "/home/u/removed",
+    ),
+  ).toBe(false);
+});

@@ -1,3 +1,4 @@
+import { ProjectMenu } from "./components/ProjectMenu";
 import { ProjectDialog } from "./components/ProjectDialog";
 import { projectAtPath } from "./lib/projectEntries";
 import { useTaskCenter } from "./lib/useTaskCenter";
@@ -814,6 +815,65 @@ export default function App() {
     if (r && identity === connectionIdentity.current)
       setProjects(r.projects || []);
   }
+  const [removingProject, setRemovingProject] = useState(false);
+  const removeLock = useRef(false);
+  async function removeProject(project: Data) {
+    if (removeLock.current) return;
+    if (!runner.capabilities?.includes("project_remove_v1")) {
+      toast.error("更新 Runner 后可移除项目");
+      setPage("servers");
+      return;
+    }
+    const identity = connectionIdentity.current;
+    removeLock.current = true;
+    setRemovingProject(true);
+    try {
+      const result = await invoke<Data>("project_remove", {
+        request: {
+          workspace: project.path,
+          expected_name: project.name,
+          connection_id: identity,
+        },
+      });
+      if (identity !== connectionIdentity.current) return;
+      setProjects(result.projects || []);
+      if (sessionManager.project === project.path)
+        sessionManager.setProject("");
+      if (
+        (!task || newConversation) &&
+        (draftProject || currentProject) === project.path
+      )
+        setDraftProject(connection.environment?.home || "");
+      toast.success("已移除项目，文件和会话保留", {
+        duration: 10000,
+        action: {
+          label: "撤销",
+          onClick: () => {
+            if (identity !== connectionIdentity.current) {
+              toast.error("连接已变化，请在原账号重新添加项目");
+              return;
+            }
+            invoke("project_save", {
+              request: {
+                workspace: project.path,
+                path: project.path,
+                name: project.name,
+                create_only: true,
+                connection_id: identity,
+              },
+            })
+              .then(() => refreshProjects())
+              .catch((e) => toast.error(e.message || String(e)));
+          },
+        },
+      });
+    } catch (e: any) {
+      toast.error(e.message || String(e));
+    } finally {
+      removeLock.current = false;
+      setRemovingProject(false);
+    }
+  }
   const browserNavigation = useRef<ReturnType<
     typeof latestNavigation<Data>
   > | null>(null);
@@ -980,6 +1040,7 @@ export default function App() {
     const timer = setInterval(() => {
       if (document.hidden) return;
       safe(refreshConnection());
+      safe(refreshProjects());
       safe(refreshTasks());
       if (selectedRef.current) safe(fetchTask(selectedRef.current));
     }, 5000);
@@ -1808,17 +1869,28 @@ export default function App() {
                   </Button>
                 </div>
                 {projects.map((p) => (
-                  <button
-                    className={`project-item ${p.path === browsedProject ? "active" : ""}`}
+                  <div
+                    className={`project-entry-row ${p.path === browsedProject ? "active" : ""}`}
                     key={p.path}
-                    onClick={() => safe(browse(p.path))}
                   >
-                    <FolderOpen size={17} />
-                    <div>
-                      <strong>{p.name}</strong>
-                      {p.path === currentProject && <small>MCP默认项目</small>}
-                    </div>
-                  </button>
+                    <button
+                      className="project-item"
+                      onClick={() => safe(browse(p.path))}
+                    >
+                      <FolderOpen size={17} />
+                      <div>
+                        <strong>{p.name}</strong>
+                        {p.path === currentProject && (
+                          <small>MCP默认项目</small>
+                        )}
+                      </div>
+                    </button>
+                    <ProjectMenu
+                      project={p}
+                      disabled={!connected || removingProject}
+                      onRemove={removeProject}
+                    />
+                  </div>
                 ))}
                 <div className="section-divider" />
                 <Button
@@ -2004,6 +2076,8 @@ export default function App() {
                   onSelect={(id) => switchConversation(id)}
                   onUpdateRunner={() => setPage("servers")}
                   onAddProject={() => openProject()}
+                  onRemoveProject={removeProject}
+                  removingProject={removingProject}
                   onNewSession={(p) =>
                     startDraft(p || connection.environment?.home || "")
                   }

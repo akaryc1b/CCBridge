@@ -1,3 +1,4 @@
+import { ProjectMenu } from "./ProjectMenu";
 import { searchHighlight } from "../lib/searchHighlight";
 import {
   Select,
@@ -42,6 +43,8 @@ export function SessionList({
   onUpdateRunner,
   onAddProject,
   onNewSession,
+  onRemoveProject,
+  removingProject,
 }: {
   sessions: ReturnType<typeof useSessions>;
   projects: Data[];
@@ -51,6 +54,8 @@ export function SessionList({
   onUpdateRunner: () => void;
   onAddProject: () => void;
   onNewSession: (path: string) => void;
+  onRemoveProject: (p: Data) => void;
+  removingProject: boolean;
 }) {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [rename, setRename] = useState<Data | null>(null),
@@ -204,6 +209,13 @@ export function SessionList({
                   >
                     <Plus size={14} />
                   </Button>
+                )}
+                {g.registered && (
+                  <ProjectMenu
+                    project={{ path: g.path, name: g.name }}
+                    disabled={sessions.offline || removingProject}
+                    onRemove={onRemoveProject}
+                  />
                 )}
               </summary>
               {!g.sessions.length && (

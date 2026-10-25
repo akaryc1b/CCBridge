@@ -686,6 +686,17 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
         .contains("只能由人在 App")
     );
     backend::dispatch(shared.clone(), json!({"op":"set_auto","allow":true}), true).await?;
+    assert!(
+        backend::dispatch(
+            shared.clone(),
+            json!({"op":"project_remove","workspace":"/not-a-project"}),
+            false
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("只能在 App")
+    );
     // Session metadata is human-owned; archiving never changes the MCP execution contract.
     let analysis=backend::dispatch(shared.clone(),json!({"op":"start","task_id":uuid::Uuid::new_v4().to_string(),"remote_project":"项目B","prompt":"Session acceptance Read README.md","mode":"automatic"}),false).await?;
     {

@@ -66,7 +66,9 @@ pub fn dispatch(v: Value) -> Result<Value> {
         }
         "file_create" | "file_mutate" | "trash_list" | "trash_restore" | "branches"
         | "branch_change" => crate::workspace_ops::rpc(&v),
-        "project_list" | "project_save" | "project_resolve" => crate::projects::rpc(&v),
+        "project_list" | "project_save" | "project_remove" | "project_resolve" => {
+            crate::projects::rpc(&v)
+        }
         "db_list" | "db_save" | "db_bind" | "db_remove" | "db_detect" | "db_test"
         | "db_protocol_test" | "db_project_save" | "db_projects" | "db_resolve" => {
             crate::databases::rpc(&v)
@@ -104,7 +106,7 @@ pub fn dispatch(v: Value) -> Result<Value> {
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
             Ok(
-                json!({"runner_version":env!("CARGO_PKG_VERSION"),"protocol_version":1,"capabilities":["models_v1","projects_v1","session_identity_v1","claude_info_v1","vps_auth_v1","sessions_v1"],"workspace":work,"claude_version":version,"claude_error":if version.is_none(){Some("当前账号未找到可运行的 Claude，请在高级设置填写绝对路径，或在远端安装并登录")}else{None},"account_home":home()?,"state_directory":runner_dir()?,"code_access":"remote_directory","warning":"工作目录不是 OS 沙箱；全自动模式拥有该 SSH 账号的文件与命令权限"}),
+                json!({"runner_version":env!("CARGO_PKG_VERSION"),"protocol_version":1,"capabilities":["models_v1","projects_v1","session_identity_v1","claude_info_v1","vps_auth_v1","sessions_v1","project_remove_v1"],"workspace":work,"claude_version":version,"claude_error":if version.is_none(){Some("当前账号未找到可运行的 Claude，请在高级设置填写绝对路径，或在远端安装并登录")}else{None},"account_home":home()?,"state_directory":runner_dir()?,"code_access":"remote_directory","warning":"工作目录不是 OS 沙箱；全自动模式拥有该 SSH 账号的文件与命令权限"}),
             )
         }
         "claude_models" => crate::claude_info::models(field(&v, "claude")?),

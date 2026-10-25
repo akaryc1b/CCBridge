@@ -253,6 +253,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "git_vps_auth_install",
             "git_vps_auth_remove",
             "project_save",
+            "project_remove",
             "set_auto",
             "bind_repository",
             "clear_binding",
@@ -1079,6 +1080,12 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         }
     }
     if op == "db_projects" || op == "project_list" {
+        return c.rpc(v.clone()).await;
+    }
+    if op == "project_remove" {
+        if !human {
+            bail!("项目登记只能在 App 管理")
+        }
         return c.rpc(v.clone()).await;
     }
     if [

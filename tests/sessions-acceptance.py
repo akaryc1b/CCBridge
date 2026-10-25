@@ -3,7 +3,7 @@
 import json, os, pathlib, statistics, subprocess, sys, tempfile, time, uuid
 binary=str(pathlib.Path(sys.argv[1]).resolve())
 with tempfile.TemporaryDirectory(prefix='ccbridge-sessions-') as tmp:
- root=pathlib.Path(tmp);state=root/'state';state.mkdir(mode=0o700)
+ root=pathlib.Path(tmp).resolve();state=root/'state';state.mkdir(mode=0o700)
  work=root/'project';work.mkdir();(work/'README.md').write_text('sessions acceptance')
  env=dict(os.environ,HOME=tmp,CCBRIDGE_RUNNER_HOME=str(state))
  def rpc(op,**kw):
@@ -29,6 +29,31 @@ with tempfile.TemporaryDirectory(prefix='ccbridge-sessions-') as tmp:
   task=dict(id=ident,session_id=session if i<2 else ident,workspace=str(work),claude='/not/invoked',mode='automatic',prompt='\n首轮 · 认证分析' if i==0 else '后续输入',resume=i==1,reply_to=first if i==1 else None,state='completed',created_at=1700000000+i,updated_at=1700000000+i,worker_pid=0,result={'result':'权限 HELLO <script>alert(1)</script>'},error=None)
   (d/'task.json').write_text(json.dumps(task,ensure_ascii=False))
  for i in range(110):seed(i)
+ # Unregister is metadata-only; files, sessions and legacy database config remain byte-identical.
+ before_task=(state/first/'task.json').read_bytes();before_file=(work/'README.md').read_bytes()
+ assert not rpc('project_remove',workspace=str(work),expected_name='陈旧名称')['ok']
+ removed=call('project_remove',workspace=str(work),expected_name='已有接口改名')
+ assert not any(p['path']==str(work) for p in removed['projects'])
+ assert work.is_dir() and (work/'README.md').read_bytes()==before_file and (state/first/'task.json').read_bytes()==before_task
+ assert call('status',task_id=first)['state']=='completed'
+ assert not rpc('project_resolve',project=str(work))['ok']
+ call('project_save',workspace=str(work),name='重新登记',create_only=True)
+ assert call('project_resolve',project='重新登记')['workspace']==str(work)
+ stale=root/'stale';stale.mkdir();call('project_save',workspace=str(stale),name='不存在目录');stale.rmdir();call('project_remove',workspace=str(stale))
+ legacy_dir=root/'legacy-project';legacy_dir.mkdir();call('db_project_save',workspace=str(legacy_dir),name='数据库旧登记')
+ before_db=(state/'databases.json').read_bytes();call('project_remove',workspace=str(legacy_dir),expected_name='数据库旧登记')
+ assert not any(p['path']==str(legacy_dir) for p in call('project_list')['projects'])
+ assert (state/'databases.json').read_bytes()==before_db
+ call('project_save',workspace=str(legacy_dir),name='恢复旧登记',create_only=True)
+ assert any(p['path']==str(legacy_dir) for p in call('project_list')['projects'])
+ assert (state/'databases.json').read_bytes()==before_db
+ # Parallel registrations serialize on projects.lock, without the task registry lock.
+ import concurrent.futures
+ paths=[root/f'parallel-{i}' for i in range(6)]
+ for p in paths:p.mkdir()
+ with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:list(pool.map(lambda p:call('project_save',workspace=str(p),name=p.name),paths))
+ assert all(any(x['path']==str(p) for x in call('project_list')['projects']) for p in paths)
+ print('PASS unregister preserves directory/content/history/DB; stale name, missing folder, re-add and parallel registry safety')
  r=call('session_search',q='权限');assert r['total']==109
  ids=[s['session_id'] for s in r['sessions']];cursor=r['next_cursor']
  while cursor:

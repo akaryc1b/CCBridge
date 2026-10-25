@@ -2868,3 +2868,35 @@ header > h1 {
   padding: 6px 8px;
   font-size: 13px;
 }
+.project-entry-row {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  min-width: 0;
+}
+.project-entry-row.active {
+  background: var(--selection);
+}
+.project-entry-row .project-item {
+  flex: 1;
+  min-width: 0;
+  padding-right: 2px;
+  margin: 0;
+}
+.project-entry-row .project-item > div {
+  min-width: 0;
+}
+.project-entry-row .project-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-entry-row > [data-slot="button"] {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+.session-group-label > [data-slot="button"]:last-child {
+  margin-left: 0;
+}
