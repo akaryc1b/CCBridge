@@ -61,6 +61,9 @@ export function GitUpdate({
     scope.current++;
     setId(undefined);
     setReviewing(false);
+    setVerifiedUnknown(false);
+    setChecking(false);
+    setStarting(false);
     setPlan([]);
     setResult([]);
     setError("");
@@ -71,10 +74,11 @@ export function GitUpdate({
   useEffect(() => {
     if (snap) {
       onOperation?.(snap);
-      if (snap.result?.results) setResult(snap.result.results);
+      if (!reviewing && snap.result?.results) setResult(snap.result.results);
     }
   }, [snap]);
   async function inspect(manual = false) {
+    if (checking) return null;
     const seq = scope.current;
     setChecking(true);
     setError("");
@@ -267,22 +271,18 @@ export function GitUpdate({
           )}
         </div>
         <DialogFooter>
-          <Button variant={completed ? "default" : "outline"} onClick={onClose}>
+          <Button variant="outline" onClick={onClose}>
             {running ? "后台运行" : completed ? "完成" : "关闭"}
           </Button>
           {!running && (
             <>
               {(finished || reviewing) && (
                 <Button
-                  variant={
-                    finished && !failed.length && !completed
-                      ? "default"
-                      : "outline"
-                  }
+                  variant={finished && !failed.length ? "default" : "outline"}
                   disabled={checking}
                   onClick={() => void inspect(true)}
                 >
-                  刷新
+                  {checking ? "检查中…" : finished ? "检查新更新" : "重新检查"}
                 </Button>
               )}
               {!completed && (!finished || failed.length > 0) && (
