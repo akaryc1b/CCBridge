@@ -18,7 +18,7 @@ fn git(p: &Path, args: &[&str]) -> Result<String> {
         .env("GIT_OPTIONAL_LOCKS", "0")
         .output()?;
     if !out.status.success() {
-        bail!("Git 检查或快进失败；未丢弃改动，请检查跟踪分支与仓库状态")
+        bail!("仓库更新失败；改动已保留，请检查当前分支及其远端分支")
     }
     Ok(String::from_utf8(out.stdout)?.trim().into())
 }
@@ -138,7 +138,7 @@ pub fn rpc_at(v: &Value, home: &Path) -> Result<Value> {
             }
             git(&p, &["merge", "--ff-only", "--", upstream])?;
             Ok(
-                json!({"path":p,"branch":r["branch"],"before":head,"after":git(&p,&["rev-parse","HEAD"] )?,"state":"updated","message":"已快进更新"}),
+                json!({"path":p,"branch":r["branch"],"before":head,"after":git(&p,&["rev-parse","HEAD"] )?,"state":"updated","message":"仓库已更新"}),
             )
         }
         _ => bail!("不支持的 Git 更新操作"),

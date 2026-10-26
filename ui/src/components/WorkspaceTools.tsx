@@ -449,7 +449,7 @@ export function BranchDialog({
     if (busy) return;
     setBusy(true);
     setError("");
-    setMessage(op === "branch_fetch" ? "正在获取远端…" : "正在读取分支…");
+    setMessage(op === "branch_fetch" ? "正在获取最新分支…" : "正在读取分支…");
     try {
       const operation_id =
         op === "branch_fetch" ? crypto.randomUUID() : undefined;
@@ -462,7 +462,7 @@ export function BranchDialog({
         },
       });
       setInfo(r);
-      setMessage(op === "branch_fetch" ? "远端分支引用已更新" : "");
+      setMessage(op === "branch_fetch" ? "已获取最新分支" : "");
     } catch (e) {
       setError(errorText(e));
       setMessage("");
@@ -484,7 +484,7 @@ export function BranchDialog({
       setConfirm(false);
       setMessage(
         action === "fast_forward"
-          ? `已快进同步 ${r.current} 到 ${branch}`
+          ? `已更新 ${r.current} 到 ${branch}`
           : `已切换到 ${r.current}`,
       );
       setBranch("");
@@ -521,7 +521,7 @@ export function BranchDialog({
             disabled={busy}
             onClick={() => void load("branch_fetch")}
           >
-            获取远端
+            获取最新分支
           </Button>
         </div>
         {info.current && (
@@ -586,9 +586,9 @@ export function BranchDialog({
         {branch && !(info.branches || []).includes(branch) && (
           <p className="hint">
             {action === "fast_forward"
-              ? `将当前 ${info.current || "HEAD"} 快进到 ${branch}，保留分支名称`
+              ? `将当前 ${info.current || "HEAD"}更新为 ${branch} 的代码，保留当前分支名`
               : action === "track"
-                ? `从 ${remote} 建立跟踪分支`
+                ? `从 ${remote} 新建本地分支`
                 : `从当前 ${info.current || "HEAD"} 新建 ${branch}`}
           </p>
         )}
@@ -608,7 +608,7 @@ export function BranchDialog({
           <p>
             确认在此仓库
             {action === "fast_forward"
-              ? "将当前分支快进同步"
+              ? "将当前分支更新"
               : action === "switch"
                 ? "切换"
                 : "创建并切换"}
@@ -626,11 +626,11 @@ export function BranchDialog({
                 setConfirm(true);
               }}
             >
-              快进同步到 {remote}
+              使用 {remote} 更新当前分支
             </Button>
           )}
           <Button variant="outline" onClick={onClose}>
-            {busy ? "后台运行" : "关闭"}
+            {busy ? "在后台继续" : "关闭"}
           </Button>
           <Button
             disabled={
@@ -644,7 +644,7 @@ export function BranchDialog({
           >
             {busy
               ? "正在执行…"
-              : `${action === "fast_forward" ? "确认快进同步到" : action === "switch" ? "切换到" : "新建并切换到"} ${branch || "分支"}`}
+              : `${action === "fast_forward" ? "确认更新到" : action === "switch" ? "切换到" : "新建并切换到"} ${branch || "分支"}`}
           </Button>
         </DialogFooter>
       </DialogContent>

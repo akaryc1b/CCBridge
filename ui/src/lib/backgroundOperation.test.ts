@@ -8,6 +8,6 @@ describe("background operation result", () => {
     expect(operationSummary({ state: "done" })).toBe("已完成");
     expect(operationSummary({ state: "partial" })).toBe("部分失败");
     expect(operationSummary({ state: "failed" })).toBe("失败");
-    expect(operationSummary({ state: "unknown" })).toBe("结果待核实");
+    expect(operationSummary({ state: "unknown" })).toBe("结果待确认");
   });
 });

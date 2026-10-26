@@ -13,10 +13,10 @@ import { time } from "@/lib/format";
 import type { RemoteModel } from "@/lib/useClaudeInfo";
 export function modelLabel(value: string, models: RemoteModel[]) {
   const row = models.find((m) => m.value === (value || "default"));
-  if (!row && (!value || value === "default")) return "跟随远端默认";
-  if (!row) return value ? `${value}（不在远端列表）` : "跟随远端默认";
+  if (!row && (!value || value === "default")) return "服务器默认";
+  if (!row) return value ? `${value}（服务器未提供此模型）` : "服务器默认";
   if (row.value === "default")
-    return row.resolved ? `跟随远端默认 · ${row.resolved}` : "跟随远端默认";
+    return row.resolved ? `服务器默认 · ${row.resolved}` : "服务器默认";
   return row.resolved ? `${row.value} · ${row.resolved}` : row.label;
 }
 export function inheritedModelLabel(
@@ -125,7 +125,7 @@ export function ClaudeUsage({
         </Button>
       </div>
       {!supported && (
-        <p className="hint">{connected ? "更新 Runner 后获取" : "未连接"}</p>
+        <p className="hint">{connected ? "更新服务端程序后获取" : "未连接"}</p>
       )}
       {supported && data.state === "not_applicable" && (
         <p className="hint">当前登录方式不提供订阅额度。</p>
@@ -164,7 +164,7 @@ export function ClaudeUsage({
               }
             >
               {!supported ? (
-                <span className="muted">更新 Runner 后获取</span>
+                <span className="muted">更新服务端程序后获取</span>
               ) : !w ? (
                 <span className="muted">
                   {data.loading
@@ -172,13 +172,13 @@ export function ClaudeUsage({
                     : data.error
                       ? "读取失败"
                       : data.state === "unrecognized"
-                        ? "上报格式不支持"
+                        ? "无法识别额度数据"
                         : data.state === "unavailable"
                           ? "Claude 未返回额度"
                           : "暂无额度数据"}
                 </span>
               ) : expired ? (
-                <span className="muted">已到恢复时间 · 等待上报</span>
+                <span className="muted">已过恢复时间，等待更新</span>
               ) : (
                 <div className="quota-value">
                   <span>
@@ -188,7 +188,7 @@ export function ClaudeUsage({
                   <Progress value={w.used_percentage} />
                   {data.live === false && w.observed_at && (
                     <small className="muted">
-                      上报于 {time(w.observed_at)}
+                      数据时间 {time(w.observed_at)}
                     </small>
                   )}
                 </div>
@@ -205,10 +205,10 @@ export function ClaudeUsage({
               : data.source === "claude_account"
                 ? `Claude 账户 · ${time(data.checked_at)} 更新`
                 : data.state === "unrecognized"
-                  ? "额度事件缺少可识别的数值。"
+                  ? "未能识别额度数值。"
                   : Object.keys(windows).length
                     ? "来源：会话历史，非账户实时查询。"
-                    : "近期 CCBridge 会话未上报额度。"}
+                    : "近期 CCBridge 会话未返回额度。"}
         </p>
       )}
       {data.live_error && (

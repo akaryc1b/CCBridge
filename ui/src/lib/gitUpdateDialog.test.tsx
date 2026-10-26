@@ -40,17 +40,17 @@ describe("Git update terminal actions", () => {
     const html = render("done");
     expect(html).toContain("检查新更新");
     expect(html).toContain("完成");
-    expect(html).not.toContain("快进更新");
+    expect(html).not.toContain("更新仓库");
   });
   it("keeps running work backgroundable without starting a second update", () => {
     const html = render("running");
-    expect(html).toContain("后台运行");
+    expect(html).toContain("在后台继续");
     expect(html).not.toContain("检查新更新");
-    expect(html).not.toContain("快进更新");
+    expect(html).not.toContain("更新仓库");
   });
   it("requires reinspection for an unknown outcome", () => {
     const html = render("unknown");
     expect(html).toContain("检查新更新");
-    expect(html).not.toContain("快进更新");
+    expect(html).not.toContain("更新仓库");
   });
 });

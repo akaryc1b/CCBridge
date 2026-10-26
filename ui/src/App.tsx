@@ -8,6 +8,7 @@ import {
   BackgroundTasks,
   type BackgroundTask,
 } from "./components/BackgroundTasks";
+import { taskAction } from "./lib/taskRead";
 import { operationSummary } from "./lib/backgroundOperation";
 import { AppIcon } from "@/components/AppIcon";
 import { useClaudeInfo } from "@/lib/useClaudeInfo";
@@ -473,7 +474,7 @@ export default function App() {
       git_update: "Git 更新",
       clone_into_directory: "克隆仓库",
       branch_fetch: "获取分支",
-      install_runner: "安装 Runner",
+      install_runner: "安装服务端程序",
       git_access: "仓库访问检测",
       git_vps_auth_test: "服务器认证检测",
       git_vps_auth_install: "同步服务器认证",
@@ -482,8 +483,8 @@ export default function App() {
     backgroundTasks.push({
       id: op.id,
       local: op.account === "local",
-      label: labels[op.kind] || op.kind,
-      kind: labels[op.kind] || op.kind,
+      label: labels[op.kind] || "后台任务",
+      kind: labels[op.kind] || "后台任务",
       project:
         op.account === "local"
           ? "本机 Git"
@@ -506,12 +507,12 @@ export default function App() {
         op.account === "local"
           ? "查看本机认证"
           : op.connection_id !== connection.connection_id
-            ? "核实当前状态"
+            ? "检查当前状态"
             : op.kind === "clone_into_directory" && op.id !== cloneId
               ? "查看目标目录"
               : op.kind.startsWith("git_vps_auth") || op.kind === "git_access"
                 ? "查看认证"
-                : "打开原操作",
+                : taskAction(op.kind),
       open: () => {
         if (op.account === "local") {
           setAuthScope("local");
@@ -548,14 +549,22 @@ export default function App() {
 
   if (
     authActivity &&
+    authOperationId &&
     !authOpen &&
     !taskCenter.operations.some((o) => o.id === authOperationId)
   )
     backgroundTasks.push({
-      id: authOperationId || "auth",
+      id: authOperationId,
       label: "Codeup 认证",
       summary: authActivity,
       running: authActivity === "认证处理中…",
+      state:
+        authActivity === "认证处理中…"
+          ? "running"
+          : authActivity === "认证操作失败"
+            ? "failed"
+            : "done",
+      action: "查看认证",
       open: () => setAuthOpen(true, true),
     });
   if (
@@ -565,9 +574,13 @@ export default function App() {
   )
     backgroundTasks.push({
       id: gitOperation.id,
-      label: gitOperation.source === "mcp" ? "Git 更新（MCP）" : "Git 更新",
+      label:
+        gitOperation.source === "mcp" ? "Git 更新 · 来自 Codex" : "Git 更新",
       summary: operationSummary(gitOperation),
       running: gitOperation.state === "running",
+      state: gitOperation.state,
+      finished: gitOperation.finished_at_ms,
+      action: "查看更新结果",
       open: () => {
         setPage("projects");
         setGitUpdateOpen(true, gitOperation.path);
@@ -583,6 +596,9 @@ export default function App() {
       label: "获取分支",
       summary: operationSummary(branchOperation),
       running: branchOperation.state === "running",
+      state: branchOperation.state,
+      finished: branchOperation.finished_at_ms,
+      action: "查看分支",
       open: () => {
         setPage("projects");
         setBranchesOpen(true, branchOperation.path);
@@ -594,6 +610,9 @@ export default function App() {
       label: "克隆仓库",
       summary: operationSummary(cloneOperation.snap),
       running: cloneOperation.snap.state === "running",
+      state: cloneOperation.snap.state,
+      finished: cloneOperation.snap.finished_at_ms,
+      action: "查看克隆进度",
       open: () => setCloneOpen(true),
     });
   const connecting = isConnecting(busy);
@@ -820,7 +839,7 @@ export default function App() {
   async function removeProject(project: Data) {
     if (removeLock.current) return;
     if (!runner.capabilities?.includes("project_remove_v1")) {
-      toast.error("更新 Runner 后可移除项目");
+      toast.error("更新服务端程序后可移除项目");
       setPage("servers");
       return;
     }
@@ -1398,7 +1417,7 @@ export default function App() {
                   model:
                     details[t.task_id]?.model_resolved ||
                     t.model_resolved ||
-                    (active(t) ? "等待上报" : "未上报"),
+                    (active(t) ? "确认中" : "未返回"),
                   mode: t.mode,
                   action: "打开会话",
                   open: () => {
@@ -1408,7 +1427,7 @@ export default function App() {
                 })),
               ]}
               warning={taskCenter.error}
-              account={`${profile.user}@${profile.host}`}
+              account={`${profile.user}@${profile.host}:${profile.port}`}
               connected={connected}
               onConnect={() => setPage("servers")}
             />
@@ -1717,7 +1736,7 @@ export default function App() {
               <Panel title="远端运行环境">
                 <div className="environment-row compact-environment">
                   <Label title={connection.resolved_paths?.runner || ""}>
-                    Runner
+                    服务端程序
                   </Label>
                   <span className="grow" />
                   <span className="muted">
@@ -1755,7 +1774,7 @@ export default function App() {
                             })(),
                             connection_id: connection.connection_id,
                           }).then(() => {
-                            toast.success("Runner 已安装");
+                            toast.success("服务端程序已安装");
                             return refreshConnection();
                           }),
                         )
@@ -1769,7 +1788,7 @@ export default function App() {
                           已安装
                         </>
                       ) : (
-                        "安装 / 更新 Runner"
+                        "安装 / 更新服务端程序"
                       )}
                     </Button>
                   )}
@@ -2129,7 +2148,7 @@ export default function App() {
                 )}
                 {task && !newConversation && !task.session_id && (
                   <div className="archive-banner">
-                    旧记录缺少会话标识
+                    旧版记录，无法续聊
                     <Button
                       variant="outline"
                       onClick={() => startDraft(task.workspace)}
@@ -2951,7 +2970,9 @@ export default function App() {
             {claudeInfo.catalog.loading ? "获取模型…" : "刷新列表"}
           </Button>
           {!claudeInfoSupported && (
-            <InlineAlert kind="warning">更新 Runner 后获取模型列表</InlineAlert>
+            <InlineAlert kind="warning">
+              更新服务端程序后获取模型列表
+            </InlineAlert>
           )}
           {claudeInfo.catalog.error && (
             <InlineAlert>{claudeInfo.catalog.error}</InlineAlert>
@@ -3027,7 +3048,7 @@ export default function App() {
           </div>
           <details>
             <summary>高级</summary>
-            <Field label="Runner 路径">{input("runner")}</Field>
+            <Field label="服务端程序路径">{input("runner")}</Field>
             <Field label="Claude Code 路径">{input("claude")}</Field>
           </details>
           {(errors.migrate_password ||
@@ -3223,7 +3244,7 @@ export default function App() {
           ))}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCloneOpen(false)}>
-              {busy.has("clone_repository") ? "后台运行" : "关闭"}
+              {busy.has("clone_repository") ? "在后台继续" : "关闭"}
             </Button>
             <Button
               disabled={!cloneUrls.trim() || busy.has("clone_repository")}

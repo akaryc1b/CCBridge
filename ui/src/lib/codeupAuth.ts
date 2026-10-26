@@ -15,10 +15,12 @@ export function authLabel(scope: string, app: AuthStatus, vps: AuthStatus) {
     if (vps.error) return "读取失败";
     if (vps.configured)
       return `已同步${vps.username ? ` · ${vps.username}` : ""}`;
-    if (vps.files_present && !vps.entry_present) return "凭据已失效";
-    if (vps.entry_present && !vps.included) return "Git 配置未接入";
+    if (vps.files_present && !vps.entry_present)
+      return "服务器认证文件不完整，请重新同步";
+    if (vps.entry_present && !vps.included)
+      return "已保存但 Git 未启用，请重新同步";
     if (!app.loading && !app.error && app.configured)
-      return `App 服务器档 · ${app.username || ""}${app.storage !== "file" ? " · 需迁移" : ""}`;
+      return `App 保存的服务器认证 · ${app.username || ""}${app.storage !== "file" ? " · 需迁移" : ""}`;
     return "未同步";
   }
   if (app.loading) return "读取中…";
@@ -62,7 +64,7 @@ export function sourceLabel(source: string) {
     : source === "local_app"
       ? "App 本机认证"
       : source === "remote_app"
-        ? "App 服务器档"
+        ? "App 保存的服务器认证"
         : "本机 Git 凭据助手";
 }
 

@@ -200,18 +200,18 @@ export function GitUpdate({
               const message = blocked
                 ? `跳过 · ${r.blocked || r.message}`
                 : r.state === "updated"
-                  ? "已快进"
+                  ? "已更新"
                   : r.state === "unchanged"
                     ? "已是最新"
                     : r.state === "ahead"
-                      ? "本地领先"
+                      ? "有未推送提交"
                       : r.state === "failed"
                         ? r.message
                         : current
                           ? "处理中"
                           : running
                             ? "等待"
-                            : "可检查更新";
+                            : "待检查";
               const Icon =
                 r.state === "failed"
                   ? AlertCircle
@@ -235,7 +235,8 @@ export function GitUpdate({
                   <div className="grow">
                     <strong>{r.name || r.path.split("/").pop()}</strong>
                     <small>
-                      {r.branch || "分离 HEAD"} ← {r.upstream || "无上游"}
+                      {r.branch || "未选择分支"} ←{" "}
+                      {r.upstream || "未设置远端分支"}
                     </small>
                     {r.before && r.after && r.before !== r.after && (
                       <code>
@@ -272,7 +273,7 @@ export function GitUpdate({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
-            {running ? "后台运行" : completed ? "完成" : "关闭"}
+            {running ? "在后台继续" : completed ? "完成" : "关闭"}
           </Button>
           {!running && (
             <>
@@ -301,7 +302,7 @@ export function GitUpdate({
                 >
                   {failed.length
                     ? "重试失败项"
-                    : `快进更新 ${plan.filter((r) => !r.blocked).length} 个仓库`}
+                    : `更新 ${plan.filter((r) => !r.blocked).length} 个仓库`}
                 </Button>
               )}
             </>

@@ -1,5 +1,13 @@
 import { Dialog as Sheet } from "radix-ui";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import {
+  isTaskRead,
+  markTasksRead,
+  needsAction,
+  taskAction,
+  taskState,
+  type ReadTasks,
+} from "../lib/taskRead";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -45,7 +53,7 @@ const labels: Record<string, string> = {
   cancelled: "已取消",
   failed: "失败",
   partial: "部分完成",
-  unknown: "结果待核实",
+  unknown: "结果待确认",
   interrupted: "已中断",
 };
 export function BackgroundTasks({
@@ -68,7 +76,7 @@ export function BackgroundTasks({
             ...t,
             state: "unknown",
             running: false,
-            summary: "离线 · 上次状态待核实",
+            summary: "离线 · 状态待确认",
           }
         : t,
     );
@@ -76,8 +84,7 @@ export function BackgroundTasks({
     [filter, setFilter] = useState("running"),
     [q, setQ] = useState(""),
     [selected, setSelected] = useState("");
-  const state = (t: BackgroundTask) =>
-    t.state || (t.running ? "running" : "done");
+  const state = (t: BackgroundTask) => taskState(t);
   const inProgress = (t: BackgroundTask) =>
     ["queued", "running"].includes(state(t));
   const needs = (t: BackgroundTask) =>
@@ -88,9 +95,42 @@ export function BackgroundTasks({
       "interrupted",
       "waiting_approval",
     ].includes(state(t));
-  const [read, setRead] = useState<Set<string>>(new Set());
+  const storageKey = `ccbridge.task-read.v1:${account || "offline"}`;
+  const [readState, setReadState] = useState<{
+    key: string;
+    values: ReadTasks;
+  }>({ key: "", values: {} });
+  const read = readState.key === storageKey ? readState.values : {};
+  useEffect(() => {
+    let values: ReadTasks = {};
+    try {
+      const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
+      if (saved && typeof saved === "object" && !Array.isArray(saved))
+        values = Object.fromEntries(
+          Object.entries(saved).flatMap(([key, value]) =>
+            typeof value === "string" ? [[key, value] as const] : [],
+          ),
+        );
+    } catch {
+      /* A missing/unavailable local store leaves reminders unread. */
+    }
+    setReadState({ key: storageKey, values });
+  }, [storageKey]);
+  function markRead(items: BackgroundTask[]) {
+    const values = markTasksRead(items, read);
+    setReadState({ key: storageKey, values });
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(values));
+    } catch {
+      /* Session-only read state still works. */
+    }
+  }
+  const unreadEnded = tasks.filter(
+    (t) => !needsAction(t) && !isTaskRead(t, read),
+  );
   const count = tasks.filter(
-    (t) => inProgress(t) || (needs(t) && !read.has(t.id)),
+    (t) =>
+      state(t) === "waiting_approval" || (needs(t) && !isTaskRead(t, read)),
   ).length;
   const visible = tasks.filter(
     (t) =>
@@ -132,11 +172,21 @@ export function BackgroundTasks({
                 {!connected ? " · 离线，上次状态" : ""}
               </Sheet.Description>
             </div>
-            <Sheet.Close asChild>
-              <Button variant="ghost" size="icon" aria-label="关闭任务中心">
-                <X size={18} />
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={!unreadEnded.length}
+                onClick={() => markRead(tasks)}
+              >
+                全部已读
               </Button>
-            </Sheet.Close>
+              <Sheet.Close asChild>
+                <Button variant="ghost" size="icon" aria-label="关闭任务中心">
+                  <X size={18} />
+                </Button>
+              </Sheet.Close>
+            </div>
           </header>
           {warning && (
             <div className="notice" role="alert">
@@ -177,7 +227,7 @@ export function BackgroundTasks({
                     key={t.id}
                     onClick={() => {
                       setSelected(t.id);
-                      setRead((old) => new Set(old).add(t.id));
+                      markRead([t]);
                     }}
                   >
                     <span
@@ -194,10 +244,17 @@ export function BackgroundTasks({
                     <span>
                       <strong>{t.label}</strong>
                       <small>{t.project || t.kind || "后台操作"}</small>
-                      <span className="muted">{t.summary}</span>
+                      {t.summary !== labels[state(t)] && (
+                        <span className="muted">{t.summary}</span>
+                      )}
                     </span>
                     <span className="task-row-end">
-                      <small>{labels[state(t)] || state(t)}</small>
+                      <small>
+                        {!needsAction(t) && !isTaskRead(t, read)
+                          ? "未读 · "
+                          : ""}
+                        {labels[state(t)] || state(t)}
+                      </small>
                       <ChevronRight size={14} />
                     </span>
                   </button>
@@ -240,7 +297,7 @@ export function BackgroundTasks({
                     )}
                     {detail.started && (
                       <>
-                        <dt>{detail.finished ? "总用时" : "距发起"}</dt>
+                        <dt>{detail.finished ? "总用时" : "已用时"}</dt>
                         <dd>
                           {elapsed(
                             (detail.finished || Date.now()) - detail.started,
@@ -286,7 +343,7 @@ export function BackgroundTasks({
                         hour: "2-digit",
                         minute: "2-digit",
                       })}{" "}
-                      核实
+                      已检查
                     </p>
                   )}
                   {detail.error && (
@@ -302,7 +359,9 @@ export function BackgroundTasks({
                       else detail.open();
                     }}
                   >
-                    {!connected ? "连接并核实" : detail.action || "打开原操作"}
+                    {!connected && !detail.local
+                      ? "连接并检查"
+                      : detail.action || taskAction(detail.kind)}
                     <ArrowUpRight size={14} />
                   </Button>
                 </>

@@ -198,7 +198,7 @@ export function Databases({
                       <span className="db-checks">
                         {Object.entries(checks[d.id]).map(([key, value]) => (
                           <span key={key}>
-                            {key === "mcp" ? "MCP 握手" : "数据库连接"}：
+                            {key === "mcp" ? "工具连接" : "数据库连接"}：
                             {String(value)}
                           </span>
                         ))}
@@ -301,20 +301,20 @@ export function Databases({
             >
               <span className="muted" title={runtime.package_root || ""}>
                 {runtime.candidates?.some((c: Data) => c.compatible)
-                  ? `运行文件已找到 · ${runtime.candidates.find((c: Data) => c.compatible)?.version}`
+                  ? `已找到数据库工具 · ${runtime.candidates.find((c: Data) => c.compatible)?.version}`
                   : connected
                     ? !runtime.candidates
                       ? busy
                         ? "检测中…"
                         : "未检测"
-                      : "未找到运行文件"
+                      : "未找到数据库工具"
                     : "未连接"}
               </span>
             </StatusRow>
             {(runtime.candidates?.length > 0 ||
               runtime.registered?.length > 0) && (
               <details className="runtime-diagnostics">
-                <summary>探测结果</summary>
+                <summary>检测记录</summary>
                 {runtime.candidates?.map((c: Data) => (
                   <p key={c.package_root}>
                     <code>{c.package_root}</code> · {c.version} · {c.source}

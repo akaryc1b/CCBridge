@@ -23,7 +23,7 @@ export const phaseText: Record<string, string> = {
   fetch: "获取",
   upload: "上传",
   import: "导入",
-  apply: "快进",
+  apply: "更新代码",
   verify: "校验",
   receiving: "接收对象",
   resolving: "解析对象",
@@ -37,9 +37,9 @@ export function gitResultSummary(results: Record<string, any>[]) {
     else if (row.state in counts) counts[row.state as keyof typeof counts]++;
   }
   const labels = {
-    updated: "已快进",
+    updated: "已更新",
     unchanged: "已是最新",
-    ahead: "本地领先",
+    ahead: "有未推送提交",
     skipped: "跳过",
     failed: "失败",
   };

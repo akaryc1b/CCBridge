@@ -21,10 +21,10 @@ describe("compact Codeup authentication contract", () => {
     ).toBe("已同步 · alice");
     expect(
       authLabel("remote", {}, { files_present: true, entry_present: false }),
-    ).toBe("凭据已失效");
+    ).toBe("服务器认证文件不完整，请重新同步");
     expect(
       authLabel("remote", {}, { entry_present: true, included: false }),
-    ).toBe("Git 配置未接入");
+    ).toBe("已保存但 Git 未启用，请重新同步");
     expect(
       authLabel(
         "remote",

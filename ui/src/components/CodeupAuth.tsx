@@ -286,11 +286,11 @@ export function CodeupAuth({
               )}
               {status.configured && status.storage === "file" && (
                 <Menu.Item onSelect={() => sync("remote_app")}>
-                  同步 App 服务器档…
+                  同步 App 保存的服务器认证…
                 </Menu.Item>
               )}
               <Menu.Item onSelect={() => edit("remote-app")}>
-                仅保存 App 服务器档…
+                仅保存到 App…
               </Menu.Item>
               {(vps.files_present || vps.configured) && (
                 <Menu.Item onSelect={() => confirm("git_vps_auth_remove")}>
@@ -305,11 +305,11 @@ export function CodeupAuth({
                 <Menu.Item
                   onSelect={() => confirm("git_auth_migrate", { scope })}
                 >
-                  迁移 App {remote ? "服务器档" : "本机认证"}…
+                  迁移 App {remote ? "服务器认证" : "本机认证"}…
                 </Menu.Item>
               )}
               <Menu.Item onSelect={() => confirm("git_auth_remove", { scope })}>
-                移除 App {remote ? "服务器档" : "本机认证"}…
+                移除 App {remote ? "服务器认证" : "本机认证"}…
               </Menu.Item>
             </>
           )}
@@ -406,14 +406,15 @@ export function CodeupAuth({
                 )}
                 {remote && status.configured && vps.configured && (
                   <div className="codeup-legacy muted">
-                    App 服务器档 · {status.username} · 服务器认证优先
+                    App 保存的服务器认证 · {status.username} ·
+                    当前使用服务器已同步的认证
                   </div>
                 )}
                 {showForm && (
                   <div className="codeup-form">
                     {editor === "remote-app" && (
                       <div className="codeup-form-target muted">
-                        保存位置：App 服务器档 · {account}
+                        保存位置：App 保存的服务器认证 · {account}
                       </div>
                     )}
                     <div>
@@ -519,7 +520,7 @@ export function CodeupAuth({
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => onOpenChange(false)}>
-              {busy ? "后台运行" : "关闭"}
+              {busy ? "在后台继续" : "关闭"}
             </Button>
             {!offline && showForm ? (
               <Button
@@ -591,7 +592,7 @@ export function CodeupAuth({
             {confirmation?.op === "git_vps_auth_remove"
               ? ` ${account} 上由 CCBridge 保存的服务器认证`
               : confirmation?.request.scope === "remote"
-                ? ` App 为 ${account} 保存的服务器档认证`
+                ? ` App 为 ${account} 保存的服务器认证`
                 : " App 本机认证"}
             ？
           </p>

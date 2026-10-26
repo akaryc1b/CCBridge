@@ -30,5 +30,5 @@ it("separates skipped guards from failed updates without changing protocol state
       { state: "failed", code: "dirty" },
       { state: "failed", code: "auth" },
     ]),
-  ).toBe("已快进 1 · 已是最新 1 · 跳过 1 · 失败 1");
+  ).toBe("已更新 1 · 已是最新 1 · 跳过 1 · 失败 1");
 });

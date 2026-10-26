@@ -36,7 +36,7 @@ describe("conversation state", () => {
     expect(
       displayModel({ model: "opus", result: { modelUsage: { other: {} } } })
         .actual,
-    ).toBe("未上报");
+    ).toBe("未返回");
   });
   it("terminates a corrupted ancestry cycle", () => {
     const a = { task_id: "a", reply_to: "b" },
@@ -138,10 +138,10 @@ describe("project sessions and visible model", () => {
 
 it("distinguishes waiting from unreported models without guessing", () => {
   expect(displayModel({ state: "running", model: "opus" }).actual).toBe(
-    "等待上报",
+    "确认中",
   );
   expect(displayModel({ state: "completed", model: "opus" }).actual).toBe(
-    "未上报",
+    "未返回",
   );
 });
 

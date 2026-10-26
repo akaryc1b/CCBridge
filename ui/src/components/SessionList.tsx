@@ -159,9 +159,9 @@ export function SessionList({
       {sessions.offline && <div className="notice">离线 · 上次加载的会话</div>}
       {!sessions.supported ? (
         <div className="empty">
-          更新 Runner 后可搜索、命名和归档
+          更新服务端程序 后可搜索、命名和归档
           <Button variant="outline" onClick={onUpdateRunner}>
-            更新 Runner
+            更新服务端程序
           </Button>
         </div>
       ) : (
@@ -178,7 +178,7 @@ export function SessionList({
             <div className="notice">
               结果不完整 · {sessions.incomplete} 条记录无法读取
               <Button variant="ghost" onClick={() => setDiagnosticsOpen(true)}>
-                查看诊断
+                查看原因
               </Button>
             </div>
           )}
@@ -326,11 +326,11 @@ export function SessionList({
       )}
       <Dialog open={diagnosticsOpen} onOpenChange={setDiagnosticsOpen}>
         <DialogContent>
-          <DialogTitle>会话读取诊断</DialogTitle>
+          <DialogTitle>无法读取的会话</DialogTitle>
           <DialogDescription>
             {sessions.incomplete} 条记录未包含在结果中
             {sessions.incomplete > sessions.diagnostics.length
-              ? `，显示前 ${sessions.diagnostics.length} 条诊断`
+              ? `，显示前 ${sessions.diagnostics.length} 条记录`
               : ""}
           </DialogDescription>
           <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-xs">

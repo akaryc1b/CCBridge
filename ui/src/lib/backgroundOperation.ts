@@ -10,7 +10,7 @@ export function operationSummary(op: {
         done: "已完成",
         partial: "部分失败",
         failed: "失败",
-        unknown: "结果待核实",
+        unknown: "结果待确认",
       } as Record<string, string>
     )[op.state || ""] || "查看结果"
   );

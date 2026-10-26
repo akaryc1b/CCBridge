@@ -161,7 +161,7 @@ export function Workbench({
           <div className="compact-panel">
             <h2>运行环境</h2>
             <div className="status-row">
-              <span>Runner</span>
+              <span>服务端程序</span>
               <span>{connection.probe?.runner_version || "未检测"}</span>
             </div>
             <div className="status-row">

@@ -38,7 +38,7 @@ export function displayModel(task: RecordValue) {
     requested: task.model_requested || task.model || "远端默认",
     actual:
       task.model_resolved ||
-      (["running", "queued"].includes(task.state) ? "等待上报" : "未上报"),
+      (["running", "queued"].includes(task.state) ? "确认中" : "未返回"),
   };
 }
 
