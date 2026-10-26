@@ -5,6 +5,7 @@ type Task = {
   finished?: number;
   error?: string;
   verification?: string;
+  verifiedAt?: number;
 };
 export type ReadTasks = Record<string, string>;
 export const taskState = (t: Task) =>
@@ -15,8 +16,7 @@ export const readVersion = (t: Task) =>
   JSON.stringify([
     taskState(t),
     t.finished || 0,
-    t.error || "",
-    t.verification || "",
+    t.verifiedAt || 0,
   ]);
 export const isTaskRead = (t: Task, read: ReadTasks) =>
   read[t.id] === readVersion(t);

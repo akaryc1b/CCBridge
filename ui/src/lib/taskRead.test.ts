@@ -37,7 +37,9 @@ describe("task center read state", () => {
     expect(isTaskRead(task, read)).toBe(true);
     expect(isTaskRead({ ...task, finished: 2 }, read)).toBe(false);
     expect(isTaskRead({ ...task, state: "completed" }, read)).toBe(false);
-    expect(isTaskRead({ ...task, error: "auth" }, read)).toBe(false);
+    // Loading an existing error after opening a conversation is not a new result.
+    expect(isTaskRead({ ...task, error: "auth" }, read)).toBe(true);
+    expect(isTaskRead({ ...task, verifiedAt: 2 }, read)).toBe(false);
     expect(isTaskRead(task, {})).toBe(false);
   });
   it("uses concrete actions instead of implementation terminology", () => {
