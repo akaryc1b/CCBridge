@@ -10,7 +10,7 @@ args=sys.argv[1:]
 if '--version' in args:
  print('2.1.308 (Fixture Claude)');sys.exit(0)
 if '--help' in args:
- print('--tools --safe-mode --setting-sources --settings --strict-mcp-config --disable-slash-commands --permission-prompts --disallowedTools dontAsk');sys.exit(0)
+ print('fixture help deliberately omits hidden supported flags');sys.exit(0)
 p=sys.stdin.read();sid=args[args.index('--session-id')+1] if '--session-id' in args else args[args.index('--resume')+1]
 analysis='--tools' in args
 if analysis:
@@ -64,7 +64,9 @@ print(json.dumps({'type':'result','subtype':'success','is_error':False,'session_
   resumed=wait(r['task_id'],['completed']);assert resumed['access']=='analysis' and resumed['session_id']==a['session_id'];assert 'resume=True' in resumed['result']['result']
   u,_=start(work,'4:cancel-one',access='analysis');v,_=start(work,'1:other-analysis',access='analysis');wait(u['task_id'],['running']);wait(v['task_id'],['running']);call('cancel',task_id=u['task_id']);assert wait(u['task_id'],['cancelled'])['state']=='cancelled';assert wait(v['task_id'],['completed'])['state']=='completed'
   bad,_=start(work,'0.2:badtools',access='analysis');bad=wait(bad['task_id'],['failed']);assert '未允许' in bad['error'],bad
-  config=root/'.claude';config.mkdir();(config/'remote-settings.json').write_text('{"hooks":{}}')
+  config=root/'.claude';config.mkdir();(config/'remote-settings.json').write_text('{"settings":{"permissions":{"defaultMode":"default"}}}')
+  benign,_=start(work,'0.1:managed-benign',access='analysis');assert wait(benign['task_id'],['completed'])['state']=='completed'
+  (config/'remote-settings.json').write_text('{"settings":{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo managed"}]}]}}}')
   blocked,_=start(work,'0.1:managed',access='analysis');blocked=wait(blocked['task_id'],['failed']);assert '受管' in blocked['error'],blocked
   assert not (state/blocked['task_id']/'spawn-marker').exists()
   print('PASS analysis resume without escalation, same-session exclusion, cancel isolation, init tool refusal, managed-policy preflight refusal',flush=True)

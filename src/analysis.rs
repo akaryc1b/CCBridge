@@ -52,7 +52,26 @@ fn managed_file(path: &Path) -> Result<()> {
     }
     let v: Value =
         serde_json::from_str(&s).map_err(|_| unsupported("受管设置无法解析，未启动任务"))?;
-    if !v.is_object() || v.get("hooks").is_some() || v.get("policyHelper").is_some() {
+    fn has_content(v: &Value) -> bool {
+        match v {
+            Value::Null => false,
+            Value::String(s) => !s.trim().is_empty(),
+            Value::Object(o) => o.values().any(has_content),
+            Value::Array(a) => a.iter().any(has_content),
+            _ => true,
+        }
+    }
+    fn has_script(v: &Value) -> bool {
+        match v {
+            Value::Object(o) => o.iter().any(|(key, value)| {
+                (["hooks", "policyHelper"].contains(&key.as_str()) && has_content(value))
+                    || has_script(value)
+            }),
+            Value::Array(a) => a.iter().any(has_script),
+            _ => false,
+        }
+    }
+    if (!v.is_object() && !v.is_null()) || has_script(&v) {
         return Err(unsupported(
             "存在受管启动脚本，不能保证仅分析；请联系管理员",
         ));
@@ -113,12 +132,8 @@ pub fn verify_runtime() -> Result<()> {
     let config = std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or(home()?.join(".claude"));
-    if config.join("remote-settings.json").exists() {
-        return Err(unsupported(
-            "发现组织受管设置，可能已执行管理员脚本；此账号暂不支持分析保护",
-        ));
-    }
-    Ok(())
+    // A cache is normal on managed accounts; reject script-bearing content, not its mere presence.
+    managed_file(&config.join("remote-settings.json"))
 }
 pub fn preflight(claude: &str, workspace: &Path) -> Result<()> {
     // Excluding project settings must not silently switch a project-only provider to a different login.
@@ -150,10 +165,8 @@ pub fn preflight(claude: &str, workspace: &Path) -> Result<()> {
     let config = std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or(home()?.join(".claude"));
-    // Remote-delivered policies can change after startup; don't certify their hooks from a stale cache.
-    if config.join("remote-settings.json").exists() {
-        return Err(unsupported("此账号使用动态受管设置，暂不支持只读分析"));
-    }
+    // Recheck at init/completion too: remote-delivered settings can change after this preflight.
+    managed_file(&config.join("remote-settings.json"))?;
     let system = if cfg!(target_os = "macos") {
         Path::new("/Library/Application Support/ClaudeCode")
     } else {
@@ -174,25 +187,8 @@ pub fn preflight(claude: &str, workspace: &Path) -> Result<()> {
     {
         return Err(unsupported("存在系统受管配置，请先核实启动脚本"));
     }
-    let help = cli_text(claude, "--help")?;
-    if [
-        "--tools",
-        "--safe-mode",
-        "--setting-sources",
-        "--settings",
-        "--strict-mcp-config",
-        "--disable-slash-commands",
-        "--permission-prompts",
-        "--disallowedTools",
-        "dontAsk",
-    ]
-    .iter()
-    .any(|s| !help.contains(s))
-    {
-        return Err(unsupported(
-            "Claude 版本缺少受控分析参数，请更新 Claude 后重试",
-        ));
-    }
+    // The official CLI reference says --help omits some supported flags.
+    // Use the reviewed version contract plus the actual process/init checks, not help-text heuristics.
     Ok(())
 }
 pub fn verify_init(v: &Value) -> Result<()> {
@@ -220,6 +216,27 @@ pub fn verify_init(v: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn managed_cache_accepts_plain_settings_but_rejects_nested_scripts() {
+        let path = std::env::temp_dir().join(format!("ccbridge-managed-{}", uuid::Uuid::new_v4()));
+        std::fs::write(
+            &path,
+            r#"{"settings":{"permissions":{"defaultMode":"default"}}}"#,
+        )
+        .unwrap();
+        assert!(managed_file(&path).is_ok());
+        std::fs::write(&path, "null").unwrap();
+        assert!(managed_file(&path).is_ok());
+        std::fs::write(
+            &path,
+            r#"{"settings":{"hooks":{"SessionStart":[]},"policyHelper":null}}"#,
+        )
+        .unwrap();
+        assert!(managed_file(&path).is_ok());
+        std::fs::write(&path, r#"{"settings":{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo managed"}]}]}}}"#).unwrap();
+        assert!(managed_file(&path).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn version_floor_is_explicit() {
         assert!(supported_version("2.1.308 (Claude Code)"));
