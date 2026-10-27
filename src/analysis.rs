@@ -204,13 +204,28 @@ pub fn verify_init(v: &Value) -> Result<()> {
     if v["permissionMode"] != "dontAsk" || !v["mcp_servers"].is_array() {
         return Err(unsupported("Claude 没有确认受控权限或 MCP 状态"));
     }
-    for name in ["mcp_servers", "plugins", "slash_commands"] {
-        if v.get(name)
-            .is_some_and(|a| a.as_array().is_none_or(|a| !a.is_empty()))
-        {
-            return Err(unsupported("Claude 加载了额外工具或自定义内容，任务已停止"));
+    if !v["mcp_servers"].as_array().unwrap().is_empty() {
+        return Err(unsupported("Claude 仍连接了 MCP 服务，任务已停止"));
+    }
+    if let Some(plugins) = v.get("plugins") {
+        let builtin = [
+            "cc-plugin-agents-md",
+            "cc-plugin-telemetry",
+            "cc-plugin-plugin-authoring",
+        ];
+        if plugins.as_array().is_none_or(|a| {
+            a.iter().any(|p| {
+                let name = p["name"].as_str().unwrap_or("");
+                !builtin.contains(&name)
+                    || p["path"] != "builtin"
+                    || p["source"] != format!("{name}@builtin")
+            })
+        }) {
+            return Err(unsupported("Claude 报告了外部插件，任务已停止"));
         }
     }
+    // CLI command names are descriptive metadata, not an AI tool grant. Safe mode and
+    // --disable-slash-commands remain on; the tools whitelist above excludes Skill/Agent.
     Ok(())
 }
 #[cfg(test)]
@@ -236,6 +251,16 @@ mod tests {
         std::fs::write(&path, r#"{"settings":{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo managed"}]}]}}}"#).unwrap();
         assert!(managed_file(&path).is_err());
         std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn builtin_plugin_metadata_is_not_an_extra_tool_grant() {
+        let mut init = json!({"tools":["Read","Glob","Grep"],"permissionMode":"dontAsk","mcp_servers":[],"plugins":[{"name":"cc-plugin-telemetry","path":"builtin","source":"cc-plugin-telemetry@builtin"}],"slash_commands":["compact","help"]});
+        assert!(verify_init(&init).is_ok());
+        init["plugins"][0]["path"] = json!("/tmp/custom");
+        assert!(verify_init(&init).is_err());
+        init["plugins"] = json!([]);
+        init["tools"] = json!(["Read", "Skill"]);
+        assert!(verify_init(&init).is_err());
     }
     #[test]
     fn version_floor_is_explicit() {
