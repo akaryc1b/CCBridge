@@ -50,3 +50,21 @@ it("invalidates a previous account navigation before it can commit", async () =>
   await pending;
   expect(committed).toEqual([]);
 });
+
+it("ignores errors from an invalidated account browse", async () => {
+  let reject!: (e: Error) => void;
+  const nav = latestNavigation<string>(
+    () =>
+      new Promise((_, r) => {
+        reject = r;
+      }),
+    () => {
+      throw new Error("stale commit");
+    },
+    () => {},
+  );
+  const pending = nav("/old-account");
+  nav.invalidate();
+  reject(new Error("old account disconnected"));
+  await expect(pending).resolves.toBeUndefined();
+});

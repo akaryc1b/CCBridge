@@ -84,23 +84,33 @@ fn git(args: &[&str], cred: Option<&crate::git_auth::Credential>, host: &str) ->
         Duration::from_secs(300),
     )
 }
-pub fn local_failure(stderr: &str) -> &'static str {
+pub fn authentication_failure(stderr: &str) -> bool {
     let e = stderr.to_ascii_lowercase();
-    if e.contains("25293") || e.contains("keychain") || e.contains("interaction is not allowed") {
-        "macOS 钥匙串没有放行 Git 凭据；请在系统弹窗授权，或在 App 的 Codeup 认证中重新保存后重试"
-    } else if e.contains("could not read username") || e.contains("terminal prompts disabled") {
-        "本机 Git 未取得 Codeup 认证，请在 App 的 Codeup 认证中输入保存，再检测仓库访问"
-    } else if [
+    [
         "username",
         "authentication",
         "access denied",
         "403",
         "401",
         "repository not found",
+        "terminal prompts disabled",
+        "unable to get password from user",
+        "could not read password",
     ]
     .iter()
     .any(|s| e.contains(s))
+}
+pub fn local_failure(stderr: &str) -> &'static str {
+    let e = stderr.to_ascii_lowercase();
+    if e.contains("25293") || e.contains("keychain") || e.contains("interaction is not allowed") {
+        "macOS 钥匙串没有放行 Git 凭据；请在系统弹窗授权，或在 App 的 Codeup 认证中重新保存后重试"
+    } else if e.contains("could not read username")
+        || e.contains("terminal prompts disabled")
+        || e.contains("unable to get password from user")
+        || e.contains("could not read password")
     {
+        "本机 Git 未取得 Codeup 认证，请在 App 的 Codeup 认证中输入保存，再检测仓库访问"
+    } else if authentication_failure(&e) {
         "本机 Git 未通过认证或仓库读取校验；请在 App 的 Codeup 认证中填写或更新凭据，再检测仓库访问；也请确认仓库地址和账号权限"
     } else if e.contains("resolve host") || e.contains("connect") || e.contains("timed out") {
         "本机无法连接 Git 服务，请检查本机网络、代理和 DNS 后重试"
@@ -215,6 +225,16 @@ mod tests {
         orphan_pipe.args(["-c", "sleep 30 & exit 0"]);
         run_git(orphan_pipe, Duration::from_secs(2)).unwrap();
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+    #[test]
+    fn missing_password_errors_offer_credential_recovery() {
+        for message in [
+            "fatal: unable to get password from user",
+            "fatal: could not read Password for 'https://codeup.aliyun.com'",
+        ] {
+            assert!(local_failure(message).contains("未取得 Codeup 认证"));
+            assert!(authentication_failure(message));
+        }
     }
     #[test]
     fn local_errors_identify_the_local_machine() {

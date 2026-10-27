@@ -862,6 +862,14 @@ export default function App() {
     if (r && identity === connectionIdentity.current)
       setProjects(r.projects || []);
   }
+  function openFileOperation(operation: Data) {
+    if (!connected || !connection.connection_id) return;
+    setFileOperation({ ...operation, connectionId: connection.connection_id });
+  }
+  useEffect(() => {
+    setFileOperation(null);
+    setTrashOpen(false);
+  }, [connected, connection.connection_id]);
   const [removingProject, setRemovingProject] = useState(false);
   const removeLock = useRef(false);
   async function removeProject(project: Data) {
@@ -1562,7 +1570,7 @@ export default function App() {
                     <Menu.Content className="context-menu" sideOffset={5}>
                       <Menu.Item
                         onSelect={() =>
-                          setFileOperation({
+                          openFileOperation({
                             action: "create",
                             entry: { path: listedPath, name: "" },
                           })
@@ -2119,7 +2127,7 @@ export default function App() {
                       entry={e}
                       disabled={!locationReady}
                       onAction={(action, entry) =>
-                        setFileOperation({ action, entry })
+                        openFileOperation({ action, entry })
                       }
                     >
                       <div
@@ -2128,13 +2136,13 @@ export default function App() {
                           if (!locationReady) return;
                           if (event.key === "F2") {
                             event.preventDefault();
-                            setFileOperation({ action: "rename", entry: e });
+                            openFileOperation({ action: "rename", entry: e });
                           } else if (
                             event.metaKey &&
                             event.key === "Backspace"
                           ) {
                             event.preventDefault();
-                            setFileOperation({ action: "trash", entry: e });
+                            openFileOperation({ action: "trash", entry: e });
                           }
                         }}
                       >
@@ -2176,7 +2184,7 @@ export default function App() {
                           entry={e}
                           disabled={!locationReady}
                           onAction={(action, entry) =>
-                            setFileOperation({ action, entry })
+                            openFileOperation({ action, entry })
                           }
                         />
                       </div>
@@ -3068,7 +3076,7 @@ export default function App() {
         }}
       />
       <CodeupAuth
-        key={connection.connection_id || "offline"}
+        key={`codeup:${connection.connection_id || "offline"}`}
         open={authOpen}
         onOpenChange={(v) => {
           setAuthOpen(v);
@@ -3096,17 +3104,24 @@ export default function App() {
             : undefined
         }
       />
-      <FileOperation
-        key={`${fileOperation?.entry.path}:${fileOperation?.action}`}
-        operation={fileOperation}
-        onClose={() => setFileOperation(null)}
-        onDone={async () => {
-          await browse(listedPath);
-        }}
-        home={connection.environment?.home || ""}
-      />
+      {fileOperation &&
+        connected &&
+        fileOperation.connectionId === connection.connection_id && (
+          <FileOperation
+            key={`${fileOperation.connectionId}:${fileOperation.entry.path}:${fileOperation.action}`}
+            connectionId={fileOperation.connectionId}
+            operation={fileOperation}
+            onClose={() => setFileOperation(null)}
+            onDone={async () => {
+              await browse(listedPath);
+            }}
+            home={connection.environment?.home || ""}
+          />
+        )}
       <TrashDialog
-        open={trashOpen}
+        key={`trash:${connected ? connection.connection_id : "offline"}`}
+        connectionId={connection.connection_id || ""}
+        open={connected && trashOpen}
         onClose={() => setTrashOpen(false)}
         onDone={async () => {
           await browse(listedPath);

@@ -23,6 +23,8 @@ export function latestNavigation<T>(
     try {
       const data = await load(path);
       if (id === generation) commit(data);
+    } catch (error) {
+      if (id === generation) throw error;
     } finally {
       if (id === generation) pending(false);
     }

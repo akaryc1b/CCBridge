@@ -122,14 +122,24 @@ export function Databases({
         <button
           className={tab === "connections" ? "chosen" : ""}
           aria-pressed={tab === "connections"}
-          onClick={() => setTab("connections")}
+          disabled={busy}
+          onClick={() => {
+            setTab("connections");
+            setError("");
+            setNotice("");
+          }}
         >
           连接
         </button>
         <button
           className={tab === "mapping" ? "chosen" : ""}
           aria-pressed={tab === "mapping"}
-          onClick={() => setTab("mapping")}
+          disabled={busy}
+          onClick={() => {
+            setTab("mapping");
+            setError("");
+            setNotice("");
+          }}
         >
           项目映射
         </button>
@@ -149,6 +159,8 @@ export function Databases({
                     node: runtime.node || "",
                     package_root: runtime.package_root || "",
                   });
+                  setError("");
+                  setNotice("");
                   setEditing(true);
                 }}
               >
@@ -260,6 +272,8 @@ export function Databases({
                         <Menu.Item
                           onSelect={() => {
                             setForm({ ...d, password: "" });
+                            setError("");
+                            setNotice("");
                             setEditing(true);
                           }}
                         >
@@ -270,7 +284,10 @@ export function Databases({
                           title={
                             (d.used_by || []).length ? "此连接仍被项目引用" : ""
                           }
-                          onSelect={() => setRemoving(d)}
+                          onSelect={() => {
+                            setError("");
+                            setRemoving(d);
+                          }}
                         >
                           删除
                         </Menu.Item>
@@ -441,7 +458,7 @@ export function Databases({
           </CardContent>
         </Card>
       )}
-      {error && (
+      {error && !editing && !removing && (
         <div role="alert" className="error-box">
           {error}
         </div>
@@ -449,7 +466,10 @@ export function Databases({
       <Dialog
         open={!!removing}
         onOpenChange={(v) => {
-          if (!busy && !v) setRemoving(null);
+          if (!busy && !v) {
+            setRemoving(null);
+            setError("");
+          }
         }}
       >
         <DialogContent>
@@ -463,7 +483,10 @@ export function Databases({
             <Button
               variant="outline"
               disabled={busy}
-              onClick={() => setRemoving(null)}
+              onClick={() => {
+                setRemoving(null);
+                setError("");
+              }}
             >
               取消
             </Button>
@@ -493,7 +516,10 @@ export function Databases({
         onOpenChange={(v) => {
           if (!busy) {
             setEditing(v);
-            if (!v) setForm(empty);
+            if (!v) {
+              setForm(empty);
+              setError("");
+            }
           }
         }}
       >
@@ -565,6 +591,7 @@ export function Databases({
               onClick={() => {
                 setEditing(false);
                 setForm(empty);
+                setError("");
               }}
             >
               关闭

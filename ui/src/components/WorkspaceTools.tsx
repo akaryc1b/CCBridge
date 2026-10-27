@@ -1,7 +1,8 @@
 import { time } from "@/lib/format";
+import { latestNavigation } from "@/lib/navigation";
 import { OperationBar } from "./common/Feedback";
 import { useOperation } from "@/lib/useOperation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DropdownMenu, ContextMenu } from "radix-ui";
 import {
@@ -119,7 +120,9 @@ export function FileOperation({
   onClose,
   onDone,
   home,
+  connectionId,
 }: {
+  connectionId: string;
   operation: Data | null;
   onClose: () => void;
   onDone: () => Promise<void>;
@@ -130,19 +133,38 @@ export function FileOperation({
     [folders, setFolders] = useState<Data | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const mounted = useRef(true);
+  const navigation = useRef<ReturnType<typeof latestNavigation<Data>> | null>(
+    null,
+  );
+  if (!navigation.current)
+    navigation.current = latestNavigation<Data>(
+      (path) =>
+        invoke<Data>("directory_list", {
+          request: { path, hidden: false, connection_id: connectionId },
+        }),
+      (r) => {
+        setFolders(r);
+        setDestination(r.path);
+      },
+      () => {},
+    );
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      navigation.current?.invalidate();
+    };
+  }, []);
   if (!operation) return null;
   const action = operation.action,
     entry = operation.entry;
   async function browse(path: string) {
     try {
       setError("");
-      const r = await invoke<Data>("directory_list", {
-        request: { path, hidden: false },
-      });
-      setFolders(r);
-      setDestination(r.path);
+      await navigation.current!(path);
     } catch (e) {
-      setError(errorText(e));
+      if (mounted.current) setError(errorText(e));
     }
   }
   async function submit() {
@@ -152,9 +174,16 @@ export function FileOperation({
       const result = await invoke<Data>(
         action === "create" ? "file_create" : "file_mutate",
         {
-          request: { path: entry.path, action, name, destination },
+          request: {
+            path: entry.path,
+            action,
+            name,
+            destination,
+            connection_id: connectionId,
+          },
         },
       );
+      if (!mounted.current) return;
       toast.success(
         result.message || "操作已完成",
         result.id
@@ -162,9 +191,17 @@ export function FileOperation({
               action: {
                 label: "撤销",
                 onClick: () => {
-                  void invoke("trash_restore", { request: { id: result.id } })
-                    .then(() => onDone())
-                    .then(() => toast.success("已恢复到原路径"))
+                  void invoke("trash_restore", {
+                    request: { id: result.id, connection_id: connectionId },
+                  })
+                    .then(async () => {
+                      try {
+                        await onDone();
+                        toast.success("已恢复到原路径");
+                      } catch {
+                        toast.error("已恢复，但目录列表未刷新");
+                      }
+                    })
                     .catch((e) => toast.error(errorText(e)));
                 },
               },
@@ -172,11 +209,11 @@ export function FileOperation({
           : undefined,
       );
       await onDone().catch(() => toast.error("已完成，列表未刷新"));
-      onClose();
+      if (mounted.current) onClose();
     } catch (e) {
-      setError(errorText(e));
+      if (mounted.current) setError(errorText(e));
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
   return (
@@ -317,7 +354,9 @@ export function TrashDialog({
   open,
   onClose,
   onDone,
+  connectionId,
 }: {
+  connectionId: string;
   open: boolean;
   onClose: () => void;
   onDone: () => Promise<void>;
@@ -326,11 +365,21 @@ export function TrashDialog({
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [loaded, setLoaded] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   async function refresh() {
     setBusy(true);
     setError("");
     try {
-      const r = await invoke<Data>("trash_list", { request: {} });
+      const r = await invoke<Data>("trash_list", {
+        request: { connection_id: connectionId },
+      });
+      if (!mounted.current) return;
       setItems(r.items || []);
       setLoaded(true);
     } catch (e) {
@@ -345,15 +394,36 @@ export function TrashDialog({
   async function restore(id: string) {
     setBusy(true);
     setError("");
+    let restored = false;
     try {
-      await invoke("trash_restore", { request: { id } });
-      await onDone();
-      const r = await invoke<Data>("trash_list", { request: {} });
+      await invoke("trash_restore", {
+        request: { id, connection_id: connectionId },
+      });
+      restored = true;
+      if (!mounted.current) return;
+      setItems((previous) => previous.filter((item) => item.id !== id));
+      let refreshFailed = false;
+      try {
+        await onDone();
+      } catch {
+        refreshFailed = true;
+      }
+      if (!mounted.current) return;
+      const r = await invoke<Data>("trash_list", {
+        request: { connection_id: connectionId },
+      });
+      if (!mounted.current) return;
       setItems(r.items || []);
+      if (refreshFailed) setError("文件已恢复，但目录列表未刷新");
     } catch (e) {
-      setError(errorText(e));
+      if (mounted.current)
+        setError(
+          restored
+            ? `文件已恢复，但回收区列表未刷新：${errorText(e)}`
+            : errorText(e),
+        );
     } finally {
-      setBusy(false);
+      if (mounted.current) setBusy(false);
     }
   }
   return (

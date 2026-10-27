@@ -122,7 +122,7 @@ impl Bridge {
         )
     }
     #[tool(
-        description = "Inspect or update an explicit REMOTE Git repository/project using App remote Codeup credentials or VPS Git credentials. Fetch the configured upstream then fast-forward only. Refuses dirty, divergent, detached, changed-branch and active-task repositories; never reset/stash/push. Multiple repos return individual results. Local repositories remain managed by Codex local Git tools. Never supply credentials in this tool."
+        description = "Inspect or update an explicit REMOTE Git repository/project using App remote Codeup credentials or VPS Git credentials. Fetch the configured upstream then fast-forward only. Refuses dirty, divergent, detached, changed-branch and active-task repositories; never reset/stash/push. Multiple repos return individual results. Allowed while AI project-file protection is enabled; still requires human-enabled automatic mode. Local repositories remain managed by Codex local Git tools. Never supply credentials in this tool."
     )]
     async fn git_update(
         &self,

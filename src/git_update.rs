@@ -74,15 +74,6 @@ pub fn rpc_at(v: &Value, home: &Path) -> Result<Value> {
     if !p.starts_with(home) {
         bail!("Git 更新仅允许当前账号 HOME 内的目录")
     }
-    if [
-        "git_update_begin",
-        "git_update_preflight",
-        "git_update_apply",
-    ]
-    .contains(&v["op"].as_str().unwrap_or(""))
-    {
-        crate::policy::allow_git(v["origin"].as_str())?;
-    }
     if v["op"] == "git_update_begin" {
         return crate::scheduler::begin(&p, "Git 更新", v["lease_token"].as_str());
     }

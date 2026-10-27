@@ -51,6 +51,20 @@ async fn remote_lease_end(
     }
     result
 }
+fn vps_access_error(e: anyhow::Error) -> anyhow::Error {
+    let text = format!("{e:#}");
+    if text.contains("未取得 Codeup 认证")
+        || text.contains("未通过认证")
+        || text.contains("读取权限")
+    {
+        anyhow::anyhow!("服务器尚无此仓库的访问权限，请同步认证并核对仓库地址后重试。")
+    } else {
+        // Keep the sanitized concrete cause visible; a generic context masks
+        // network failures and incorrectly offers credential replacement in App.
+        e
+    }
+}
+
 pub struct BackendState {
     pub connection: Mutex<Option<ssh::Connection>>,
     pub operations: crate::operations::Store,
@@ -984,17 +998,10 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if !human {
             bail!("VPS 认证检测只能在 App 操作")
         }
-        let mut r = c.git_access(field(&v, "url")?, None).await.map_err(|e| {
-            let text = format!("{e:#}");
-            if text.contains("未取得 Codeup 认证")
-                || text.contains("未通过认证")
-                || text.contains("读取权限")
-            {
-                anyhow::anyhow!("服务器尚无此仓库的访问权限，请同步认证并核对仓库地址后重试。")
-            } else {
-                e.context("VPS 自身 Git 检测失败，本次未使用 Mac 凭据")
-            }
-        })?;
+        let mut r = c
+            .git_access(field(&v, "url")?, None)
+            .await
+            .map_err(vps_access_error)?;
         r["message"] = json!("VPS 自身 Git 认证检测通过，未注入 Mac 凭据");
         return Ok(r);
     }
@@ -1055,20 +1062,6 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             id: id.into(),
         });
     if ["git_update_plan", "git_update"].contains(&op.as_str()) {
-        if !human
-            && op == "git_update"
-            && c.probe["capabilities"]
-                .as_array()
-                .is_some_and(|a| a.iter().any(|v| v == "policy_v1"))
-        {
-            let p = c.rpc(json!({"op":"policy_get"})).await?;
-            if p["read_only"] == true {
-                return Err(coded(
-                    "policy_blocked",
-                    "AI 修改已禁止，请在 App 手动更新仓库",
-                ));
-            }
-        }
         if !human && op == "git_update" && !c.profile.allow_auto {
             bail!("请先在 App 开启全自动授权，再通过 MCP 更新代码")
         }
@@ -1904,5 +1897,20 @@ mod reconnect_tests {
                 .load(std::sync::atomic::Ordering::SeqCst)
         );
         assert_eq!(*state.reconnect_status.lock().unwrap(), json!({}));
+    }
+}
+
+#[cfg(test)]
+mod vps_error_tests {
+    use super::*;
+    #[test]
+    fn network_diagnostic_remains_visible_without_credential_replacement_hint() {
+        let e = anyhow::anyhow!(
+            "远端 Codeup 访问失败：远端无法连接 Git 服务，请检查网络、代理和 DNS 后重试"
+        );
+        let response = envelope(Err(vps_access_error(e)));
+        let message = response["error_detail"]["message_zh"].as_str().unwrap();
+        assert!(message.contains("网络"), "{message}");
+        assert!(!message.contains("Mac 凭据"));
     }
 }

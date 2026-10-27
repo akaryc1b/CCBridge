@@ -54,11 +54,28 @@ print(json.dumps({'type':'result','subtype':'success','is_error':False,'session_
   assert not rpc('start',**dict(original,task_id=str(uuid.uuid4()),access='write'))['ok']
   assert call('start',**original)['task_id']==a['task_id']
   x,_=start(other,'0.1:policy-default');assert wait(x['task_id'],['completed'])['access']=='analysis'
-  assert not rpc('git_update_begin',path=str(other))['ok']
-  lease=call('git_update_begin',path=str(other),origin='app')['lease_token'];call('git_update_end',path=str(other),lease_token=lease)
+  for origin in ['mcp','app']:
+   lease=call('git_update_begin',path=str(other),origin=origin)['lease_token'];call('git_update_end',path=str(other),lease_token=lease)
+  # Protection limits Claude tools, not controlled fast-forward Git. Exercise a real repo.
+  source=root/'source';source.mkdir()
+  def git(path,*args):return subprocess.check_output(['git','-C',str(path),*args],env=env,stderr=subprocess.PIPE,text=True).strip()
+  git(source,'init','-q','-b','main');git(source,'config','user.name','fixture');git(source,'config','user.email','fixture@example.test')
+  (source/'README').write_text('before');git(source,'add','README');git(source,'commit','-qm','before')
+  target=other/'repo';git(other,'clone','-q',str(source),str(target))
+  plan=call('git_update_plan',path=str(target))['repositories'][0]
+  (source/'README').write_text('after');git(source,'commit','-qam','after');git(target,'fetch','-q')
+  lease=call('git_update_begin',path=str(target),origin='mcp')['lease_token']
+  call('git_update_preflight',path=str(target),origin='mcp',expected=plan,lease_token=lease)
+  result=call('git_update_apply',path=str(target),origin='mcp',expected=plan,lease_token=lease)
+  assert result['state']=='updated' and (target/'README').read_text()=='after',result
+  call('git_update_end',path=str(target),lease_token=lease)
+  (target/'README').write_text('own change')
+  assert not rpc('git_update_preflight',path=str(target),origin='mcp')['ok']
+  assert (target/'README').read_text()=='own change'
+
   wait(a['task_id'],['completed']);wait(b['task_id'],['completed']);wait(w['task_id'],['completed'])
   time.sleep(.5);paused=call('status',task_id=q['task_id']);assert paused['state']=='queued' and paused['blocked_reason']=='policy',paused
-  print('PASS same-workspace 2 analysis + write overlap, write exclusion, human policy, queued pause, MCP Git block/manual lease',flush=True)
+  print('PASS same-workspace 2 analysis + write overlap, write exclusion, human policy, queued pause, protected MCP/manual Git lease + fast-forward + dirty guard',flush=True)
   policy(False);wait(q['task_id'],['completed'])
   r,reply=start(child,'1:reply',reply_to=a['task_id']);assert not rpc('start',**dict(reply,task_id=str(uuid.uuid4())))['ok']
   resumed=wait(r['task_id'],['completed']);assert resumed['access']=='analysis' and resumed['session_id']==a['session_id'];assert 'resume=True' in resumed['result']['result']

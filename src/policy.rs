@@ -68,15 +68,6 @@ pub fn set(v: &Value) -> Result<Value> {
     write_json(&runner_dir()?.join("policy.json"), &p)?;
     Ok(serde_json::to_value(p)?)
 }
-pub fn allow_git(origin: Option<&str>) -> Result<()> {
-    if origin != Some("app") && read()?.read_only {
-        return Err(coded(
-            "policy_blocked",
-            "AI 修改已禁止，请在 App 手动更新仓库",
-        ));
-    }
-    Ok(())
-}
 #[cfg(test)]
 mod tests {
     use super::*;

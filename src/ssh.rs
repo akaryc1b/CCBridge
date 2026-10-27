@@ -535,9 +535,10 @@ git_auth clone --progress -- {} "$dest"
                 return Ok(None);
             }
             if status["files_present"] == true {
-                bail!(
-                    "服务器 Codeup 凭据已失效或未接入 Git，请在 App 重新同步后检测；未改用另一份 App 凭据"
-                )
+                return Err(coded(
+                    "auth",
+                    "服务器 Codeup 凭据已失效或未接入 Git，请在 App 重新同步后检测；未改用另一份 App 凭据",
+                ));
             }
         }
         crate::git_auth::load("remote", &self.profile).await
@@ -590,18 +591,7 @@ git_auth clone --progress -- {} "$dest"
             .await?;
         if status != Some(0) {
             let raw = String::from_utf8_lossy(&err).to_ascii_lowercase();
-            let code = if [
-                "authentication",
-                "username",
-                "access denied",
-                "403",
-                "401",
-                "repository not found",
-                "terminal prompts disabled",
-            ]
-            .iter()
-            .any(|s| raw.contains(s))
-            {
+            let code = if crate::transfer::authentication_failure(&raw) {
                 "auth"
             } else {
                 "network"
