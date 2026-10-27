@@ -868,6 +868,54 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
                 .len(),
             14
         );
+        // Verify actual MCP stdio, not only an in-process transport call.
+        std::fs::remove_file(app_dir()?.join("bridge.sock"))?;
+        let socket = tokio::net::UnixListener::bind(app_dir()?.join("bridge.sock"))?;
+        let broker_state = shared.clone();
+        let recovery_broker = tokio::spawn(async move {
+            loop {
+                let (stream, _) = socket.accept().await.unwrap();
+                let state = broker_state.clone();
+                tokio::spawn(async move {
+                    let (r, mut w) = stream.into_split();
+                    let mut line = String::new();
+                    BufReader::new(r).read_line(&mut line).await.unwrap();
+                    let v: Value = serde_json::from_str(&line).unwrap();
+                    let mut bytes =
+                        serde_json::to_vec(&envelope(backend::dispatch(state, v, false).await))
+                            .unwrap();
+                    bytes.push(b'\n');
+                    w.write_all(&bytes).await.unwrap();
+                });
+            }
+        });
+        let out = tokio::process::Command::new("python3")
+            .args(["tests/mcp-readonly-probe.py", &bin])
+            .output()
+            .await?;
+        assert!(
+            out.status.success(),
+            "{} {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        println!("{}", String::from_utf8_lossy(&out.stdout));
+        recovery_broker.abort();
+        let maintenance = tokio::spawn(backend::runner_maintenance_loop(shared.clone()));
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if shared.runner_maintenance.lock().unwrap()["state"] == "ready" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("headless background maintenance did not detect bundled version")?;
+        maintenance.abort();
+        println!(
+            "PASS backend-only automatic Runner version detection after reconnect, no WebView timer"
+        );
         backend::dispatch(shared.clone(), json!({"op":"disconnect"}), true).await?;
         tokio::time::sleep(Duration::from_secs(6)).await;
         assert!(shared.connection.lock().await.is_none());

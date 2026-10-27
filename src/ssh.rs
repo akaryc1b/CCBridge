@@ -668,16 +668,26 @@ git_auth clone --progress -- {} "$dest"
             }
         }
         if self.probe["runner_version"].is_string() {
+            let sessions = self.probe["capabilities"]
+                .as_array()
+                .is_some_and(|caps| caps.iter().any(|v| v == "sessions_v1"));
             let tasks = self
-                .rpc(json!({"op":"list"}))
+                .rpc(json!({"op":if sessions{"active_tasks"}else{"list"}}))
                 .await
                 .context("无法确认远端任务状态，暂不更新 Runner")?;
+            if tasks["incomplete"] == true {
+                bail!("远端任务记录不完整，暂不更新服务端")
+            }
             let tasks = tasks["tasks"]
                 .as_array()
                 .context("远端任务状态无效，暂不更新 Runner")?;
+            if !sessions && tasks.len() >= 100 {
+                bail!("旧服务端任务列表不完整，暂不自动更新")
+            }
             if tasks.iter().any(|t| {
-                ["queued", "running", "waiting_approval"]
-                    .contains(&t["state"].as_str().unwrap_or(""))
+                t["ownership_unknown"] == true
+                    || ["queued", "running", "waiting_approval"]
+                        .contains(&t["state"].as_str().unwrap_or(""))
             }) {
                 bail!("远端仍有任务运行或等待审批，请完成后再更新 Runner")
             }

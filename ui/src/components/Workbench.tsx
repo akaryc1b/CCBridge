@@ -1,3 +1,4 @@
+import { maintenanceLabel } from "../lib/runnerMaintenance";
 import type { ReactNode } from "react";
 import { time } from "@/lib/format";
 import { FolderOpen, Plus, ArrowRight, Check, ShieldCheck } from "lucide-react";
@@ -162,7 +163,10 @@ export function Workbench({
             <h2>运行环境</h2>
             <div className="status-row">
               <span>服务端程序</span>
-              <span>{connection.probe?.runner_version || "未检测"}</span>
+              <span>
+                {connection.probe?.runner_version || "未检测"} ·{" "}
+                {maintenanceLabel(connection, connection.app_version || "")}
+              </span>
             </div>
             <div className="status-row">
               <span>Claude Code</span>

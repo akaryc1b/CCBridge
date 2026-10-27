@@ -1,3 +1,4 @@
+import { maintenanceLabel } from "./lib/runnerMaintenance";
 import { ProjectPolicy } from "./components/ProjectPolicy";
 import { TaskQueue } from "./components/TaskQueue";
 import {
@@ -1861,56 +1862,75 @@ export default function App() {
                     {runner.runner_version ||
                       (connected ? "未检测到" : "未连接")}
                   </span>
-                  {runner.runner_version === version && (
-                    <span className="status-success">已安装</span>
-                  )}
+                  <span
+                    role="status"
+                    className={
+                      connection.runner_maintenance?.state === "error"
+                        ? "text-destructive"
+                        : "muted"
+                    }
+                  >
+                    {maintenanceLabel(connection, version)}
+                  </span>
                   <Button
                     variant="ghost"
                     size="sm"
-                    disabled={!connected || busy.has("refresh_runner")}
+                    disabled={!connected}
                     onClick={() =>
-                      safe(request("refresh_runner").then(refreshConnection))
+                      safe(
+                        request("runner_maintenance_retry").then(
+                          refreshConnection,
+                        ),
+                      )
                     }
                   >
                     <RefreshCw size={14} />
-                    检测
+                    重新检查
                   </Button>
-                  {runner.runner_version !== version && (
-                    <Button
-                      disabled={
-                        !connected ||
-                        runner.runner_version === version ||
-                        busy.has("install_runner")
-                      }
-                      onClick={() =>
-                        safe(
-                          request("install_runner", {
-                            operation_id: (() => {
-                              const id = crypto.randomUUID();
-                              setInstallId(id);
-                              return id;
-                            })(),
-                            connection_id: connection.connection_id,
-                          }).then(() => {
-                            toast.success("服务端程序已安装");
-                            return refreshConnection();
-                          }),
-                        )
-                      }
-                    >
-                      {busy.has("install_runner") ? (
-                        "安装中…"
-                      ) : runner.runner_version === version ? (
-                        <>
-                          <Check size={15} />
-                          已安装
-                        </>
-                      ) : (
-                        "安装 / 更新服务端程序"
-                      )}
-                    </Button>
-                  )}
+                  {connection.runner_maintenance?.state === "action_required" &&
+                    runner.runner_version !== version && (
+                      <Button
+                        disabled={
+                          !connected ||
+                          runner.runner_version === version ||
+                          busy.has("install_runner")
+                        }
+                        onClick={() =>
+                          safe(
+                            request("install_runner", {
+                              operation_id: (() => {
+                                const id = crypto.randomUUID();
+                                setInstallId(id);
+                                return id;
+                              })(),
+                              connection_id: connection.connection_id,
+                            }).then(() => {
+                              toast.success("服务端程序已安装");
+                              return refreshConnection();
+                            }),
+                          )
+                        }
+                      >
+                        {busy.has("install_runner") ? (
+                          "安装中…"
+                        ) : runner.runner_version === version ? (
+                          <>
+                            <Check size={15} />
+                            已安装
+                          </>
+                        ) : (
+                          "安装 / 更新服务端程序"
+                        )}
+                      </Button>
+                    )}
                 </div>
+                {connection.runner_maintenance?.connection_id ===
+                  connection.connection_id &&
+                  connection.runner_maintenance?.state === "error" && (
+                    <InlineAlert>
+                      {connection.runner_maintenance.message}
+                    </InlineAlert>
+                  )}
                 {installOperation.snap?.state === "running" && (
                   <OperationBar operation={installOperation.snap} />
                 )}

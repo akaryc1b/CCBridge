@@ -74,6 +74,8 @@ pub struct BackendState {
     pub auto_attempted: std::sync::atomic::AtomicBool,
     pub reconnect_enabled: std::sync::atomic::AtomicBool,
     pub reconnect_status: std::sync::Mutex<Value>,
+    pub runner_maintenance: std::sync::Mutex<Value>,
+    pub maintenance_retry: std::sync::atomic::AtomicBool,
 }
 impl BackendState {
     pub fn new(connection: Option<ssh::Connection>) -> Self {
@@ -86,6 +88,8 @@ impl BackendState {
             auto_attempted: std::sync::atomic::AtomicBool::new(false),
             reconnect_enabled: std::sync::atomic::AtomicBool::new(false),
             reconnect_status: std::sync::Mutex::new(json!({})),
+            runner_maintenance: std::sync::Mutex::new(json!({})),
+            maintenance_retry: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -821,6 +825,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             }
         };
         status["reconnect"] = state.reconnect_status.lock().unwrap().clone();
+        status["runner_maintenance"] = state.runner_maintenance.lock().unwrap().clone();
         return Ok(status);
     }
     let mut c = guard
@@ -1336,6 +1341,15 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             .prepare_repositories(field(&v, "group")?, field(&v, "urls")?)
             .await;
     }
+    if op == "runner_maintenance_retry" {
+        if !human {
+            bail!("只能在 App 重试服务端维护")
+        }
+        state
+            .maintenance_retry
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        return Ok(json!({"requested":true}));
+    }
     if op == "refresh_runner" {
         if !human {
             bail!("只能在 App 重新检测 Runner")
@@ -1348,7 +1362,13 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if !human {
             bail!("只能由用户在 App 安装 Runner")
         }
-        let r = c.install_observed(operation.clone()).await;
+        let token = if c.probe["runner_version"].as_str() == Some(env!("CARGO_PKG_VERSION")) {
+            None
+        } else {
+            remote_lease_begin(&c, &c.environment.home, operation.as_ref(), true).await?
+        };
+        let result = c.install_observed(operation.clone()).await;
+        let r = remote_lease_end(&c, &c.environment.home, token, operation.as_ref(), result).await;
         *state.connection.lock().await = Some(c);
         return r;
     }
@@ -1640,6 +1660,103 @@ pub(crate) async fn reconnect_loop(state: Shared) {
     }
 }
 
+// Runs independently of WebView timers, including while the screen is locked.
+// Only the bundled version is installed; activity is deferred, never cancelled.
+pub(crate) async fn runner_maintenance_loop(state: Shared) {
+    let mut checked_connection = String::new();
+    let mut next_check = std::time::Instant::now();
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        let Some(c) = state
+            .connection
+            .lock()
+            .await
+            .clone()
+            .filter(|c| !c.handle.is_closed())
+        else {
+            continue;
+        };
+        if checked_connection == c.connection_id
+            && std::time::Instant::now() < next_check
+            && !state
+                .maintenance_retry
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            continue;
+        }
+        checked_connection = c.connection_id.clone();
+        next_check = std::time::Instant::now() + std::time::Duration::from_secs(1800);
+        *state.runner_maintenance.lock().unwrap() =
+            json!({"state":"checking","connection_id":c.connection_id});
+        let result: Result<Value> = async {
+            let refreshed = dispatch(state.clone(), json!({"op":"refresh_runner","connection_id":c.connection_id}), true).await?;
+            let probe = &refreshed["probe"];
+            let Some(version) = probe["runner_version"].as_str() else {
+                return Ok(json!({"state":"action_required","message":"未检测到可维护的服务端，请安装或重新检查"}));
+            };
+            match runner_version_order(version, env!("CARGO_PKG_VERSION"))? {
+                std::cmp::Ordering::Equal => return Ok(json!({"state":"ready","version":version})),
+                std::cmp::Ordering::Greater => return Ok(json!({"state":"newer","version":version})),
+                std::cmp::Ordering::Less => {}
+            }
+            if !probe["capabilities"].as_array().is_some_and(|caps|caps.iter().any(|v|v=="lease_v1")) {
+                return Ok(json!({"state":"action_required","message":"旧服务端需手动更新一次"}));
+            }
+            let local = state.gate.lock().unwrap().snapshot();
+            if local["draining"] == true || local["active_operations"] != 0 || local["mcp_leases"] != 0 || local["legacy_wait_seconds"] != 0 {
+                return Ok(json!({"state":"waiting_idle"}));
+            }
+            let tasks = c.rpc(json!({"op":"active_tasks"})).await?;
+            if tasks["incomplete"] == true || !tasks["tasks"].is_array() {
+                bail!("无法完整检查远端任务，暂不更新服务端")
+            }
+            if ensure_update_tasks_idle(&tasks).is_err() {
+                return Ok(json!({"state":"waiting_idle"}));
+            }
+            *state.runner_maintenance.lock().unwrap() = json!({"state":"updating","connection_id":c.connection_id});
+            dispatch(state.clone(), json!({"op":"install_runner","connection_id":c.connection_id,"operation_id":uuid::Uuid::new_v4().to_string()}), true).await?;
+            Ok(json!({"state":"ready","version":env!("CARGO_PKG_VERSION")}))
+        }.await;
+        let status = match result {
+            Ok(v) => v,
+            Err(e) if error_code(&e) == "workspace_busy" => json!({"state":"waiting_idle"}),
+            Err(e) => json!({"state":"error","message":error_summary(&format!("{e:#}"))}),
+        };
+        if status["state"] == "waiting_idle" {
+            next_check = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        }
+        if status["state"] == "error" {
+            next_check = std::time::Instant::now() + std::time::Duration::from_secs(300);
+        }
+        // A disconnect/profile switch must not publish the old account's result.
+        if state
+            .connection
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|now| now.connection_id == c.connection_id)
+        {
+            let mut status = status;
+            status["connection_id"] = json!(c.connection_id);
+            status["checked_at"] = json!(now());
+            *state.runner_maintenance.lock().unwrap() = status;
+        }
+    }
+}
+fn runner_version_order(remote: &str, app: &str) -> Result<std::cmp::Ordering> {
+    fn parse(s: &str) -> Result<Vec<u64>> {
+        let v = s
+            .split('.')
+            .map(str::parse::<u64>)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if v.len() != 3 {
+            bail!("服务端版本格式不支持，请手动检测")
+        }
+        Ok(v)
+    }
+    Ok(parse(remote)?.cmp(&parse(app)?))
+}
+
 pub fn start_backend() -> (
     tokio::sync::mpsc::UnboundedSender<Job>,
     mpsc::Receiver<Value>,
@@ -1674,6 +1791,7 @@ pub fn start_backend() -> (
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
                 tokio::spawn(reconnect_loop(state.clone()));
+                tokio::spawn(runner_maintenance_loop(state.clone()));
                 let net_state = state.clone();
                 tokio::spawn(async move {
                     while let Ok((stream, _)) = listener.accept().await {
@@ -1912,5 +2030,42 @@ mod vps_error_tests {
         let message = response["error_detail"]["message_zh"].as_str().unwrap();
         assert!(message.contains("网络"), "{message}");
         assert!(!message.contains("Mac 凭据"));
+    }
+}
+
+#[cfg(test)]
+mod maintenance_tests {
+    use super::*;
+    #[test]
+    fn bundled_version_only_and_no_unknown_downgrade() {
+        assert_eq!(
+            runner_version_order("0.12.4", "0.12.5").unwrap(),
+            std::cmp::Ordering::Less
+        );
+        assert_eq!(
+            runner_version_order("0.12.5", "0.12.5").unwrap(),
+            std::cmp::Ordering::Equal
+        );
+        assert_eq!(
+            runner_version_order("0.13.0", "0.12.5").unwrap(),
+            std::cmp::Ordering::Greater
+        );
+        assert!(runner_version_order("garbled", "0.12.5").is_err());
+    }
+    #[tokio::test]
+    async fn mcp_cannot_trigger_maintenance_or_replace_runner() {
+        let state = Arc::new(BackendState::new(None));
+        for op in ["runner_maintenance_retry", "install_runner"] {
+            assert!(
+                dispatch(state.clone(), json!({"op":op}), false)
+                    .await
+                    .is_err()
+            );
+        }
+        assert!(
+            !state
+                .maintenance_retry
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
     }
 }
