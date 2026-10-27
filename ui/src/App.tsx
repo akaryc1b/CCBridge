@@ -824,6 +824,7 @@ export default function App() {
     const c = await request("connection_status", {}, true);
     if (c) {
       setConnection(c);
+      if (c.connected) setErrors(clearConnectionErrors);
       if (c.profile)
         setProfile((p) => ({
           ...p,
