@@ -4,6 +4,7 @@ import {
   queueLabel,
   shouldRefreshQueued,
   taskCenterRecord,
+  shouldRefreshTaskList,
 } from "./lib/taskQueue";
 import { ProjectMenu } from "./components/ProjectMenu";
 import { ProjectDialog } from "./components/ProjectDialog";
@@ -1100,16 +1101,20 @@ export default function App() {
     safe(refreshTasks());
     safe(refreshProjects());
     const timer = setInterval(() => {
+      safe(refreshTasks());
       if (document.hidden) return;
       safe(refreshConnection());
       safe(refreshProjects());
-      safe(refreshTasks());
       if (selectedRef.current) safe(fetchTask(selectedRef.current));
     }, 5000);
     return () => clearInterval(timer);
   }, [connected, runner.runner_version, connection.connection_id]);
   useEffect(() => {
-    if (connected && tasks.some(active) && !inflight.current.has("task_list"))
+    if (
+      connected &&
+      shouldRefreshTaskList(tasks, taskCenter.tasks) &&
+      !inflight.current.has("task_list")
+    )
       safe(refreshTasks());
   }, [connected, taskCenter.tasks]);
   useEffect(() => {

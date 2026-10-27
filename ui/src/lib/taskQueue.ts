@@ -37,3 +37,14 @@ export function taskCenterRecord(
 ): RecordValue {
   return { ...detail, ...summary };
 }
+
+export function shouldRefreshTaskList(
+  cached: RecordValue[],
+  observed: RecordValue[],
+): boolean {
+  return [...cached, ...observed].some(
+    (t) =>
+      !t.ownership_unknown &&
+      ["running", "queued", "waiting_approval"].includes(t.state),
+  );
+}
