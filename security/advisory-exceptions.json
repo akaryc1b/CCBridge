@@ -35,5 +35,20 @@
     "reference": "https://rustsec.org/advisories/RUSTSEC-2024-0436.html",
     "reviewed": "2026-10-22",
     "expires": "2026-11-21"
+  },
+  {
+    "package": "block-buffer",
+    "version": "0.10.4",
+    "ids": [
+      "GHSA-qwgh-2vcv-g2f7"
+    ],
+    "scopes": [
+      "app-arm64",
+      "app-x86_64"
+    ],
+    "reason": "Reviewed exact 0.10.4 source: BlockBuffer stores pos in a separate u8 field, not the inline buffer byte described by this advisory; callback panic cannot overwrite pos with input. Only present via sha2 -> tauri-codegen build/proc-macro chain. See security/block-buffer-0.10.4-review.md; re-review on version or dependency-path change.",
+    "reference": "https://github.com/RustCrypto/utils/blob/block-buffer-v0.10.4/block-buffer/src/lib.rs",
+    "reviewed": "2026-10-27",
+    "expires": "2026-11-26"
   }
 ]
