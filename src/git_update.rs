@@ -74,6 +74,22 @@ pub fn rpc_at(v: &Value, home: &Path) -> Result<Value> {
     if !p.starts_with(home) {
         bail!("Git 更新仅允许当前账号 HOME 内的目录")
     }
+    if [
+        "git_update_begin",
+        "git_update_preflight",
+        "git_update_apply",
+    ]
+    .contains(&v["op"].as_str().unwrap_or(""))
+    {
+        crate::policy::allow_git(v["origin"].as_str())?;
+    }
+    if v["op"] == "git_update_begin" {
+        return crate::scheduler::begin(&p, "Git 更新", v["lease_token"].as_str());
+    }
+    if v["op"] == "git_update_end" {
+        crate::scheduler::end(field(v, "lease_token")?, &p)?;
+        return Ok(json!({"released":true}));
+    }
     match field(v, "op")? {
         "git_update_plan" => {
             let mut repos = vec![];
@@ -97,7 +113,16 @@ pub fn rpc_at(v: &Value, home: &Path) -> Result<Value> {
             Ok(json!({"repositories":repos}))
         }
         "git_update_preflight" | "git_update_apply" => {
-            crate::workspace_ops::protected_running(&p)?;
+            let _token_lease = if let Some(token) = v["lease_token"].as_str() {
+                Some(crate::scheduler::use_lease(token, &p)?)
+            } else {
+                None
+            };
+            let _lease = if v["lease_token"].is_string() {
+                None
+            } else {
+                Some(crate::scheduler::operation(&[p.clone()], "更新仓库")?)
+            };
             let r = repo(&p)?;
             if r["blocked"] != "" {
                 return Err(coded(

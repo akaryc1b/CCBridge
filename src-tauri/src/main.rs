@@ -35,17 +35,17 @@ async fn $name(bridge: State<'_, Bridge>, request: Value) -> Result<Value,Value>
 )*}; }
 commands! {
  session_list=>"session_list", session_search=>"session_search", session_turns=>"session_turns", session_meta_set=>"session_meta_set", session_meta_get=>"session_meta_get", active_tasks=>"active_tasks", operation_list=>"operation_list", operation_verify=>"operation_verify",
- operation_progress=>"operation_progress", git_update_plan=>"git_update_plan", git_update=>"git_update",
+ operation_release=>"operation_release", operation_progress=>"operation_progress", git_update_plan=>"git_update_plan", git_update=>"git_update",
  git_vps_auth_test=>"git_vps_auth_test", git_vps_auth_status=>"git_vps_auth_status", git_vps_auth_install=>"git_vps_auth_install", git_vps_auth_remove=>"git_vps_auth_remove",
  preferences_save=>"preferences_save", auto_connect=>"auto_connect",
  connection_status=>"connection_status", connect_ssh=>"connect", disconnect_ssh=>"disconnect",
  migrate_password=>"migrate_password", save_profile=>"save_profile", load_profile=>"load_profile", forget_password=>"forget_password",
  claude_models=>"claude_models", claude_usage=>"claude_usage",
- refresh_runner=>"refresh_runner", install_runner=>"install_runner", set_auto=>"set_auto",
+ refresh_runner=>"refresh_runner", install_runner=>"install_runner", set_auto=>"set_auto", policy_get=>"policy_get", policy_set=>"policy_set",
  directory_list=>"directory_list", create_directory=>"create_directory", file_preview=>"file_preview",
  clone_progress=>"clone_progress", clone_repository=>"clone_into_directory", select_workspace=>"select_remote_workspace",
  project_list=>"project_list", project_save=>"project_save", project_remove=>"project_remove", task_list=>"list", task_status=>"status",
- task_start=>"start", task_reply=>"reply", task_cancel=>"cancel", task_approve=>"approve",
+ task_start=>"start", task_reply=>"reply", task_cancel=>"cancel", task_release=>"task_release", task_approve=>"approve",
  database_list=>"db_list", database_save=>"db_save", database_bind=>"db_bind",
  database_remove=>"db_remove", database_detect=>"db_detect", database_test=>"db_test",
  database_protocol_test=>"db_protocol_test",
@@ -211,6 +211,17 @@ fn main() {
             std::process::exit(1)
         }
     }
+    let context = tauri::generate_context!();
+    // Separately named QA bundles must never load the installed App's accounts on an OS relaunch.
+    if context.config().identifier != "dev.ccbridge.desktop"
+        && std::env::var_os("CCBRIDGE_HOME").is_none()
+    {
+        let root =
+            std::env::temp_dir().join(format!("ccbridge-test-{}", context.config().identifier));
+        unsafe {
+            std::env::set_var("CCBRIDGE_HOME", root);
+        }
+    }
     let (tx, events) = ccbridge::backend::start_backend();
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -227,8 +238,22 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             initial_state,
-            session_list, session_search, session_turns, session_meta_set, session_meta_get, active_tasks, operation_list, operation_verify,
-            operation_progress, git_update_plan, git_update, git_vps_auth_status, git_vps_auth_test, git_vps_auth_install, git_vps_auth_remove,
+            session_list,
+            session_search,
+            session_turns,
+            session_meta_set,
+            session_meta_get,
+            active_tasks,
+            operation_list,
+            operation_verify,
+            operation_progress,
+            operation_release,
+            git_update_plan,
+            git_update,
+            git_vps_auth_status,
+            git_vps_auth_test,
+            git_vps_auth_install,
+            git_vps_auth_remove,
             set_window_theme,
             codex_configuration_status,
             install_location,
@@ -247,6 +272,8 @@ fn main() {
             refresh_runner,
             install_runner,
             set_auto,
+            policy_get,
+            policy_set,
             directory_list,
             create_directory,
             file_preview,
@@ -273,6 +300,7 @@ fn main() {
             task_start,
             task_reply,
             task_cancel,
+            task_release,
             task_approve,
             database_list,
             database_save,
@@ -287,6 +315,6 @@ fn main() {
             download_update,
             apply_update
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("CCBridge 启动失败");
 }

@@ -1,3 +1,4 @@
+import { TaskQueue } from "./TaskQueue";
 import { Dialog as Sheet } from "radix-ui";
 import { useEffect, useState } from "react";
 import {
@@ -23,6 +24,13 @@ import { elapsed } from "../lib/format";
 import { Input } from "./ui/input";
 export type BackgroundTask = {
   id: string;
+  queue?: Record<string, any>;
+  blocked_reason?: string;
+  access?: string;
+  ownership_unknown?: boolean;
+  cancel?: () => void;
+  release?: () => Promise<void>;
+  openBlocker?: (id: string) => void;
   label: string;
   summary: string;
   running: boolean;
@@ -46,6 +54,7 @@ export type BackgroundTask = {
 };
 const labels: Record<string, string> = {
   queued: "排队中",
+  blocked: "目录占用",
   running: "执行中",
   waiting_approval: "等待审批",
   completed: "已完成",
@@ -286,54 +295,74 @@ export function BackgroundTasks({
                   <span className="task-state-label">
                     {labels[state(detail)] || state(detail)}
                   </span>
-                  <dl>
-                    <dt>项目</dt>
-                    <dd>{detail.project || "未记录项目"}</dd>
-                    {detail.workspace && (
-                      <>
-                        <dt>目录</dt>
-                        <dd>{detail.workspace}</dd>
-                      </>
-                    )}
-                    {detail.started && (
-                      <>
-                        <dt>{detail.finished ? "总用时" : "已用时"}</dt>
-                        <dd>
-                          {elapsed(
-                            (detail.finished || Date.now()) - detail.started,
-                          )}
-                        </dd>
-                      </>
-                    )}
-                    {detail.model && (
-                      <>
-                        <dt>实际模型</dt>
-                        <dd>{detail.model}</dd>
-                      </>
-                    )}
-                    {detail.mode && (
-                      <>
-                        <dt>执行权限</dt>
-                        <dd>
-                          {detail.mode === "automatic" ? "全自动" : "审批"}
-                        </dd>
-                      </>
-                    )}
-                    <dt>
-                      {["unknown", "interrupted"].includes(state(detail))
-                        ? "上次阶段"
-                        : "当前阶段"}
-                    </dt>
-                    <dd>{detail.phase || detail.summary}</dd>
-                    {!!detail.total && (
-                      <>
-                        <dt>已处理</dt>
-                        <dd>
-                          {detail.processed || 0} / {detail.total}
-                        </dd>
-                      </>
-                    )}
-                  </dl>
+                  <TaskQueue
+                    task={{ ...detail, state: state(detail) }}
+                    onOpen={detail.openBlocker}
+                    onCancel={connected ? detail.cancel : undefined}
+                    onRelease={connected ? detail.release : undefined}
+                  />
+                  {state(detail) === "queued" && (
+                    <p className="muted">
+                      {detail.mode === "automatic" ? "全自动" : "审批"} ·{" "}
+                      {detail.model || "模型确认中"}
+                    </p>
+                  )}
+                  {state(detail) !== "queued" && (
+                    <dl>
+                      <dt>项目</dt>
+                      <dd>{detail.project || "未记录项目"}</dd>
+                      {detail.workspace && (
+                        <>
+                          <dt>目录</dt>
+                          <dd>{detail.workspace}</dd>
+                        </>
+                      )}
+                      {detail.started && (
+                        <>
+                          <dt>{detail.finished ? "总用时" : "已用时"}</dt>
+                          <dd>
+                            {elapsed(
+                              (detail.finished || Date.now()) - detail.started,
+                            )}
+                          </dd>
+                        </>
+                      )}
+                      {detail.model && (
+                        <>
+                          <dt>实际模型</dt>
+                          <dd>{detail.model}</dd>
+                        </>
+                      )}
+                      {detail.mode && (
+                        <>
+                          <dt>执行权限</dt>
+                          <dd>
+                            {detail.mode === "automatic" ? "全自动" : "审批"}
+                          </dd>
+                        </>
+                      )}
+                      <dt>
+                        {["unknown", "interrupted"].includes(state(detail))
+                          ? "上次阶段"
+                          : "当前阶段"}
+                      </dt>
+                      <dd>
+                        {detail.phase === "waiting"
+                          ? "排队中"
+                          : detail.phase === "executing"
+                            ? "执行中"
+                            : detail.phase || detail.summary}
+                      </dd>
+                      {!!detail.total && (
+                        <>
+                          <dt>已处理</dt>
+                          <dd>
+                            {detail.processed || 0} / {detail.total}
+                          </dd>
+                        </>
+                      )}
+                    </dl>
+                  )}
                   {detail.verification && (
                     <p className="muted">
                       {detail.verification} ·{" "}

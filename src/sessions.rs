@@ -97,6 +97,11 @@ fn scan(root: &Path, q: &str) -> Result<(Vec<Value>, usize, Vec<Value>)> {
                         "prompt",
                         "state",
                         "mode",
+                        "access",
+                        "blocked_reason",
+                        "phase",
+                        "queue",
+                        "ownership_unknown",
                         "created_at",
                         "updated_at",
                         "resume",
@@ -327,7 +332,7 @@ fn rpc_at(root: &Path, v: &Value) -> Result<Value> {
                 continue;
             }
         }
-        sessions.push(json!({"session_id":id,"task_id":latest["id"],"title":name,"workspace":latest["workspace"],"state":latest["state"],"mode":latest["mode"],"model_resolved":latest["model_resolved"],"model_requested":latest["model_requested"],"created_at":first["created_at"],"updated_at":latest["updated_at"],"archived":archived,"revision":m["revision"],"turn_count":turns.len(),"legacy":first["session_id"].as_str().is_none_or(|s|valid_id(s).is_err()),"hits":hits}));
+        sessions.push(json!({"session_id":id,"task_id":latest["id"],"title":name,"workspace":latest["workspace"],"state":latest["state"],"access":latest["access"],"mode":latest["mode"],"model_resolved":latest["model_resolved"],"model_requested":latest["model_requested"],"created_at":first["created_at"],"updated_at":latest["updated_at"],"archived":archived,"revision":m["revision"],"turn_count":turns.len(),"legacy":first["session_id"].as_str().is_none_or(|s|valid_id(s).is_err()),"hits":hits}));
     }
     sessions.sort_by_key(|s| {
         std::cmp::Reverse((

@@ -86,7 +86,10 @@ impl Operation {
                         .as_u64()
                         .unwrap_or(if r["complete"] == false { 1 } else { 0 });
                 let n = r["results"].as_array().map_or(0, Vec::len);
-                self.patch(json!({"state":if failed==0{"done"}else if n>failed as usize||r["repositories"].as_array().is_some_and(|a|!a.is_empty()){"partial"}else{"failed"},"result":r,"finished_at_ms":millis()}));
+                let busy_only = r["results"].as_array().is_some_and(|a| {
+                    !a.is_empty() && a.iter().all(|x| x["code"] == "workspace_busy")
+                });
+                self.patch(json!({"state":if busy_only{"blocked"}else if failed==0{"done"}else if n>failed as usize||r["repositories"].as_array().is_some_and(|a|!a.is_empty()){"partial"}else{"failed"},"result":r,"finished_at_ms":millis()}));
             }
             Err(e) => {
                 let m = crate::common::error_summary(&format!("{e:#}"));

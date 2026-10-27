@@ -1,3 +1,10 @@
+import { ProjectPolicy } from "./components/ProjectPolicy";
+import { TaskQueue } from "./components/TaskQueue";
+import {
+  queueLabel,
+  shouldRefreshQueued,
+  taskCenterRecord,
+} from "./lib/taskQueue";
 import { ProjectMenu } from "./components/ProjectMenu";
 import { ProjectDialog } from "./components/ProjectDialog";
 import { projectAtPath } from "./lib/projectEntries";
@@ -148,6 +155,7 @@ const statusLabels: Data = {
   interrupted: "已中断",
 };
 const active = (t: Data) =>
+  !t.ownership_unknown &&
   ["running", "queued", "waiting_approval"].includes(t.state);
 function Field({
   label,
@@ -251,6 +259,7 @@ export default function App() {
     [details, setDetails] = useState<Data>({}),
     [draft, setDraft] = useState(""),
     [mode, setMode] = useState("automatic"),
+    [accessChoice, setAccessChoice] = useState("inherit"),
     [modelPolicy, setModelPolicy] = useState("inherit"),
     [model, setModel] = useState(""),
     [newConversation, setNewConversation] = useState(false);
@@ -373,6 +382,7 @@ export default function App() {
   detailsRef.current = details;
 
   function switchConversation(id: string) {
+    setAccessChoice("inherit");
     setErrors((old) => {
       const next = { ...old };
       delete next.task_start;
@@ -495,7 +505,18 @@ export default function App() {
       phase: phaseText[op.phase] || op.phase,
       started: op.started_at_ms,
       finished: op.finished_at_ms,
-      state: op.state,
+      state: op.remote_lease && op.state !== "running" ? "unknown" : op.state,
+      ownership_unknown: !!op.remote_lease && op.state !== "running",
+      release: op.remote_lease
+        ? async () => {
+            await invoke("operation_release", {
+              request: {
+                operation_id: op.id,
+                confirmed: true,
+              },
+            });
+          }
+        : undefined,
       running: op.state === "running",
       summary: operationSummary(op),
       error: op.error,
@@ -621,14 +642,19 @@ export default function App() {
     args: Data = {},
     quiet = false,
   ): Promise<any> => {
+    const requestKey =
+      command === "task_status" ? `${command}:${args.task_id}` : command;
     if (
-      inflight.current.has(command) &&
+      inflight.current.has(requestKey) &&
       !["directory_list", "file_preview"].includes(command)
     )
       throw new Error("该操作正在进行，请查看当前状态");
-    const sequence = (requestSequence.current.get(command) || 0) + 1;
-    requestSequence.current.set(command, sequence);
-    inflight.current.set(command, (inflight.current.get(command) || 0) + 1);
+    const sequence = (requestSequence.current.get(requestKey) || 0) + 1;
+    requestSequence.current.set(requestKey, sequence);
+    inflight.current.set(
+      requestKey,
+      (inflight.current.get(requestKey) || 0) + 1,
+    );
     setBusy(new Set(inflight.current.keys()));
     try {
       const data: any = await invoke(command, { request: args });
@@ -637,7 +663,7 @@ export default function App() {
         setAutoTarget(data.profile || {});
         setErrors(clearConnectionErrors);
       }
-      if (requestSequence.current.get(command) === sequence)
+      if (requestSequence.current.get(requestKey) === sequence)
         setErrors((e) => {
           const next = { ...e };
           delete next[command];
@@ -654,7 +680,7 @@ export default function App() {
         ["connect_ssh", "auto_connect"].includes(command)
       ) {
         setErrors(clearConnectionErrors);
-      } else if (requestSequence.current.get(command) === sequence) {
+      } else if (requestSequence.current.get(requestKey) === sequence) {
         setErrors((old) => ({
           ...old,
           [command]: {
@@ -666,9 +692,9 @@ export default function App() {
       }
       throw e;
     } finally {
-      const left = (inflight.current.get(command) || 1) - 1;
-      if (left) inflight.current.set(command, left);
-      else inflight.current.delete(command);
+      const left = (inflight.current.get(requestKey) || 1) - 1;
+      if (left) inflight.current.set(requestKey, left);
+      else inflight.current.delete(requestKey);
       setBusy(new Set(inflight.current.keys()));
     }
   };
@@ -985,6 +1011,22 @@ export default function App() {
       );
       if (!r || account !== connectionIdentity.current) break;
       const key = currentId;
+      setTasks((old) =>
+        old.map((t) =>
+          t.task_id === key
+            ? {
+                ...t,
+                state: r.state,
+                updated_at: r.updated_at,
+                access: r.access,
+                blocked_reason: r.blocked_reason,
+                queue: r.queue,
+                ownership_unknown: r.ownership_unknown,
+                model_resolved: r.model_resolved,
+              }
+            : t,
+        ),
+      );
       setDetails((d) => ({
         ...d,
         [key]: {
@@ -1054,6 +1096,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     if (!connected) return;
+    safe(refreshConnection());
     safe(refreshTasks());
     safe(refreshProjects());
     const timer = setInterval(() => {
@@ -1064,10 +1107,22 @@ export default function App() {
       if (selectedRef.current) safe(fetchTask(selectedRef.current));
     }, 5000);
     return () => clearInterval(timer);
-  }, [connected, runner.runner_version]);
+  }, [connected, runner.runner_version, connection.connection_id]);
+  useEffect(() => {
+    if (connected && tasks.some(active) && !inflight.current.has("task_list"))
+      safe(refreshTasks());
+  }, [connected, taskCenter.tasks]);
   useEffect(() => {
     if (selected && connected) safe(fetchTask(selected));
   }, [selected, connected]);
+  useEffect(() => {
+    if (
+      connected &&
+      selected &&
+      shouldRefreshQueued(detailsRef.current[selected], taskCenter.tasks)
+    )
+      safe(fetchTask(selected));
+  }, [connected, selected, taskCenter.tasks]);
   useEffect(() => {
     if (!isTauri()) return;
     let cleanup: (() => void) | undefined;
@@ -1218,6 +1273,17 @@ export default function App() {
       prompt,
       task_id: "",
       mode,
+      ...(runner.capabilities?.includes("analysis_v1")
+        ? {
+            access: connection.policy?.read_only
+              ? "analysis"
+              : accessChoice === "inherit"
+                ? continuing
+                  ? task.access || "write"
+                  : "analysis"
+                : accessChoice,
+          }
+        : {}),
       model_policy: modelPolicy,
     };
     if (modelPolicy === "explicit") args.model = model.trim();
@@ -1243,6 +1309,7 @@ export default function App() {
       drafts.current[selected || "__new__"] = "";
       setDraft("");
       setNewConversation(false);
+      setAccessChoice("inherit");
       setSelected(r.task_id);
       setDetails((d) => ({ ...d, [r.task_id]: r }));
       await refreshTasks();
@@ -1389,42 +1456,62 @@ export default function App() {
                     (t) =>
                       !taskCenter.tasks.some((x) => x.task_id === t.task_id),
                   ),
-                ].map((t) => ({
-                  id: t.task_id,
-                  label:
-                    sessionManager.metadata[t.session_id]?.title ||
-                    t.session_meta?.title ||
-                    t.title ||
-                    "Claude 任务",
-                  summary: statusLabels[t.state] || t.state,
-                  error: details[t.task_id]?.error || t.error,
-                  running: active(t),
-                  state: t.state,
-                  kind: "Claude 分析",
-                  project:
-                    projects.find(
-                      (p) =>
-                        t.workspace === p.path ||
-                        t.workspace?.startsWith(p.path + "/"),
-                    )?.name || t.workspace?.split("/").pop(),
-                  workspace: t.workspace,
-                  started: t.created_at ? t.created_at * 1000 : undefined,
-                  finished: active(t)
-                    ? undefined
-                    : t.updated_at
-                      ? t.updated_at * 1000
-                      : undefined,
-                  model:
-                    details[t.task_id]?.model_resolved ||
-                    t.model_resolved ||
-                    (active(t) ? "确认中" : "未返回"),
-                  mode: t.mode,
-                  action: "打开会话",
-                  open: () => {
-                    setPage("chat");
-                    switchConversation(t.task_id);
-                  },
-                })),
+                ]
+                  .map((t) => taskCenterRecord(t, details[t.task_id]))
+                  .map((t) => ({
+                    id: t.task_id,
+                    label:
+                      sessionManager.metadata[t.session_id]?.title ||
+                      t.session_meta?.title ||
+                      t.title ||
+                      "Claude 任务",
+                    summary: queueLabel(t) || statusLabels[t.state] || t.state,
+                    error: details[t.task_id]?.error || t.error,
+                    running: active(t),
+                    state: t.ownership_unknown ? "interrupted" : t.state,
+                    queue: t.queue,
+                    blocked_reason: t.blocked_reason,
+                    access: t.access,
+                    ownership_unknown: t.ownership_unknown,
+                    cancel:
+                      t.state === "queued"
+                        ? () =>
+                            safe(
+                              request("task_cancel", {
+                                task_id: t.task_id,
+                              }).then(() => fetchTask(t.task_id)),
+                            )
+                        : undefined,
+                    openBlocker: (id: string) => {
+                      setPage("chat");
+                      switchConversation(id);
+                    },
+                    kind:
+                      t.access === "analysis" ? "Claude 分析" : "Claude 开发",
+                    project:
+                      projects.find(
+                        (p) =>
+                          t.workspace === p.path ||
+                          t.workspace?.startsWith(p.path + "/"),
+                      )?.name || t.workspace?.split("/").pop(),
+                    workspace: t.workspace,
+                    started: t.created_at ? t.created_at * 1000 : undefined,
+                    finished: active(t)
+                      ? undefined
+                      : t.updated_at
+                        ? t.updated_at * 1000
+                        : undefined,
+                    model:
+                      details[t.task_id]?.model_resolved ||
+                      t.model_resolved ||
+                      (active(t) ? "确认中" : "未返回"),
+                    mode: t.mode,
+                    action: "打开会话",
+                    open: () => {
+                      setPage("chat");
+                      switchConversation(t.task_id);
+                    },
+                  })),
               ]}
               warning={taskCenter.error}
               account={`${profile.user}@${profile.host}:${profile.port}`}
@@ -1730,8 +1817,22 @@ export default function App() {
                 </div>
                 <div className="status-row">
                   <span>新会话默认</span>
-                  <Badge variant="outline">全自动</Badge>
+                  <Badge variant="outline">
+                    全自动 ·{" "}
+                    {connection.policy?.read_only ? "分析" : "可选择分析或开发"}
+                  </Badge>
                 </div>
+                <ProjectPolicy
+                  connection={connection}
+                  refresh={refreshConnection}
+                  onTasks={() => {
+                    const t = taskCenter.tasks.find(
+                      (x) => x.access !== "analysis" && active(x),
+                    );
+                    setPage("chat");
+                    if (t) switchConversation(t.task_id || t.id);
+                  }}
+                />
               </Panel>
               <Panel title="远端运行环境">
                 <div className="environment-row compact-environment">
@@ -2126,6 +2227,11 @@ export default function App() {
                   </div>
                   {task && !newConversation && (
                     <Badge variant="outline">
+                      {task.access === "analysis" ? "分析" : "开发"}
+                    </Badge>
+                  )}
+                  {task && !newConversation && (
+                    <Badge variant="outline">
                       {task.mode === "automatic" ? "全自动" : "审批"}
                     </Badge>
                   )}
@@ -2220,7 +2326,35 @@ export default function App() {
                                 {statusLabels[turn.state] || turn.state}
                               </span>
                             </div>
-                            {!Array.isArray(turn.events) ? (
+                            {turn.state === "queued" ||
+                            turn.ownership_unknown ? (
+                              <TaskQueue
+                                task={turn}
+                                onOpen={(id) => switchConversation(id)}
+                                onCancel={
+                                  turn.ownership_unknown
+                                    ? undefined
+                                    : () =>
+                                        safe(
+                                          request("task_cancel", {
+                                            task_id: turn.task_id,
+                                          }).then(() =>
+                                            fetchTask(turn.task_id),
+                                          ),
+                                        )
+                                }
+                                onCheck={() => safe(fetchTask(turn.task_id))}
+                                onRelease={async () => {
+                                  await invoke("task_release", {
+                                    request: {
+                                      task_id: turn.task_id,
+                                      confirmed: true,
+                                    },
+                                  });
+                                  await fetchTask(turn.task_id);
+                                }}
+                              />
+                            ) : !Array.isArray(turn.events) ? (
                               <p role="status" className="muted">
                                 读取会话…
                               </p>
@@ -2252,19 +2386,21 @@ export default function App() {
                                   : "无文本输出"}
                               </p>
                             )}
-                            {turn.error && !taskFailure(turn) && (
-                              <div className="inline-error">
-                                <p>
-                                  {/^[\u4e00-\u9fff]/.test(turn.error)
-                                    ? turn.error.split("\n")[0]
-                                    : "执行失败"}
-                                </p>
-                                <details>
-                                  <summary>原始错误</summary>
-                                  <pre>{turn.error}</pre>
-                                </details>
-                              </div>
-                            )}
+                            {turn.error &&
+                              !turn.ownership_unknown &&
+                              !taskFailure(turn) && (
+                                <div className="inline-error">
+                                  <p>
+                                    {/^[\u4e00-\u9fff]/.test(turn.error)
+                                      ? turn.error.split("\n")[0]
+                                      : "执行失败"}
+                                  </p>
+                                  <details>
+                                    <summary>原始错误</summary>
+                                    <pre>{turn.error}</pre>
+                                  </details>
+                                </div>
+                              )}
                             {(turn.events || []).length > 0 && (
                               <details>
                                 <summary>{turn.events.length} 个步骤</summary>
@@ -2389,6 +2525,43 @@ export default function App() {
                             : draftProject || currentProject),
                       )?.name || "项目"}
                     </Button>
+                    <Select
+                      value={
+                        !runner.capabilities?.includes("analysis_v1")
+                          ? "write"
+                          : connection.policy?.read_only
+                            ? "analysis"
+                            : accessChoice === "inherit"
+                              ? !newConversation && task
+                                ? task.access || "write"
+                                : "analysis"
+                              : accessChoice
+                      }
+                      onValueChange={setAccessChoice}
+                    >
+                      <SelectTrigger
+                        className="scope-select"
+                        aria-label="任务类型"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem
+                          value="analysis"
+                          disabled={
+                            !runner.capabilities?.includes("analysis_v1")
+                          }
+                        >
+                          分析
+                        </SelectItem>
+                        <SelectItem
+                          value="write"
+                          disabled={connection.policy?.read_only === true}
+                        >
+                          开发
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
                     <Select value={mode} onValueChange={setMode}>
                       <SelectTrigger className="mode-select">
                         <SelectValue />
@@ -2468,9 +2641,11 @@ export default function App() {
                     placeholder={
                       selectedSession?.archived && !newConversation
                         ? "恢复会话后继续追问"
-                        : task && !newConversation
-                          ? "继续追问…"
-                          : "描述任务…"
+                        : task?.state === "queued" && !newConversation
+                          ? "本轮排队中，结束后可续聊…"
+                          : task && !newConversation
+                            ? "继续追问…"
+                            : "描述任务…"
                     }
                     onKeyDown={(e) => {
                       if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -2482,7 +2657,7 @@ export default function App() {
                   <div className="composer-footer">
                     <span></span>
                     <div>
-                      {task && active(task) && (
+                      {task && active(task) && task.state !== "queued" && (
                         <Button
                           variant="outline"
                           onClick={() =>
@@ -2494,7 +2669,7 @@ export default function App() {
                           }
                         >
                           <Square size={14} />
-                          停止
+                          {task.state === "queued" ? "取消排队" : "停止"}
                         </Button>
                       )}
                       <Button
@@ -2842,6 +3017,11 @@ export default function App() {
         </DialogContent>
       </Dialog>
       <GitUpdate
+        onOpenTask={(id) => {
+          setGitUpdateOpen(false);
+          setPage("chat");
+          switchConversation(id);
+        }}
         open={gitUpdateOpen}
         path={gitDialogPath || listedPath}
         connectionId={connection.connection_id || ""}

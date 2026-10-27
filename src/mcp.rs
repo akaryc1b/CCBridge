@@ -16,6 +16,10 @@ struct Bridge {
 }
 #[derive(Deserialize, JsonSchema)]
 struct Start {
+    /// analysis: parallel read/search only, existing Claude login. write: file changes, blocked by human policy. Omitted follows account policy.
+    access: Option<String>,
+    /// queue (new Runner default): persist until workspace is free; reject returns busy.
+    on_conflict: Option<String>,
     /// Task instruction. Code must already exist in the configured remote workspace.
     prompt: String,
     /// approval (default) or automatic. Automatic requires the human to enable it in the App.
@@ -66,6 +70,10 @@ struct Status {
 }
 #[derive(Deserialize, JsonSchema)]
 struct Reply {
+    /// analysis or write; omitted preserves previous analysis scope and respects account read-only policy.
+    access: Option<String>,
+    /// queue or reject; same-session concurrent replies are always refused.
+    on_conflict: Option<String>,
     /// Optional model override for this turn; omitted means previous turn selection.
     model: Option<String>,
     model_policy: Option<String>,
@@ -123,7 +131,7 @@ impl Bridge {
         output(local_call(json!({"op":if p.dry_run.unwrap_or(false){"git_update_plan"}else{"git_update"},"path":p.path,"expected":p.expected})).await)
     }
     #[tool(
-        description = "Start remote Claude Code task. Omit local_repository to use the remote workspace selected by the human in the App. Supply it only when matching a specific LOCAL Git repository to its remote clone. Returns task_id immediately. Only remote files are visible; this does not upload local files. Never retry an uncertain start with a different ID: list tasks or reuse the ID."
+        description = "Start remote Claude Code task. Omit local_repository to use the remote workspace selected by the human in the App. Supply it only when matching a specific LOCAL Git repository to its remote clone. Conflicts queue on capable Runner; queued is not failure. Pass on_conflict=reject for immediate busy. Returns task_id immediately. Only remote files are visible; this does not upload local files. Never retry an uncertain start with a different ID: list tasks or reuse the ID."
     )]
     async fn cc_start(
         &self,
@@ -132,7 +140,7 @@ impl Bridge {
         let id = p
             .task_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        output(local_call(json!({"op":"start","prompt":p.prompt,"mode":p.mode.unwrap_or("approval".into()),"task_id":id,"local_repository":p.local_repository,"remote_project":p.remote_project,"model":p.model,"model_policy":p.model_policy})).await)
+        output(local_call(json!({"op":"start","access":p.access,"on_conflict":p.on_conflict,"prompt":p.prompt,"mode":p.mode.unwrap_or("approval".into()),"task_id":id,"local_repository":p.local_repository,"remote_project":p.remote_project,"model":p.model,"model_policy":p.model_policy})).await)
     }
     #[tool(
         description = "Get task state, incremental events, final result, permission requests and next_cursor. Can wait up to 30s. Human approval is only available in the App; do not approve through shell or request CLI."
@@ -173,7 +181,7 @@ impl Bridge {
         &self,
         Parameters(p): Parameters<Reply>,
     ) -> std::result::Result<CallToolResult, rmcp::ErrorData> {
-        output(local_call(json!({"op":"reply","reply_to":p.task_id,"prompt":p.prompt,"model":p.model,"model_policy":p.model_policy,"task_id":p.new_task_id.unwrap_or_else(||uuid::Uuid::new_v4().to_string())})).await)
+        output(local_call(json!({"op":"reply","access":p.access,"on_conflict":p.on_conflict,"reply_to":p.task_id,"prompt":p.prompt,"model":p.model,"model_policy":p.model_policy,"task_id":p.new_task_id.unwrap_or_else(||uuid::Uuid::new_v4().to_string())})).await)
     }
     #[tool(
         description = "Request cancellation of a running remote task. Query status until cancelled; cancellation does not roll back file edits."

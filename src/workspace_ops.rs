@@ -83,15 +83,6 @@ fn protected(p: &Path, home: &Path, extra: &[String]) -> Result<()> {
             bail!("目录是当前工作区、已注册项目或其上级，请先调整项目配置")
         }
     }
-    let tasks = crate::runner::dispatch(json!({"op":"list"}))?;
-    for t in tasks["tasks"].as_array().into_iter().flatten() {
-        if ["queued", "running", "waiting_approval"].contains(&t["state"].as_str().unwrap_or("")) {
-            let w = Path::new(t["workspace"].as_str().unwrap_or(""));
-            if w.starts_with(p) || p.starts_with(w) {
-                bail!("目录有任务正在运行或等待审批，请结束后再操作")
-            }
-        }
-    }
     if p == home {
         bail!("不能修改 HOME")
     };
@@ -150,18 +141,23 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
         }
         let meta: Value = read_json(&slot.join("meta.json"))?;
         let target = inside(h, field(&meta, "original")?)?;
+        let _lease = crate::scheduler::operation(&[target.clone()], "恢复文件")?;
         protected(&target, h, &[])?;
         move_exclusive(&slot.join("item"), &target)?;
         fs::remove_file(slot.join("meta.json"))?;
         fs::remove_dir(slot)?;
         return Ok(json!({"message":"已恢复到原路径","path":target}));
     }
-    if op == "file_create" {
+    if ["file_create", "file_mkdir"].contains(&op) {
         let parent = Path::new(field(v, "path")?).canonicalize()?;
         let n = field(v, "name")?;
         name(n)?;
         let target = inside(h, parent.join(n).to_str().context("路径无效")?)?;
-        protected_running(&target)?;
+        let _lease = crate::scheduler::operation(&[target.clone()], "新建文件")?;
+        if op == "file_mkdir" {
+            fs::create_dir(&target).context("新建文件夹失败，可能已有同名项；未覆盖")?;
+            return Ok(json!({"message":"已新建文件夹","path":target}));
+        }
         use std::os::unix::fs::OpenOptionsExt;
         fs::OpenOptions::new()
             .create_new(true)
@@ -175,6 +171,27 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
     if !p.try_exists()? && p.symlink_metadata().is_err() {
         bail!("文件或文件夹不存在，请刷新目录")
     }
+    let _lease = if ["file_mutate", "branch_change"].contains(&op) {
+        let mut paths = vec![p.canonicalize().unwrap_or(p.clone())];
+        if op == "file_mutate" {
+            if v["action"] == "move" {
+                paths.push(Path::new(field(v, "destination")?).canonicalize()?);
+            }
+            if v["action"] == "rename" {
+                paths.push(p.parent().context("路径无效")?.canonicalize()?);
+            }
+        }
+        Some(crate::scheduler::operation(
+            &paths,
+            if op == "branch_change" {
+                "修改分支"
+            } else {
+                "修改文件"
+            },
+        )?)
+    } else {
+        None
+    };
     if op == "file_mutate" {
         let extra = v["protected"]
             .as_array()
@@ -238,7 +255,6 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
             bail!("请先打开 Git 仓库根目录")
         }
         if op == "branch_change" {
-            protected_running(&p)?;
             if repo.dirty {
                 bail!("仓库有未提交改动，请先处理；不会自动 stash 或丢弃")
             }
@@ -285,18 +301,6 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
             json!({"path":p,"current":current.branch,"dirty":current.dirty,"branches":branches.lines().collect::<Vec<_>>(),"remote_branches":remote.lines().filter(|s|!s.ends_with("/HEAD")).collect::<Vec<_>>()}),
         )
     }
-}
-pub(crate) fn protected_running(p: &Path) -> Result<()> {
-    let tasks = crate::runner::dispatch(json!({"op":"list"}))?;
-    for t in tasks["tasks"].as_array().into_iter().flatten() {
-        if ["queued", "running", "waiting_approval"].contains(&t["state"].as_str().unwrap_or("")) {
-            let w = Path::new(t["workspace"].as_str().unwrap_or(""));
-            if w.starts_with(p) || p.starts_with(w) {
-                bail!("此仓库关联的任务仍在运行，暂不能修改仓库")
-            }
-        }
-    }
-    Ok(())
 }
 #[cfg(test)]
 mod tests {

@@ -60,6 +60,10 @@ jobs:
         run: sh tests/linux-smoke.sh "$PWD/target/release/ccbridge"
       - name: Session search and metadata acceptance
         run: python3 tests/sessions-acceptance.py "$PWD/target/release/ccbridge"
+      - name: Concurrent analysis and human policy acceptance
+        run: |
+          python3 tests/queue-acceptance.py "$PWD/target/release/ccbridge"
+          python3 tests/parallel-acceptance.py "$PWD/target/release/ccbridge"
       - name: Prepare Runner
         run: mkdir -p dist && cp target/release/ccbridge dist/ccbridge-linux-x86_64
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

@@ -8,6 +8,7 @@ export function Confirm({
   action,
   onCancel,
   onConfirm,
+  error,
   busy = false,
   destructive = false,
 }: {
@@ -17,6 +18,7 @@ export function Confirm({
   action: string;
   onCancel: () => void;
   onConfirm: () => void;
+  error?: ReactNode;
   busy?: boolean;
   destructive?: boolean;
 }) {
@@ -34,6 +36,11 @@ export function Confirm({
           <AlertDialog.Description asChild>
             <div className="confirm-body">{children}</div>
           </AlertDialog.Description>
+          {error && (
+            <p className="inline-error" role="alert">
+              {error}
+            </p>
+          )}
           <div className="confirm-actions">
             <Button variant="outline" disabled={busy} onClick={onCancel}>
               取消

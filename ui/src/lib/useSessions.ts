@@ -19,11 +19,19 @@ export function useSessions(
   const lastConnection = useRef(connection);
   if (connection.connection_id) lastConnection.current = connection;
   const [hasUpdates, setHasUpdates] = useState(false);
+  const expanded = useRef(false);
   const initialized = useRef(false),
     lastStamp = useRef(historyStamp);
   useEffect(() => {
-    if (initialized.current && lastStamp.current !== historyStamp)
+    if (initialized.current && lastStamp.current !== historyStamp) {
       setHasUpdates(true);
+      if (
+        !queryRef.current.query.trim() &&
+        !queryRef.current.archive &&
+        !expanded.current
+      )
+        void load();
+    }
     lastStamp.current = historyStamp;
   }, [historyStamp]);
   const generation = useRef(0),
@@ -59,6 +67,7 @@ export function useSessions(
         context.project !== queryRef.current.project
       )
         return;
+      expanded.current = !!next;
       setItems((old) =>
         next
           ? [...old, ...r.sessions].filter(

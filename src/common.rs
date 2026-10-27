@@ -130,6 +130,7 @@ pub fn error_summary(raw: &str) -> String {
 pub struct CodedError {
     pub code: String,
     pub message: String,
+    pub blockers: Option<Value>,
 }
 impl std::fmt::Display for CodedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -141,6 +142,7 @@ pub fn coded(code: &str, message: impl Into<String>) -> anyhow::Error {
     CodedError {
         code: code.into(),
         message: message.into(),
+        blockers: None,
     }
     .into()
 }
@@ -154,7 +156,7 @@ pub fn envelope(r: Result<Value>) -> Value {
         Ok(v) => json!({"ok":true,"data":v}),
         Err(e) => {
             let raw = format!("{e:#}");
-            json!({"ok":false,"error":raw,"error_detail":{"code":error_code(&e),"message_zh":error_summary(&raw),"diagnostic":raw,"retryable":false}})
+            json!({"ok":false,"error":raw,"error_detail":{"code":error_code(&e),"message_zh":error_summary(&raw),"diagnostic":raw,"retryable":error_code(&e)=="workspace_busy","blockers":e.downcast_ref::<CodedError>().and_then(|e|e.blockers.as_ref())}})
         }
     }
 }
@@ -162,12 +164,18 @@ pub fn unwrap(v: Value) -> Result<Value> {
     if v["ok"] == true {
         Ok(v["data"].clone())
     } else {
-        Err(coded(
-            v["error_detail"]["code"]
+        let mut err = CodedError {
+            code: v["error_detail"]["code"]
                 .as_str()
-                .unwrap_or("operation_failed"),
-            v["error"].as_str().unwrap_or("服务返回了无效响应"),
-        ))
+                .unwrap_or("operation_failed")
+                .into(),
+            message: v["error"].as_str().unwrap_or("服务返回了无效响应").into(),
+            blockers: None,
+        };
+        if v["error_detail"]["blockers"].is_array() {
+            err.blockers = Some(v["error_detail"]["blockers"].clone());
+        }
+        Err(err.into())
     }
 }
 

@@ -238,6 +238,7 @@ export function SessionList({
                     <button onClick={() => onSelect(s.task_id)}>
                       <strong>{s.title}</strong>
                       <span>
+                        {s.access === "analysis" ? "分析 · " : ""}
                         {time(s.updated_at || s.created_at)}
                         {s.legacy ? " · 旧记录" : ""}
                       </span>

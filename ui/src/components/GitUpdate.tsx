@@ -1,3 +1,4 @@
+import { Confirm } from "./common/Confirm";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -28,6 +29,7 @@ export function GitUpdate({
   onClose,
   onUpdated,
   onAuth,
+  onOpenTask,
   onOperation,
   operationId,
 }: {
@@ -37,6 +39,7 @@ export function GitUpdate({
   onClose: () => void;
   onUpdated: () => void;
   onAuth: (url: string) => void;
+  onOpenTask?: (id: string) => void;
   onOperation?: (op: D) => void;
   operationId?: string;
 }) {
@@ -46,6 +49,7 @@ export function GitUpdate({
     [starting, setStarting] = useState(false),
     [id, setId] = useState<string>(),
     [error, setError] = useState("");
+  const [releaseConfirm, setReleaseConfirm] = useState(false);
   const [verifiedUnknown, setVerifiedUnknown] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const scope = useRef(0);
@@ -57,6 +61,15 @@ export function GitUpdate({
     id,
   );
   const running = starting || snap?.state === "running";
+  const busyRows = result.filter((r) => r.code === "workspace_busy");
+  const busyOnly = result.length > 0 && busyRows.length === result.length;
+  const blockers = busyRows
+    .flatMap((r) => r.blockers || [])
+    .filter(
+      (b: D, i: number, a: D[]) =>
+        a.findIndex((x) => x.id === b.id && x.title === b.title) === i,
+    );
+
   useEffect(() => {
     scope.current++;
     setId(undefined);
@@ -184,7 +197,53 @@ export function GitUpdate({
           </DialogDescription>
         </DialogHeader>
         <div className="dialog-body">
-          <OperationBar operation={reviewing ? null : snap} />
+          <OperationBar operation={reviewing || busyOnly ? null : snap} />
+          {snap?.remote_lease && !running && (
+            <div className="task-queue-status">
+              <strong>更新状态未确认 · 目录保持占用</strong>
+              <p className="muted">确认原更新已停止后，才能释放占用。</p>
+              <Button variant="outline" onClick={() => setReleaseConfirm(true)}>
+                释放占用…
+              </Button>
+            </div>
+          )}
+          <Confirm
+            open={releaseConfirm}
+            error={error}
+            title="释放更新占用？"
+            action="确认已停止并释放"
+            destructive
+            onCancel={() => setReleaseConfirm(false)}
+            onConfirm={() => {
+              void invoke("operation_release", {
+                request: { operation_id: snap?.id, confirmed: true },
+              })
+                .then(() => {
+                  setReleaseConfirm(false);
+                  setError("");
+                })
+                .catch((e) => setError(errorText(e)));
+            }}
+          >
+            仅在你已确认服务器上的更新操作停止后继续。释放后，排队任务可能立即开始；不会重放更新。
+          </Confirm>
+          {!reviewing && blockers.length > 0 && (
+            <div className="task-queue-status" role="status">
+              <strong>目录正在使用中</strong>
+              <div className="task-queue-description">
+                <span>等待「{blockers[0].title}」完成后可更新。</span>
+                {blockers[0].kind === "task" && onOpenTask && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onOpenTask(blockers[0].id)}
+                  >
+                    查看任务
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
           {checking && !snap && (
             <p role="status">
               <Loader2 size={14} className="spin" />
@@ -197,29 +256,34 @@ export function GitUpdate({
               const blocked =
                 (r.blocked && !r.state) ||
                 ["dirty", "no_upstream"].includes(r.code);
-              const message = blocked
-                ? `跳过 · ${r.blocked || r.message}`
-                : r.state === "updated"
-                  ? "已更新"
-                  : r.state === "unchanged"
-                    ? "已是最新"
-                    : r.state === "ahead"
-                      ? "有未推送提交"
-                      : r.state === "failed"
-                        ? r.message
-                        : current
-                          ? "处理中"
-                          : running
-                            ? "等待"
-                            : "待检查";
+              const message =
+                r.code === "workspace_busy"
+                  ? "未更新"
+                  : blocked
+                    ? `跳过 · ${r.blocked || r.message}`
+                    : r.state === "updated"
+                      ? "已更新"
+                      : r.state === "unchanged"
+                        ? "已是最新"
+                        : r.state === "ahead"
+                          ? "有未推送提交"
+                          : r.state === "failed"
+                            ? r.message
+                            : current
+                              ? "处理中"
+                              : running
+                                ? "等待"
+                                : "待检查";
               const Icon =
-                r.state === "failed"
-                  ? AlertCircle
-                  : r.state
-                    ? CheckCircle2
-                    : current
-                      ? Loader2
-                      : Clock;
+                r.code === "workspace_busy"
+                  ? Clock
+                  : r.state === "failed"
+                    ? AlertCircle
+                    : r.state
+                      ? CheckCircle2
+                      : current
+                        ? Loader2
+                        : Clock;
               return (
                 <div className="repo-item" key={r.path}>
                   <Icon
@@ -227,7 +291,7 @@ export function GitUpdate({
                     className={
                       current
                         ? "spin"
-                        : r.state === "failed"
+                        : r.state === "failed" && r.code !== "workspace_busy"
                           ? "text-destructive"
                           : "muted"
                     }
@@ -245,7 +309,9 @@ export function GitUpdate({
                     )}
                     <span
                       className={
-                        r.state === "failed" ? "text-destructive" : "muted"
+                        r.state === "failed" && r.code !== "workspace_busy"
+                          ? "text-destructive"
+                          : "muted"
                       }
                     >
                       {message}
@@ -286,7 +352,7 @@ export function GitUpdate({
                   {checking ? "检查中…" : finished ? "检查新更新" : "重新检查"}
                 </Button>
               )}
-              {!completed && (!finished || failed.length > 0) && (
+              {!busyOnly && !completed && (!finished || failed.length > 0) && (
                 <Button
                   disabled={
                     checking ||

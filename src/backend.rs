@@ -5,6 +5,52 @@ use std::sync::{Arc, mpsc};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
+async fn remote_lease_begin(
+    c: &ssh::Connection,
+    path: &str,
+    operation: Option<&crate::operations::Operation>,
+    human: bool,
+) -> Result<Option<String>> {
+    if !c.probe["capabilities"]
+        .as_array()
+        .is_some_and(|a| a.iter().any(|x| x == "lease_v1"))
+    {
+        return Ok(None);
+    }
+    let token = uuid::Uuid::new_v4().to_string();
+    if let Some(o) = operation {
+        o.patch(json!({"remote_lease":{"path":path,"token":token}}));
+    }
+    if let Err(e) = c
+        .rpc(json!({"op":"git_update_begin","origin":if human{"app"}else{"mcp"},"path":path,"lease_token":token}))
+        .await
+    {
+        if error_code(&e) == "workspace_busy" {
+            if let Some(o) = operation {
+                o.patch(json!({"remote_lease":null}));
+            }
+        }
+        return Err(e);
+    }
+    Ok(Some(token))
+}
+async fn remote_lease_end(
+    c: &ssh::Connection,
+    path: &str,
+    token: Option<String>,
+    operation: Option<&crate::operations::Operation>,
+    result: Result<Value>,
+) -> Result<Value> {
+    if let Some(token) = token {
+        c.rpc(json!({"op":"git_update_end","path":path,"lease_token":token}))
+            .await
+            .context("操作占用尚未释放，请重新连接后检查；不会自动重放")?;
+        if let Some(o) = operation {
+            o.patch(json!({"remote_lease":null}));
+        }
+    }
+    result
+}
 pub struct BackendState {
     pub connection: Mutex<Option<ssh::Connection>>,
     pub operations: crate::operations::Store,
@@ -55,7 +101,9 @@ fn ensure_update_tasks_idle(value: &Value) -> Result<()> {
     let active: Vec<_> = tasks
         .iter()
         .filter(|t| {
-            ["queued", "running", "waiting_approval"].contains(&t["state"].as_str().unwrap_or(""))
+            t["ownership_unknown"] == true
+                || ["queued", "running", "waiting_approval"]
+                    .contains(&t["state"].as_str().unwrap_or(""))
         })
         .collect();
     if !active.is_empty() {
@@ -233,8 +281,6 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "forget_password",
             "load_password",
             "configure_codex",
-            "start",
-            "reply",
             "clone_into_directory",
             "prepare_repositories",
             "install_runner",
@@ -255,6 +301,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "project_save",
             "project_remove",
             "set_auto",
+            "policy_set",
             "bind_repository",
             "clear_binding",
         ]
@@ -268,6 +315,8 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
     };
     let _activity = if writing
         || [
+            "start",
+            "reply",
             "db_test",
             "db_protocol_test",
             "session_meta_set",
@@ -672,9 +721,26 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         return Ok(json!({"connected":false,"note":"远端任务继续运行；重新连接后可查询"}));
     }
     if op == "connection_status" {
-        return Ok(match guard.as_ref() {
+        let current = guard.clone();
+        drop(guard);
+        return Ok(match current.as_ref() {
             Some(c) => {
                 let mut r = c.info();
+                if c.probe["capabilities"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|v| v == "policy_v1"))
+                {
+                    r["policy"] = match tokio::time::timeout(
+                        std::time::Duration::from_secs(8),
+                        c.rpc(json!({"op":"policy_get"})),
+                    )
+                    .await
+                    {
+                        Ok(Ok(p)) => p,
+                        Ok(Err(e)) => json!({"error":error_summary(&format!("{e:#}"))}),
+                        Err(_) => json!({"error":"读取保护设置超时"}),
+                    };
+                }
                 r["operations"] = json!({"git_update":crate::operations::snapshot(&state.operations,&c.operation_account(),&c.connection_id,None,Some("git_update"),None),"branch_fetch":crate::operations::snapshot(&state.operations,&c.operation_account(),&c.connection_id,None,Some("branch_fetch"),None)});
                 r
             }
@@ -701,6 +767,20 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     }
     if c.handle.is_closed() {
         bail!("SSH 已断开，请在 App 重新连接；不要自动重放任务")
+    }
+    if ["policy_get", "policy_set"].contains(&op.as_str()) {
+        if !human {
+            return Err(coded("human_required", "保护设置只能由人在 App 操作"));
+        }
+        if !c.probe["capabilities"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|v| v == "policy_v1"))
+        {
+            bail!("需要更新服务端后才能设置项目保护");
+        }
+        let mut request = v.clone();
+        request["origin"] = json!("app");
+        return c.rpc(request).await;
     }
     if ["claude_models", "claude_usage"].contains(&op.as_str()) {
         if !human {
@@ -806,6 +886,31 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         operation.patch(json!({"verified_at":now(),"verification":message}));
         return Ok(json!({"message":message,"verified_at":now()}));
     }
+    if op == "operation_release" {
+        if !human || v["confirmed"] != true {
+            bail!("只能在 App 确认释放更新占用")
+        }
+        let id = field(&v, "operation_id")?;
+        let snap = crate::operations::snapshot(
+            &state.operations,
+            &c.operation_account(),
+            &c.connection_id,
+            Some(id),
+            None,
+            None,
+        );
+        if snap["state"] == "running" {
+            bail!("操作仍在运行，不能释放")
+        }
+        let lease = &snap["remote_lease"];
+        c.rpc(json!({"op":"git_update_end","path":field(lease,"path")?,"lease_token":field(lease,"token")?})).await?;
+        let operation = crate::operations::Operation {
+            store: state.operations.clone(),
+            id: id.into(),
+        };
+        operation.patch(json!({"remote_lease":null,"verification":"用户确认操作已停止并释放占用","verified_at":now()}));
+        return Ok(json!({"released":true}));
+    }
     if op == "operation_progress" {
         if !human {
             bail!("操作快照仅供 App 查询")
@@ -894,6 +999,20 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             id: id.into(),
         });
     if ["git_update_plan", "git_update"].contains(&op.as_str()) {
+        if !human
+            && op == "git_update"
+            && c.probe["capabilities"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == "policy_v1"))
+        {
+            let p = c.rpc(json!({"op":"policy_get"})).await?;
+            if p["read_only"] == true {
+                return Err(coded(
+                    "policy_blocked",
+                    "AI 修改已禁止，请在 App 手动更新仓库",
+                ));
+            }
+        }
         if !human && op == "git_update" && !c.profile.allow_auto {
             bail!("请先在 App 开启全自动授权，再通过 MCP 更新代码")
         }
@@ -942,8 +1061,13 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             if let Some(o) = &operation {
                 o.patch(json!({"name":repo["name"],"current_path":path,"phase":"checking","objects":null,"bytes":null}));
             }
+            let leases = c.probe["capabilities"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x == "lease_v1"));
+            let mut lease_token = None;
             let result: Result<Value> = async {
-                c.rpc(json!({"op":"git_update_preflight","path":path,"expected":repo}))
+                if leases {let token=uuid::Uuid::new_v4().to_string();lease_token=Some(token.clone());if let Some(o)=&operation{o.patch(json!({"remote_lease":{"path":path,"token":token}}));}c.rpc(json!({"op":"git_update_begin","origin":if human{"app"}else{"mcp"},"path":path,"lease_token":token})).await?;}
+                c.rpc(json!({"op":"git_update_preflight","origin":if human{"app"}else{"mcp"},"path":path,"expected":repo,"lease_token":lease_token}))
                     .await?;
                 if let Some(o) = &operation {
                     o.patch(json!({"phase":"fetch"}));
@@ -960,14 +1084,34 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 if let Some(o) = &operation {
                     o.patch(json!({"phase":"apply"}));
                 }
-                c.rpc(json!({"op":"git_update_apply","path":path,"expected":repo}))
+                c.rpc(json!({"op":"git_update_apply","origin":if human{"app"}else{"mcp"},"path":path,"expected":repo,"lease_token":lease_token}))
                     .await
             }
             .await;
+            let result = if let Some(token) = lease_token {
+                match c
+                    .rpc(json!({"op":"git_update_end","path":path,"lease_token":token}))
+                    .await
+                {
+                    Ok(_) => {
+                        if let Some(o) = &operation {
+                            o.patch(json!({"remote_lease":null}));
+                        }
+                        result
+                    }
+                    Err(e) => {
+                        return Err(
+                            e.context("更新操作占用尚未释放，请重新连接后检查；不会自动重放")
+                        );
+                    }
+                }
+            } else {
+                result
+            };
             let mut r = match result {
                 Ok(r) => r,
                 Err(e) => {
-                    json!({"path":path,"branch":repo["branch"],"state":"failed","code":error_code(&e),"message":crate::common::error_summary(&format!("{e:#}"))})
+                    json!({"path":path,"branch":repo["branch"],"state":"failed","code":error_code(&e),"message":crate::common::error_summary(&format!("{e:#}")),"blockers":e.downcast_ref::<CodedError>().and_then(|e|e.blockers.as_ref())})
                 }
             };
             r["url"] = repo["url"].clone();
@@ -1022,9 +1166,10 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             let cb = operation
                 .clone()
                 .map(|o| Arc::new(move |p: Value| o.patch(p)) as Arc<dyn Fn(Value) + Send + Sync>);
-            return c
-                .git_fetch_remote_progress(field(&v, "path")?, "origin", cb)
-                .await;
+            let path = field(&v, "path")?;
+            let token = remote_lease_begin(&c, path, operation.as_ref(), human).await?;
+            let r = c.git_fetch_remote_progress(path, "origin", cb).await;
+            return remote_lease_end(&c, path, token, operation.as_ref(), r).await;
         }
         return c.rpc(req).await;
     }
@@ -1045,10 +1190,20 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             bail!("远端文件管理和工作区选择只能由人在 App 明确操作")
         }
         match op.as_str() {
-            "create_directory" => return c.mkdir(field(&v, "path")?, field(&v, "name")?).await,
+            "create_directory" => {
+                if c.probe["capabilities"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|x| x == "lease_v1"))
+                {
+                    return c.rpc(json!({"op":"file_mkdir","path":field(&v,"path")?,"name":field(&v,"name")?})).await;
+                }
+                return c.mkdir(field(&v, "path")?, field(&v, "name")?).await;
+            }
             "file_preview" => return c.preview_file(field(&v, "path")?).await,
             "clone_into_directory" => {
-                return c
+                let path = field(&v, "path")?;
+                let token = remote_lease_begin(&c, path, operation.as_ref(), human).await?;
+                let r = c
                     .clone_observed(
                         field(&v, "path")?,
                         field(&v, "urls")?,
@@ -1063,6 +1218,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                         operation.clone(),
                     )
                     .await;
+                return remote_lease_end(&c, path, token, operation.as_ref(), r).await;
             }
             "select_remote_workspace" => {
                 let listing = c.browse(field(&v, "path")?, false).await?;
@@ -1113,7 +1269,15 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if c.claude_path.is_empty() {
             bail!("远端未找到 Claude Code")
         }
-        return c.rpc(json!({"op":"start","task_id":uuid::Uuid::new_v4().to_string(),"workspace":c.environment.home,"claude":c.claude_path,"model":c.profile.model,"mode":"approval","prompt":"这是一次连接自检。不要调用任何工具，不读取或修改任何文件，不执行命令。仅回复 CCBRIDGE_OK。"})).await;
+        let diagnostic_workspace = if c.probe["capabilities"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|x| x == "task_queue_v1"))
+        {
+            c.rpc(json!({"op":"diagnostic_workspace"})).await?["path"].clone()
+        } else {
+            json!(c.environment.home)
+        };
+        return c.rpc(json!({"op":"start","diagnostic":true,"task_id":uuid::Uuid::new_v4().to_string(),"workspace":diagnostic_workspace,"claude":c.claude_path,"model":c.profile.model,"mode":"approval","prompt":"这是一次连接自检。不要调用任何工具，不读取或修改任何文件，不执行命令。仅回复 CCBRIDGE_OK。"})).await;
     }
     if op == "prepare_repositories" {
         if !human {
@@ -1220,6 +1384,18 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         bail!("Runner 协议不兼容，请在服务器页更新当前账号 Runner；已有任务仍可查询")
     }
     let mut request = v.clone();
+    request["origin"] = json!(if human { "app" } else { "mcp" });
+    if ["start", "reply"].contains(&op.as_str())
+        && v["access"] == "analysis"
+        && !c.probe["capabilities"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|v| v == "analysis_v1"))
+    {
+        return Err(coded(
+            "analysis_unsupported",
+            "需要更新服务端后才能使用分析任务",
+        ));
+    }
     match op.as_str() {
         "start" => {
             let mode = v["mode"].as_str().unwrap_or("approval");
@@ -1288,8 +1464,8 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 request[key] = value.clone();
             }
         }
-        "status" | "result" | "cancel" | "approve" => {
-            if op == "approve" && !human {
+        "status" | "result" | "cancel" | "approve" | "task_release" => {
+            if ["approve", "task_release"].contains(&op.as_str()) && !human {
                 bail!("审批只能由用户在 App 操作")
             }
             let old=c.rpc(json!({"op":"status","task_id":field(&v,"task_id")?,"cursor":v["cursor"].as_u64().unwrap_or(0)})).await?;
@@ -1312,6 +1488,20 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             return Ok(json!({"tasks":tasks}));
         }
         _ => bail!("不支持该操作"),
+    }
+    if ["start", "reply"].contains(&op.as_str()) {
+        let capable = c.probe["capabilities"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|x| x == "task_queue_v1"));
+        if v["on_conflict"] == "queue" && !capable {
+            bail!("更新服务端程序后可排队；请求未派发")
+        }
+        request["on_conflict"] =
+            json!(
+                v["on_conflict"]
+                    .as_str()
+                    .unwrap_or(if capable { "queue" } else { "reject" })
+            );
     }
     c.rpc(request).await
 }

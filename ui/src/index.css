@@ -2900,3 +2900,38 @@ header > h1 {
 .session-group-label > [data-slot="button"]:last-child {
   margin-left: 0;
 }
+
+.task-queue-status {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px;
+  margin: 18px 0;
+}
+.task-queue-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+.task-queue-description {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted-text);
+  font-size: 13px;
+  line-height: 1.7;
+  margin-top: 14px;
+  overflow-wrap: anywhere;
+}
+.task-queue-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 18px;
+}
+.task-queue-actions:empty {
+  display: none;
+}
+
+.policy-switch-row{justify-content:space-between;border-top:1px solid var(--line);padding-top:16px;margin-top:12px}.policy-switch-row strong{font-size:14px;font-weight:500}.policy-switch-row p{font-size:13px;margin:6px 0 0}.policy-note{font-size:13px;margin:10px 0}.policy-existing{display:flex;align-items:flex-start;gap:10px;background:var(--warning-bg);padding:13px 14px;border-radius:8px;margin-top:14px;font-size:13px}.policy-existing>svg{color:var(--warning);margin-top:3px;flex-shrink:0}.policy-existing p{margin:4px 0 0;color:var(--muted-text);font-size:13px}.policy-existing button{margin-left:auto}.policy-feedback{display:flex;align-items:center;justify-content:space-between}.scope-select{min-width:80px}
+.policy-switch-row{flex-direction:row}

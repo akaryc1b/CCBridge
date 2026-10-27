@@ -46,3 +46,8 @@ pub mod operations;
 pub mod claude_info;
 
 pub mod sessions;
+
+pub mod scheduler;
+
+pub mod analysis;
+pub mod policy;

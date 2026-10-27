@@ -8,6 +8,7 @@ export function operationSummary(op: {
     (
       {
         done: "已完成",
+        blocked: "目录占用",
         partial: "部分失败",
         failed: "失败",
         unknown: "结果待确认",
