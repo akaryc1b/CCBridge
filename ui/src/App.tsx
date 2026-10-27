@@ -1096,6 +1096,10 @@ export default function App() {
     );
   }, []);
   useEffect(() => {
+    const timer = setInterval(() => safe(refreshConnection()), 5000);
+    return () => clearInterval(timer);
+  }, []);
+  useEffect(() => {
     if (!connected) return;
     safe(refreshConnection());
     safe(refreshTasks());
@@ -1103,7 +1107,6 @@ export default function App() {
     const timer = setInterval(() => {
       safe(refreshTasks());
       if (document.hidden) return;
-      safe(refreshConnection());
       safe(refreshProjects());
       if (selectedRef.current) safe(fetchTask(selectedRef.current));
     }, 5000);
@@ -1942,9 +1945,9 @@ export default function App() {
               />
               <Panel title="启动与密码">
                 <div className="status-row">
-                  <span>启动时自动连接</span>
+                  <span>自动连接</span>
                   <Switch
-                    aria-label="启动时自动连接SSH"
+                    aria-label="自动连接SSH"
                     checked={preferences.auto_connect === true}
                     disabled={connecting || busy.has("preferences_save")}
                     onCheckedChange={(v) =>
@@ -1957,6 +1960,22 @@ export default function App() {
                     }
                   />
                 </div>
+                {!connected && connection.reconnect?.state && (
+                  <div className="status-row" role="status">
+                    <span>
+                      {connection.reconnect.state === "connecting"
+                        ? "正在重新连接"
+                        : connection.reconnect.state === "waiting"
+                          ? "等待网络恢复 · 将自动重连"
+                          : "自动连接已暂停"}
+                    </span>
+                    {connection.reconnect.error && (
+                      <span className="muted">
+                        {connection.reconnect.error}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <div className="status-row">
                   <span>SSH 密码</span>
                   <span className="status-value">

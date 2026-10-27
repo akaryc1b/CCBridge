@@ -58,6 +58,8 @@ pub struct BackendState {
     pub gate: std::sync::Mutex<crate::update_gate::UpdateGate>,
     pub writes: Mutex<()>,
     pub auto_attempted: std::sync::atomic::AtomicBool,
+    pub reconnect_enabled: std::sync::atomic::AtomicBool,
+    pub reconnect_status: std::sync::Mutex<Value>,
 }
 impl BackendState {
     pub fn new(connection: Option<ssh::Connection>) -> Self {
@@ -68,6 +70,8 @@ impl BackendState {
             gate: Default::default(),
             writes: Mutex::new(()),
             auto_attempted: std::sync::atomic::AtomicBool::new(false),
+            reconnect_enabled: std::sync::atomic::AtomicBool::new(false),
+            reconnect_status: std::sync::Mutex::new(json!({})),
         }
     }
 }
@@ -195,12 +199,26 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
         }
         let p: Profile = read_json(&app_dir()?.join("profile.json"))?;
         validate_auto_target_at(&app_dir()?, &p)?;
-        return Box::pin(dispatch(
-            state,
-            json!({"op":"connect","profile":p,"password":""}),
+        state
+            .reconnect_enabled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let result = Box::pin(dispatch(
+            state.clone(),
+            json!({"op":"connect","profile":p,"password":"","background_reconnect":true}),
             true,
         ))
         .await;
+        if let Err(e) = &result {
+            let error = format!("{e:#}");
+            if reconnect_requires_action(&error) {
+                state
+                    .reconnect_enabled
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                *state.reconnect_status.lock().unwrap() =
+                    json!({"state":"action_required","error":error_summary(&error)});
+            }
+        }
+        return result;
     }
 
     if !human && v["client_protocol"] != 1 && ["status", "result"].contains(&op) {
@@ -306,6 +324,13 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "clear_binding",
         ]
         .contains(&op);
+    // A user's disconnect intent must stop retries even while a transport attempt
+    // still owns the write lock. Its eventual result must not reconnect behind them.
+    if human && op == "disconnect" {
+        state
+            .reconnect_enabled
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
     let _write = if writing {
         Some(state.writes.try_lock().map_err(|_| {
             anyhow::anyhow!("另一项写入操作仍在执行，请等待完成；状态查询与审批不受影响")
@@ -643,6 +668,11 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if !human {
             bail!("只能在 App 登录")
         }
+        if v["background_reconnect"] != true {
+            state
+                .reconnect_enabled
+                .store(false, std::sync::atomic::Ordering::SeqCst);
+        }
         let mut p: Profile = serde_json::from_value(v["profile"].clone())?;
         p.credential_store = "file".into();
         p.validate()?;
@@ -673,6 +703,21 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             None
         };
         let mut conn = ssh::connect(p, password).await?;
+        if v["background_reconnect"] == true
+            && !state
+                .reconnect_enabled
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            let _ = conn
+                .handle
+                .disconnect(
+                    russh::Disconnect::ByApplication,
+                    "Reconnect cancelled",
+                    "en",
+                )
+                .await;
+            bail!("自动重连已取消");
+        }
         let mut credential_warning = None::<String>;
         #[cfg(target_os = "macos")]
         if let Some(password) = remembered {
@@ -703,6 +748,10 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 json!("SSH已连接，但新密码未保存，原保存方式保持不变。请检查所选存储后重新保存。");
         }
         *state.connection.lock().await = Some(conn);
+        state
+            .reconnect_enabled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        *state.reconnect_status.lock().unwrap() = json!({});
         return Ok(r);
     }
     let mut guard = state.connection.lock().await;
@@ -710,6 +759,10 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         if !human {
             bail!("只能在 App 断开连接")
         }
+        state
+            .reconnect_enabled
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        *state.reconnect_status.lock().unwrap() = json!({});
         let disconnected = guard.take();
         drop(guard);
         if let Some(conn) = disconnected {
@@ -723,12 +776,13 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     if op == "connection_status" {
         let current = guard.clone();
         drop(guard);
-        return Ok(match current.as_ref() {
+        let mut status = match current.as_ref() {
             Some(c) => {
                 let mut r = c.info();
-                if c.probe["capabilities"]
-                    .as_array()
-                    .is_some_and(|a| a.iter().any(|v| v == "policy_v1"))
+                if r["connected"] == true
+                    && c.probe["capabilities"]
+                        .as_array()
+                        .is_some_and(|a| a.iter().any(|v| v == "policy_v1"))
                 {
                     r["policy"] = match tokio::time::timeout(
                         std::time::Duration::from_secs(8),
@@ -751,7 +805,9 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 let waiting = false;
                 json!({"connected":false,"waiting_for_keychain":waiting})
             }
-        });
+        };
+        status["reconnect"] = state.reconnect_status.lock().unwrap().clone();
+        return Ok(status);
     }
     let mut c = guard
         .as_ref()
@@ -1505,6 +1561,92 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
     }
     c.rpc(request).await
 }
+fn reconnect_requires_action(error: &str) -> bool {
+    [
+        "HOST_KEY:",
+        "密码认证失败",
+        "读取已保存SSH密码失败",
+        "尚未在本机保存密码",
+        "自动连接需要",
+        "旧密码迁移",
+        "凭据目录或文件权限不安全",
+        "凭据权限不安全",
+    ]
+    .iter()
+    .any(|reason| error.contains(reason))
+}
+
+// Reconnect transport only. Never replay a task, Git operation or pending RPC.
+pub(crate) async fn reconnect_loop(state: Shared) {
+    let mut failures = 0u32;
+    loop {
+        let delay = (5u64 << failures.min(3)).min(30);
+        tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+        if !state
+            .reconnect_enabled
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            failures = 0;
+            continue;
+        }
+        if state
+            .connection
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|c| !c.handle.is_closed())
+        {
+            failures = 0;
+            continue;
+        }
+        if state.gate.lock().unwrap().draining {
+            continue;
+        }
+        let attempt: Result<Value> = async {
+            let root = app_dir()?;
+            let prefs: Value = read_json(&root.join("preferences.json"))?;
+            if prefs["auto_connect"] != true {
+                return Ok(json!({"skipped":true}));
+            }
+            let p: Profile = read_json(&root.join("profile.json"))?;
+            validate_auto_target_at(&root, &p)?;
+            *state.reconnect_status.lock().unwrap() = json!({"state":"connecting"});
+            dispatch(
+                state.clone(),
+                json!({"op":"connect","profile":p,"password":"","background_reconnect":true}),
+                true,
+            )
+            .await
+        }
+        .await;
+        match attempt {
+            Ok(_) => {
+                failures = 0;
+            }
+            Err(e) => {
+                if !state
+                    .reconnect_enabled
+                    .load(std::sync::atomic::Ordering::SeqCst)
+                {
+                    *state.reconnect_status.lock().unwrap() = json!({});
+                    continue;
+                }
+                let error = format!("{e:#}");
+                if reconnect_requires_action(&error) {
+                    state
+                        .reconnect_enabled
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    *state.reconnect_status.lock().unwrap() =
+                        json!({"state":"action_required","error":error_summary(&error)});
+                } else {
+                    failures = failures.saturating_add(1);
+                    *state.reconnect_status.lock().unwrap() = json!({"state":"waiting","retry_seconds":(5u64 << failures.min(3)).min(30)});
+                }
+            }
+        }
+    }
+}
+
 pub fn start_backend() -> (
     tokio::sync::mpsc::UnboundedSender<Job>,
     mpsc::Receiver<Value>,
@@ -1538,6 +1680,7 @@ pub fn start_backend() -> (
                 let listener = tokio::net::UnixListener::bind(&path)?;
                 use std::os::unix::fs::PermissionsExt;
                 std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+                tokio::spawn(reconnect_loop(state.clone()));
                 let net_state = state.clone();
                 tokio::spawn(async move {
                     while let Ok((stream, _)) = listener.accept().await {
@@ -1710,5 +1853,56 @@ mod mode_tests {
             "approval"
         );
         assert!(reply_mode("approval", Some("invalid"), true, true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod reconnect_tests {
+    use super::*;
+    #[test]
+    fn credentials_and_changed_fingerprint_need_human_action() {
+        assert!(reconnect_requires_action("HOST_KEY:SHA256:changed"));
+        assert!(reconnect_requires_action("SSH 密码认证失败。检查账号密码"));
+        assert!(reconnect_requires_action(
+            "读取已保存SSH密码失败，请在App输入"
+        ));
+        assert!(!reconnect_requires_action(
+            "Connection refused (os error 61)"
+        ));
+        assert!(!reconnect_requires_action("SSH连接超时"));
+    }
+    #[tokio::test]
+    async fn disconnect_intent_cancels_even_an_inflight_transport_attempt() {
+        let state = Arc::new(BackendState::new(None));
+        state
+            .reconnect_enabled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let _pending_connect = state.writes.lock().await;
+        assert!(
+            dispatch(state.clone(), json!({"op":"disconnect"}), true)
+                .await
+                .is_err()
+        );
+        assert!(
+            !state
+                .reconnect_enabled
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+    }
+    #[tokio::test]
+    async fn manual_disconnect_disarms_background_reconnect() {
+        let state = Arc::new(BackendState::new(None));
+        state
+            .reconnect_enabled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        dispatch(state.clone(), json!({"op":"disconnect"}), true)
+            .await
+            .unwrap();
+        assert!(
+            !state
+                .reconnect_enabled
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
+        assert_eq!(*state.reconnect_status.lock().unwrap(), json!({}));
     }
 }

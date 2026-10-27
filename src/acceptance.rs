@@ -811,7 +811,7 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
     broker.abort();
     // Disconnect/reconnect and recover persisted task list without replay.
     shared.connection.lock().await.take();
-    let c = ssh::connect(p, "test-only-password".into()).await?;
+    let c = ssh::connect(p.clone(), "test-only-password".into()).await?;
     assert!(
         c.rpc(json!({"op":"list"})).await?["tasks"]
             .as_array()
@@ -819,6 +819,63 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
             .len()
             == 14 // Original twelve plus the new archived-session start/reply pair.
     );
+    #[cfg(target_os = "macos")]
+    {
+        // Sever only this isolated SSH transport; leave the Mac network untouched.
+        p.remember_password = true;
+        p.credential_store = "file".into();
+        backend::dispatch(shared.clone(), json!({"op":"save_profile","profile":p,"password":"test-only-password","storage_ack":true}), true).await?;
+        backend::dispatch(
+            shared.clone(),
+            json!({"op":"preferences_save","auto_connect":true}),
+            true,
+        )
+        .await?;
+        let old_id = c.connection_id.clone();
+        *shared.connection.lock().await = Some(c.clone());
+        shared
+            .reconnect_enabled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        c.handle
+            .disconnect(
+                russh::Disconnect::ByApplication,
+                "fixture transport loss",
+                "en",
+            )
+            .await?;
+        let reconnect = tokio::spawn(backend::reconnect_loop(shared.clone()));
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                if shared
+                    .connection
+                    .lock()
+                    .await
+                    .as_ref()
+                    .is_some_and(|c| !c.handle.is_closed() && c.connection_id != old_id)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .context("background SSH recovery did not complete")?;
+        let recovered = shared.connection.lock().await.clone().unwrap();
+        assert_eq!(
+            recovered.rpc(json!({"op":"list"})).await?["tasks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            14
+        );
+        backend::dispatch(shared.clone(), json!({"op":"disconnect"}), true).await?;
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        assert!(shared.connection.lock().await.is_none());
+        reconnect.abort();
+        println!(
+            "PASS background transport reconnect / saved credential reuse / no task replay / manual disconnect stays disconnected"
+        );
+    }
     println!(
         "PASS host pin / wrong password / encrypted SSH / remote code / approve / deny / automatic / cancellation / failure / workspace lock / reconnect / human-only policy"
     );
