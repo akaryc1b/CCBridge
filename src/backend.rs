@@ -378,6 +378,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
         "git_update",
         "clone_into_directory",
         "branch_fetch",
+        "branch_change",
         "install_runner",
         "git_access",
         "git_vps_auth_test",
@@ -1224,6 +1225,14 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             let token = remote_lease_begin(&c, path, operation.as_ref(), human).await?;
             let r = c.git_fetch_remote_progress(path, "origin", cb).await;
             return remote_lease_end(&c, path, token, operation.as_ref(), r).await;
+        }
+        if op == "branch_change" && req["action"] == "delete_remote" {
+            req["action"] = json!("remote_delete_plan");
+            let plan = c.rpc(req.clone()).await?;
+            let path = field(&req, "path")?;
+            let token = remote_lease_begin(&c, path, operation.as_ref(), human).await?;
+            let result = c.delete_remote_branch(path, &plan).await;
+            return remote_lease_end(&c, path, token, operation.as_ref(), result).await;
         }
         return c.rpc(req).await;
     }

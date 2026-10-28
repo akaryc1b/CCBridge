@@ -486,6 +486,7 @@ export default function App() {
       git_update: "Git 更新",
       clone_into_directory: "克隆仓库",
       branch_fetch: "获取分支",
+      branch_change: "分支管理",
       install_runner: "安装服务端程序",
       git_access: "仓库访问检测",
       git_vps_auth_test: "服务器认证检测",
@@ -555,7 +556,7 @@ export default function App() {
         }
         if (op.kind === "git_update") {
           setGitUpdateOpen(true, op.path, op.id);
-        } else if (op.kind === "branch_fetch") {
+        } else if (["branch_fetch", "branch_change"].includes(op.kind)) {
           setBranchesOpen(true, op.path, op.id);
         } else if (op.kind === "clone_into_directory") {
           if (op.id === cloneId) setCloneOpen(true);

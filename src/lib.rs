@@ -28,6 +28,7 @@ pub mod transfer;
 #[cfg(feature = "bridge")]
 pub mod update_gate;
 
+pub mod branch_ops;
 pub mod workspace_ops;
 
 #[cfg(feature = "bridge")]

@@ -603,6 +603,76 @@ git_auth clone --progress -- {} "$dest"
         }
         self.rpc(json!({"op":"branches","path":path})).await
     }
+    pub async fn delete_remote_branch(&self, path: &str, plan: &Value) -> Result<Value> {
+        let remote = field(plan, "remote")?;
+        let branch = field(plan, "branch")?;
+        let oid = field(plan, "oid")?;
+        let checked = self
+            .rpc(json!({"op":"branches","path":path,"base":plan["base"]}))
+            .await?;
+        if checked["base_oid"] != plan["base_oid"]
+            || !checked["details"].as_array().is_some_and(|ds| {
+                ds.iter().any(|d| {
+                    d["name"] == branch && d["oid"] == plan["local_oid"] && d["deletable"] == true
+                })
+            })
+        {
+            bail!("分支状态已变化，请重新检查后再删除")
+        }
+        let guard = crate::remote_fs::guard(&self.environment.home, path)?;
+        let (out, _, status) = self
+            .execute(
+                format!(
+                    "{guard}git -C \"$path\" remote get-url -- {}\n",
+                    shell_quote(remote)
+                ),
+                &[],
+            )
+            .await?;
+        if status != Some(0) {
+            bail!("远端不存在，请刷新分支列表")
+        }
+        let url = String::from_utf8(out)?.trim().to_string();
+        let parsed = url::Url::parse(&url).ok();
+        if parsed
+            .as_ref()
+            .is_some_and(|u| !u.username().is_empty() || u.password().is_some())
+        {
+            bail!("仓库 URL 含内嵌认证，请先移除")
+        }
+        let host = parsed.as_ref().and_then(|u| u.host_str()).unwrap_or("");
+        let cred = self.remote_git_credential(&url).await?;
+        let (mut cmd, input) = crate::git_auth::remote_prefix(host, cred.as_ref());
+        cmd += &guard;
+        cmd += &format!(
+            "git_auth -C \"$path\" -c core.hooksPath=/dev/null push {} -- {} {}\n",
+            shell_quote(&format!("--force-with-lease=refs/heads/{branch}:{oid}")),
+            shell_quote(remote),
+            shell_quote(&format!(":refs/heads/{branch}"))
+        );
+        let (_, err, status) = self
+            .execute_streaming(cmd, input.as_slice(), Duration::from_secs(120), None)
+            .await?;
+        if status != Some(0) {
+            let raw = String::from_utf8_lossy(&err).to_ascii_lowercase();
+            if crate::transfer::authentication_failure(&raw) {
+                bail!("远端删除未完成：请检查仓库推送权限和认证")
+            }
+            bail!("远端删除未确认：分支可能已变化、受保护或网络中断；请刷新后核实，不要重复删除")
+        }
+        // Only remove the stale tracking ref if it still points to the deleted commit.
+        let _ = self
+            .execute(
+                format!(
+                    "{guard}git -C \"$path\" update-ref -d {} {}\n",
+                    shell_quote(&format!("refs/remotes/{remote}/{branch}")),
+                    shell_quote(oid)
+                ),
+                &[],
+            )
+            .await;
+        self.rpc(json!({"op":"branches","path":path})).await
+    }
     pub async fn prepare_repositories(&self, group: &str, urls: &str) -> Result<Value> {
         let plan = crate::provision::plan(group, urls)?;
         let root = format!("{}/projects/{group}", self.environment.home);

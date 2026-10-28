@@ -255,8 +255,17 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
             bail!("请先打开 Git 仓库根目录")
         }
         if op == "branch_change" {
+            if v["expected_current"]
+                .as_str()
+                .is_some_and(|n| n != repo.branch)
+            {
+                bail!("当前分支已变化，请刷新后重新操作")
+            }
             if repo.dirty {
                 bail!("仓库有未提交改动，请先处理；不会自动 stash 或丢弃")
+            }
+            if let Some(result) = crate::branch_ops::change(&p, v)? {
+                return Ok(result);
             }
             let branch = field(v, "branch")?;
             git(&p, &["check-ref-format", "--branch", branch])?;
@@ -265,7 +274,12 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
                     git(&p, &["switch", "--no-guess", branch])?;
                 }
                 "create" => {
-                    git(&p, &["switch", "-c", branch])?;
+                    if let Some(base) = v["start_point"].as_str().filter(|s| !s.is_empty()) {
+                        git(&p, &["show-ref", "--verify", &format!("refs/heads/{base}")])?;
+                        git(&p, &["switch", "-c", branch, &format!("refs/heads/{base}")])?;
+                    } else {
+                        git(&p, &["switch", "-c", branch])?;
+                    }
                 }
                 "fast_forward" => {
                     let reference = format!("refs/remotes/{branch}");
@@ -288,18 +302,7 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
                 _ => bail!("不支持的分支操作"),
             }
         }
-        let branches = git(
-            &p,
-            &["for-each-ref", "--format=%(refname:short)", "refs/heads"],
-        )?;
-        let remote = git(
-            &p,
-            &["for-each-ref", "--format=%(refname:short)", "refs/remotes"],
-        )?;
-        let current = crate::repository::inspect(&p)?;
-        Ok(
-            json!({"path":p,"current":current.branch,"dirty":current.dirty,"branches":branches.lines().collect::<Vec<_>>(),"remote_branches":remote.lines().filter(|s|!s.ends_with("/HEAD")).collect::<Vec<_>>()}),
-        )
+        crate::branch_ops::inspect(&p, v)
     }
 }
 #[cfg(test)]
@@ -451,6 +454,50 @@ mod tests {
         let local = git(&repo, &["rev-parse", "HEAD"]).unwrap();
         assert!(rpc_at(&update, &h).is_err());
         assert_eq!(git(&repo, &["rev-parse", "HEAD"]).unwrap(), local);
+        fs::remove_dir_all(h).unwrap();
+    }
+    #[test]
+    fn branch_delete_runs_under_own_lease_and_uses_requested_start_point() {
+        let tmp = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        private_dir(&tmp).unwrap();
+        let h = tmp.canonicalize().unwrap();
+        let p = h.join("repo");
+        fs::create_dir(&p).unwrap();
+        git(&p, &["init", "-q", "--initial-branch=main"]).unwrap();
+        git(
+            &p,
+            &[
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "initial",
+            ],
+        )
+        .unwrap();
+        let call = |v: Value| rpc_at(&v, &h);
+        call(json!({"op":"branch_change","path":p,"action":"create","branch":"feature/a","start_point":"main"})).unwrap();
+        call(json!({"op":"branch_change","path":p,"action":"switch","branch":"main"})).unwrap();
+        let state = call(json!({"op":"branches","path":p})).unwrap();
+        let a = state["details"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|b| b["name"] == "feature/a")
+            .unwrap();
+        assert_eq!(a["deletable"], true);
+        let r=call(json!({"op":"branch_change","path":p,"action":"delete","base":state["base"],"base_oid":state["base_oid"],"selections":[{"name":"feature/a","oid":a["oid"]}]})).unwrap();
+        assert_eq!(r["results"][0]["ok"], true);
+        assert!(
+            !r["branches"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|b| b == "feature/a")
+        );
         fs::remove_dir_all(h).unwrap();
     }
 }
