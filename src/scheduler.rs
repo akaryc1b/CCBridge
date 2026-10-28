@@ -134,6 +134,20 @@ pub fn pending(t: &Task) -> bool {
 pub fn conflicts(a: &str, b: &str) -> bool {
     a == "exclusive" || b == "exclusive" || (a != "analysis" && b != "analysis")
 }
+// A finished operation can remove its record after read_dir returned its entry.
+// Only that expected disappearance is ignored; corrupt/unreadable records still block.
+fn operation_record(path: &Path) -> Result<Option<Value>> {
+    match read_json(path) {
+        Ok(v) => Ok(Some(v)),
+        Err(e)
+            if e.downcast_ref::<std::io::Error>()
+                .is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            Ok(None)
+        }
+        Err(e) => Err(e),
+    }
+}
 pub fn blockers(path: &Path, except: &str) -> Result<Vec<Value>> {
     blockers_for(path, except, "exclusive")
 }
@@ -153,7 +167,9 @@ pub fn blockers_for(path: &Path, except: &str, access: &str) -> Result<Vec<Value
     for e in std::fs::read_dir(dir)? {
         let e = e?;
         if e.path().extension().is_some_and(|e| e == "json") {
-            let v: Value = read_json(&e.path())?;
+            let Some(v) = operation_record(&e.path())? else {
+                continue;
+            };
             let lp = e.path().with_extension("lock");
             if (v["persistent"] == true || lock(&lp, true)?.is_none())
                 && v["paths"]
@@ -336,4 +352,23 @@ pub fn use_lease(token: &str, path: &Path) -> Result<File> {
         true,
     )?
     .ok_or_else(|| coded("operation_busy", "更新操作仍在执行"))
+}
+
+#[cfg(test)]
+mod operation_record_tests {
+    use super::*;
+    #[test]
+    fn completed_record_disappearance_is_normal_but_corruption_is_not() {
+        let p = std::env::temp_dir().join(format!(
+            "ccbridge-operation-record-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::write(&p, b"{\"state\":\"running\"}").unwrap();
+        assert!(operation_record(&p).unwrap().is_some());
+        std::fs::remove_file(&p).unwrap();
+        assert!(operation_record(&p).unwrap().is_none());
+        std::fs::write(&p, b"{bad-json").unwrap();
+        assert!(operation_record(&p).is_err());
+        std::fs::remove_file(p).unwrap();
+    }
 }
