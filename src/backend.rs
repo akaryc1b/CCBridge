@@ -51,6 +51,20 @@ async fn remote_lease_end(
     }
     result
 }
+fn fetch_failure(repo: &Value, remote: &str, e: &anyhow::Error) -> Value {
+    let url = repo["remotes"]
+        .as_array()
+        .and_then(|a| a.iter().find(|r| r["name"] == remote))
+        .map(|r| r["url"].clone())
+        .unwrap_or_else(|| repo["url"].clone());
+    let reason = error_summary(&format!("{e:#}"));
+    let message = if remote.is_empty() {
+        reason
+    } else {
+        format!("{remote}：{reason}")
+    };
+    json!({"path":repo["path"],"name":repo["name"],"url":url,"remote":remote,"state":"failed","code":error_code(e),"message":message})
+}
 fn vps_access_error(e: anyhow::Error) -> anyhow::Error {
     let text = format!("{e:#}");
     if text.contains("未取得 Codeup 认证")
@@ -331,6 +345,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "trash_restore",
             "branch_change",
             "branch_fetch",
+            "git_fetch",
             "git_update",
             "git_vps_auth_install",
             "git_vps_auth_remove",
@@ -364,6 +379,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
             "db_protocol_test",
             "session_meta_set",
             "git_access",
+            "git_remote_access",
             "git_vps_auth_test",
         ]
         .contains(&op)
@@ -378,9 +394,11 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
         "git_update",
         "clone_into_directory",
         "branch_fetch",
+        "git_fetch",
         "branch_change",
         "install_runner",
         "git_access",
+        "git_remote_access",
         "git_vps_auth_test",
         "git_vps_auth_install",
         "git_vps_auth_remove",
@@ -920,7 +938,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         let path = old["path"].as_str().unwrap_or("");
         let kind = old["kind"].as_str().unwrap_or("");
         let message = match kind {
-            "git_update" => {
+            "git_update" | "git_fetch" => {
                 if !c.permits_workspace(path) {
                     bail!("操作目录不属于当前账号允许范围");
                 }
@@ -938,7 +956,11 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 c.browse(path, false).await?;
                 "目标目录当前可读取；请打开目录核对仓库".into()
             }
-            "git_vps_auth_install" | "git_vps_auth_remove" | "git_access" | "git_vps_auth_test" => {
+            "git_vps_auth_install"
+            | "git_vps_auth_remove"
+            | "git_access"
+            | "git_remote_access"
+            | "git_vps_auth_test" => {
                 let r = c.rpc(json!({"op":"git_vps_auth_status"})).await?;
                 if r["configured"] == true {
                     "服务器当前已配置认证；仓库权限需在认证窗口检测".into()
@@ -1067,6 +1089,83 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             store: state.operations.clone(),
             id: id.into(),
         });
+    if op == "git_remote_access" {
+        if !human {
+            bail!("远端检测只能由人在App操作")
+        }
+        return c
+            .git_remote_access(
+                field(&v, "path")?,
+                field(&v, "remote")?,
+                field(&v, "expected_url")?,
+            )
+            .await;
+    }
+    if op == "git_fetch" {
+        if !human {
+            bail!("获取远端状态只能由人在App操作")
+        }
+        if c.probe["runner_version"].as_str() != Some(env!("CARGO_PKG_VERSION")) {
+            bail!("请先更新当前账号服务端程序")
+        }
+        let path = field(&v, "path")?;
+        if let Some(o) = &operation {
+            o.patch(json!({"remote":v["remote"],"only":v["only"]}));
+        }
+        let plan = c.rpc(json!({"op":"git_update_plan","path":path})).await?;
+        let repos = plan["repositories"].as_array().context("仓库列表无效")?;
+        let only = v["only"].as_array();
+        if only.is_some_and(|a| {
+            a.is_empty() || a.iter().any(|p| !repos.iter().any(|r| r["path"] == *p))
+        }) {
+            bail!("重试仓库范围已变化，请重新检查")
+        }
+        let repos: Vec<_> = repos
+            .iter()
+            .filter(|r| only.is_none_or(|a| a.contains(&r["path"])))
+            .collect();
+        if let Some(o) = &operation {
+            o.patch(json!({"total":repos.len(),"items":repos}));
+        }
+        let mut results = vec![];
+        for (i, r) in repos.iter().enumerate() {
+            let rp = field(r, "path")?;
+            if let Some(o) = &operation {
+                o.patch(json!({"current_path":rp,"name":r["name"],"phase":"fetch","objects":null,"bytes":null}));
+            }
+            let mut attempted_remote = String::new();
+            let result:Result<Value>=async {
+                let remotes:Vec<String>=if let Some(selected)=v["remote"].as_str(){
+                    if repos.len()!=1 || !r["remotes"].as_array().is_some_and(|a|a.iter().any(|x|x["name"]==selected)){bail!("远端目标已变化，请重新检查")}
+                    vec![selected.into()]
+                }else{r["remotes"].as_array().into_iter().flatten().filter_map(|x|x["name"].as_str().map(String::from)).collect()};
+                if remotes.is_empty(){bail!("仓库没有远端，请先配置远端地址")}
+                let token=remote_lease_begin(&c,rp,operation.as_ref(),human).await?;
+                let fetched:Result<Value>=async {
+                    for remote in remotes {
+                        attempted_remote = remote.clone();
+                        let cb=operation.clone().map(|o|Arc::new(move|p:Value|o.patch(p)) as Arc<dyn Fn(Value)+Send+Sync>);
+                        c.git_fetch_remote_progress(rp,&remote,cb).await?;
+                    }
+                    Ok(json!({"path":rp,"name":r["name"],"state":"fetched","message":"远端信息已获取"}))
+                }.await;
+                remote_lease_end(&c,rp,token,operation.as_ref(),fetched).await
+            }.await;
+            let row = match result {
+                Ok(r) => r,
+                Err(e) => fetch_failure(r, &attempted_remote, &e),
+            };
+            if let Some(o) = &operation {
+                o.item(i, row.clone())
+            }
+            results.push(row);
+            if c.handle.is_closed() {
+                bail!("SSH已断开，获取结果待核实；请查询原操作")
+            }
+        }
+        let failed = results.iter().filter(|r| r["state"] == "failed").count();
+        return Ok(json!({"ok":failed==0,"failed":failed,"results":results}));
+    }
     if ["git_update_plan", "git_update"].contains(&op.as_str()) {
         if !human && op == "git_update" && !c.profile.allow_auto {
             bail!("请先在 App 开启全自动授权，再通过 MCP 更新代码")
@@ -1223,7 +1322,9 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 .map(|o| Arc::new(move |p: Value| o.patch(p)) as Arc<dyn Fn(Value) + Send + Sync>);
             let path = field(&v, "path")?;
             let token = remote_lease_begin(&c, path, operation.as_ref(), human).await?;
-            let r = c.git_fetch_remote_progress(path, "origin", cb).await;
+            let r = c
+                .git_fetch_remote_progress(path, v["remote"].as_str().unwrap_or("origin"), cb)
+                .await;
             return remote_lease_end(&c, path, token, operation.as_ref(), r).await;
         }
         if op == "branch_change" && req["action"] == "delete_remote" {
@@ -2076,5 +2177,19 @@ mod maintenance_tests {
                 .maintenance_retry
                 .load(std::sync::atomic::Ordering::SeqCst)
         );
+    }
+}
+
+#[cfg(test)]
+mod fetch_target_tests {
+    use super::*;
+    #[test]
+    fn fetch_error_points_to_the_attempted_remote_not_the_upstream() {
+        let repo = json!({"path":"/fixture/repo","name":"repo","url":"https://codeup.aliyun.com/org/origin.git","remotes":[{"name":"origin","url":"https://codeup.aliyun.com/org/origin.git"},{"name":"backup","url":"https://codeup.aliyun.com/org/backup.git"}]});
+        let row = fetch_failure(&repo, "backup", &coded("auth", "读取未通过认证"));
+        assert_eq!(row["url"], "https://codeup.aliyun.com/org/backup.git");
+        assert_eq!(row["remote"], "backup");
+        assert_eq!(row["code"], "auth");
+        assert!(row["message"].as_str().unwrap().starts_with("backup"));
     }
 }

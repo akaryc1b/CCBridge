@@ -261,7 +261,9 @@ fn rpc_at(v: &Value, h: &Path) -> Result<Value> {
             {
                 bail!("当前分支已变化，请刷新后重新操作")
             }
-            if repo.dirty {
+            if repo.dirty
+                && !["upstream", "remote_url"].contains(&v["action"].as_str().unwrap_or(""))
+            {
                 bail!("仓库有未提交改动，请先处理；不会自动 stash 或丢弃")
             }
             if let Some(result) = crate::branch_ops::change(&p, v)? {

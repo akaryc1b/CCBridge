@@ -83,6 +83,23 @@ pub fn inspect(p: &Path, v: &Value) -> Result<Value> {
         .into_iter()
         .filter(|b| b["kind"] == "task")
         .collect();
+    let remote_details = git(
+        p,
+        &[
+            "for-each-ref",
+            "--format=%(refname) %(objectname) %(symref)",
+            "refs/remotes",
+        ],
+    )?
+    .lines()
+    .filter_map(|line| {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() != 2 {
+            return None;
+        }
+        Some(json!({"name":fields[0].strip_prefix("refs/remotes/")?,"head":fields[1]}))
+    })
+    .collect::<Vec<_>>();
     let changed_files = if repo.dirty {
         git(p, &["status", "--short"])?
             .lines()
@@ -126,11 +143,59 @@ pub fn inspect(p: &Path, v: &Value) -> Result<Value> {
         details.push(json!({"name":n,"oid":commit,"upstream":upstream,"merged":merged(p,&commit,&base_oid),"reason":reason,"deletable":reason.is_empty()}));
     }
     Ok(
-        json!({"path":p,"current":repo.branch,"dirty":repo.dirty,"changed_files":changed_files,"branches":names.lines().collect::<Vec<_>>(),"remote_branches":remotes.lines().filter_map(|line| { let mut fields=line.split_whitespace(); let reference=fields.next()?; if fields.next().is_some() { return None; } reference.strip_prefix("refs/remotes/") }).collect::<Vec<_>>(),"details":details,"base":base,"base_oid":base_oid,"default_branch":default}),
+        json!({"path":p,"current":repo.branch,"dirty":repo.dirty,"changed_files":changed_files,"branches":names.lines().collect::<Vec<_>>(),"head":git(p,&["rev-parse","HEAD"])?,"remote_details":remote_details,"remote_branches":remotes.lines().filter_map(|line| { let mut fields=line.split_whitespace(); let reference=fields.next()?; if fields.next().is_some() { return None; } reference.strip_prefix("refs/remotes/") }).collect::<Vec<_>>(),"details":details,"base":base,"base_oid":base_oid,"default_branch":default}),
     )
 }
 pub fn change(p: &Path, v: &Value) -> Result<Option<Value>> {
     let action = v["action"].as_str().unwrap_or("");
+    if ["upstream", "remote_url"].contains(&action) {
+        let repo = crate::repository::inspect(p)?;
+        if v["expected_head"] != git(p, &["rev-parse", "HEAD"])?
+            || v["expected_current"] != repo.branch
+        {
+            bail!("仓库分支或提交已变化，请刷新后重试")
+        }
+        if action == "upstream" {
+            let target = v["target"].as_str().context("请选择上游分支")?;
+            let reference = format!("refs/remotes/{target}");
+            let actual = git(p, &["show-ref", "--verify", "--hash", &reference])?;
+            if v["target_head"] != actual {
+                bail!("上游分支已变化，请刷新后重试")
+            }
+            git(
+                p,
+                &[
+                    "branch",
+                    &format!("--set-upstream-to={target}"),
+                    "--",
+                    &repo.branch,
+                ],
+            )?;
+        } else {
+            let remote = v["remote"].as_str().context("请选择远端")?;
+            if remote.starts_with('-') || remote.contains(['\n', '\r', '\0']) {
+                bail!("远端名称无效")
+            }
+            let old = git(p, &["remote", "get-url", "--", remote])?;
+            if crate::git_update::safe_remote_url(&old) != v["expected_url"].as_str().unwrap_or("")
+            {
+                bail!("远端地址已变化，请重新检查")
+            }
+            let raw = v["url"].as_str().context("请输入远端地址")?;
+            let u = url::Url::parse(raw).context("请填写HTTPS或SSH仓库地址")?;
+            if !["https", "ssh"].contains(&u.scheme())
+                || u.host_str().is_none()
+                || u.password().is_some()
+                || (u.scheme() == "https" && !u.username().is_empty())
+                || u.query().is_some()
+                || u.fragment().is_some()
+            {
+                bail!("仓库地址不允许包含密码、令牌或查询参数，请通过认证配置保存")
+            }
+            git(p, &["remote", "set-url", "--", remote, raw])?;
+        }
+        return Ok(Some(inspect(p, v)?));
+    }
     if !["delete", "clean", "remote_delete_plan"].contains(&action) {
         return Ok(None);
     }
@@ -352,6 +417,67 @@ mod tests {
         assert_eq!(r["ok"], false);
         assert_eq!(r["deleted"], 0);
         assert!(oid(&p, "feature/check-upstream").is_ok());
+        std::fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn upstream_change_checks_head_target_and_does_not_switch_or_touch_files() {
+        let p = fixture();
+        let head = oid(&p, "main").unwrap();
+        git(
+            &p,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://codeup.aliyun.com/org/fixture.git",
+            ],
+        )
+        .unwrap();
+        git(&p, &["update-ref", "refs/remotes/origin/main", &head]).unwrap();
+        let req = json!({"action":"upstream","expected_head":head,"expected_current":"main","target":"origin/main","target_head":head});
+        let r = change(&p, &req).unwrap();
+        assert!(r.is_some());
+        assert_eq!(
+            git(&p, &["rev-parse", "--abbrev-ref", "@{u}"]).unwrap(),
+            "origin/main"
+        );
+        let mut stale = req.clone();
+        stale["target_head"] = json!("changed");
+        assert!(change(&p, &stale).is_err());
+        assert_eq!(oid(&p, "main").unwrap(), head);
+        assert_eq!(
+            std::fs::read_to_string(p.join("README")).unwrap(),
+            "fixture"
+        );
+        std::fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn remote_url_edit_rejects_credentials_and_stale_address() {
+        let p = fixture();
+        let head = oid(&p, "main").unwrap();
+        git(
+            &p,
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://codeup.aliyun.com/org/old.git",
+            ],
+        )
+        .unwrap();
+        let req = json!({"action":"remote_url","remote":"origin","expected_head":head,"expected_current":"main","expected_url":"https://codeup.aliyun.com/org/old.git","url":"https://codeup.aliyun.com/org/new.git"});
+        let mut bad = req.clone();
+        bad["url"] = json!("https://user:secret@codeup.aliyun.com/org/new.git");
+        assert!(change(&p, &bad).is_err());
+        bad["url"] = json!("file:///etc/passwd");
+        assert!(change(&p, &bad).is_err());
+        change(&p, &req).unwrap();
+        assert_eq!(
+            git(&p, &["remote", "get-url", "origin"]).unwrap(),
+            "https://codeup.aliyun.com/org/new.git"
+        );
+        assert!(change(&p, &req).is_err());
+        assert_eq!(oid(&p, "main").unwrap(), head);
         std::fs::remove_dir_all(p).unwrap();
     }
 }

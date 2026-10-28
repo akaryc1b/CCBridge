@@ -35,7 +35,7 @@ async fn $name(bridge: State<'_, Bridge>, request: Value) -> Result<Value,Value>
 )*}; }
 commands! {
  session_list=>"session_list", session_search=>"session_search", session_turns=>"session_turns", session_meta_set=>"session_meta_set", session_meta_get=>"session_meta_get", active_tasks=>"active_tasks", operation_list=>"operation_list", operation_verify=>"operation_verify",
- operation_release=>"operation_release", operation_progress=>"operation_progress", git_update_plan=>"git_update_plan", git_update=>"git_update",
+ operation_release=>"operation_release", operation_progress=>"operation_progress", git_update_plan=>"git_update_plan", git_update=>"git_update", git_fetch=>"git_fetch", git_remote_access=>"git_remote_access",
  git_vps_auth_test=>"git_vps_auth_test", git_vps_auth_status=>"git_vps_auth_status", git_vps_auth_install=>"git_vps_auth_install", git_vps_auth_remove=>"git_vps_auth_remove",
  preferences_save=>"preferences_save", auto_connect=>"auto_connect",
  connection_status=>"connection_status", connect_ssh=>"connect", disconnect_ssh=>"disconnect",
@@ -250,6 +250,8 @@ fn main() {
             operation_release,
             git_update_plan,
             git_update,
+            git_fetch,
+            git_remote_access,
             git_vps_auth_status,
             git_vps_auth_test,
             git_vps_auth_install,

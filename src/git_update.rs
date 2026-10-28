@@ -22,6 +22,26 @@ fn git(p: &Path, args: &[&str]) -> Result<String> {
     }
     Ok(String::from_utf8(out.stdout)?.trim().into())
 }
+pub fn safe_remote_url(raw: &str) -> String {
+    if let Ok(mut u) = url::Url::parse(raw) {
+        if ["http", "https", "ssh"].contains(&u.scheme()) {
+            if u.scheme() != "ssh" {
+                let _ = u.set_username("");
+            }
+            let _ = u.set_password(None);
+            u.set_query(None);
+            u.set_fragment(None);
+            return u.to_string();
+        }
+        return "非网络远端".into();
+    }
+    if let Some((host, path)) = raw.split_once(':') {
+        if !host.contains('/') && !host.is_empty() {
+            return format!("{}:{}", host, path.split(['?', '#']).next().unwrap_or(""));
+        }
+    }
+    "本地远端".into()
+}
 fn repo(p: &Path) -> Result<Value> {
     let r = crate::repository::inspect(p)?;
     if Path::new(&r.path) != p {
@@ -50,20 +70,55 @@ fn repo(p: &Path) -> Result<Value> {
         ""
     };
     let head = git(p, &["rev-parse", "HEAD"])?;
-    let url = git(p, &["remote", "get-url", "--", &remote])
+    let remotes: Vec<Value> = git(p,&["remote"])? .lines().map(|name| {
+        let raw=git(p,&["remote","get-url","--",name]).unwrap_or_default();
+        json!({"name":name,"url":safe_remote_url(&raw),"embedded_credentials":url::Url::parse(&raw).is_ok_and(|u|u.password().is_some()||(["http","https"].contains(&u.scheme())&&!u.username().is_empty()))})
+    }).collect();
+    let url = remotes
+        .iter()
+        .find(|r| r["name"] == remote)
+        .map(|r| r["url"].clone())
+        .unwrap_or(json!(""));
+    let counts = git(
+        p,
+        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+    )
+    .ok()
+    .and_then(|s| {
+        let mut fields = s.split_whitespace();
+        Some((
+            fields.next()?.parse::<u64>().ok()?,
+            fields.next()?.parse::<u64>().ok()?,
+        ))
+    });
+    let (ahead, behind) = counts
+        .map(|(a, b)| (json!(a), json!(b)))
+        .unwrap_or((Value::Null, Value::Null));
+    let last_fetch = git(p, &["rev-parse", "--git-path", "FETCH_HEAD"])
         .ok()
-        .and_then(|s| url::Url::parse(&s).ok())
-        .filter(|u| u.scheme() == "https" && u.host_str() == Some("codeup.aliyun.com"))
-        .map(|mut u| {
-            let _ = u.set_username("");
-            let _ = u.set_password(None);
-            u.set_query(None);
-            u.set_fragment(None);
-            u.to_string()
-        })
-        .unwrap_or_default();
+        .and_then(|raw| {
+            let f = std::path::PathBuf::from(raw);
+            let f = if f.is_absolute() { f } else { p.join(f) };
+            std::fs::metadata(f)
+                .ok()?
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()
+                .map(|d| d.as_secs())
+        });
+    let blockers = crate::scheduler::blockers(p, "")?;
+    let changed = if r.dirty {
+        git(p, &["status", "--short"])?
+            .lines()
+            .take(50)
+            .map(String::from)
+            .collect::<Vec<_>>()
+    } else {
+        vec![]
+    };
     Ok(
-        json!({"url":url,"path":r.path,"name":r.name,"branch":r.branch,"head":head,"dirty":r.dirty,"upstream":upstream,"remote":remote,"blocked":reason}),
+        json!({"url":url,"path":r.path,"name":r.name,"branch":r.branch,"head":head,"dirty":r.dirty,"changed_files":changed,"upstream":upstream,"remote":remote,"blocked":reason,"ahead":ahead,"behind":behind,"tracking_known":counts.is_some(),"last_fetch":last_fetch,"remotes":remotes,"blockers":blockers}),
     )
 }
 pub fn rpc(v: &Value) -> Result<Value> {
@@ -225,6 +280,79 @@ mod tests {
         let group = rpc_at(&json!({"op":"git_update_plan","path":root}), &root).unwrap();
         assert_eq!(group["repositories"].as_array().unwrap().len(), 2);
         assert!(rpc_at(&json!({"op":"git_update_plan","path":"/"}), &root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn remote_display_keeps_required_ssh_user_but_removes_secrets() {
+        assert_eq!(
+            safe_remote_url("ssh://git:secret@example.com/team/repo.git?token=hidden"),
+            "ssh://git@example.com/team/repo.git"
+        );
+        assert_eq!(
+            safe_remote_url("git@example.com:team/repo.git"),
+            "git@example.com:team/repo.git"
+        );
+        assert_eq!(
+            safe_remote_url("https://user:secret@example.com/team/repo.git?token=hidden"),
+            "https://example.com/team/repo.git"
+        );
+    }
+    #[test]
+    fn overview_reports_tracking_remote_and_cache_without_fetching() {
+        let root = std::env::temp_dir().join(format!("ccb-overview-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let root = root.canonicalize().unwrap();
+        let source = root.join("source");
+        std::fs::create_dir(&source).unwrap();
+        git(&source, &["init", "-q", "-b", "main"]).unwrap();
+        commit(&source, "one");
+        let p = root.join("clone");
+        git(
+            &root,
+            &["clone", source.to_str().unwrap(), p.to_str().unwrap()],
+        )
+        .unwrap();
+        let initial = repo(&p).unwrap();
+        assert_eq!(initial["ahead"], 0);
+        assert_eq!(initial["behind"], 0);
+        assert_eq!(initial["tracking_known"], true);
+        assert!(
+            initial["remotes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["name"] == "origin")
+        );
+        commit(&source, "two");
+        let cached = repo(&p).unwrap();
+        assert_eq!(cached["behind"], 0); // read never fetches
+        git(&p, &["fetch", "origin"]).unwrap();
+        let behind = repo(&p).unwrap();
+        assert_eq!(behind["behind"], 1);
+        assert_eq!(behind["ahead"], 0);
+        assert!(behind["last_fetch"].as_u64().unwrap() > 0);
+        std::fs::write(p.join("README"), "dirty").unwrap();
+        let dirty = repo(&p).unwrap();
+        assert_eq!(dirty["dirty"], true);
+        assert!(!dirty["changed_files"].as_array().unwrap().is_empty());
+        git(&p, &["branch", "--unset-upstream"]).unwrap();
+        let unknown = repo(&p).unwrap();
+        assert!(unknown["ahead"].is_null());
+        assert_eq!(unknown["tracking_known"], false);
+        git(
+            &p,
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://user:secret@codeup.aliyun.com/org/repo.git?token=hidden#fragment",
+            ],
+        )
+        .unwrap();
+        let redacted = repo(&p).unwrap();
+        let raw = serde_json::to_string(&redacted["remotes"]).unwrap();
+        assert!(!raw.contains("secret"));
+        assert!(!raw.contains("hidden"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

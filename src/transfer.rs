@@ -120,6 +120,20 @@ pub fn local_failure(stderr: &str) -> &'static str {
         "本机 Git 获取仓库失败，请检查 Git 安装、凭据助手、网络及磁盘空间；没有上传密码或覆盖已有仓库"
     }
 }
+pub fn remote_read_failure(stderr: &str) -> &'static str {
+    let e = stderr.to_ascii_lowercase();
+    if e.contains("not found") || e.contains("does not appear to be a git repository") {
+        "仓库不存在或无权读取，请检查远端地址和仓库权限"
+    } else if authentication_failure(&e) {
+        "仓库读取未通过认证，请检查服务器 Git 认证和仓库权限"
+    } else if e.contains("certificate") {
+        "服务器无法验证 Git 服务证书，请检查证书链"
+    } else if e.contains("resolve host") || e.contains("connect") || e.contains("timed out") {
+        "服务器无法连接 Git 服务，请检查网络、代理和 DNS 后重试"
+    } else {
+        "仓库读取失败，请检查远端地址、服务器 Git 认证和网络后重试"
+    }
+}
 pub fn bundle(url: &str) -> Result<Bundle> {
     bundle_with_auth(url, None)
 }
@@ -235,6 +249,23 @@ mod tests {
             assert!(local_failure(message).contains("未取得 Codeup 认证"));
             assert!(authentication_failure(message));
         }
+    }
+    #[test]
+    fn remote_read_errors_name_the_actual_action() {
+        for raw in [
+            "repository not found",
+            "authentication failed",
+            "Could not resolve host",
+            "unknown",
+        ] {
+            let message = remote_read_failure(raw);
+            assert!(message.contains("仓库") || message.contains("Git"));
+            assert!(
+                !message.contains("上传") && !message.contains("磁盘") && !message.contains("本机")
+            );
+        }
+        assert!(remote_read_failure("repository not found").contains("地址"));
+        assert!(remote_read_failure("authentication failed").contains("认证"));
     }
     #[test]
     fn local_errors_identify_the_local_machine() {

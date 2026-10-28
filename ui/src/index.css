@@ -3119,3 +3119,207 @@ header > h1 {
   font-family: ui-monospace, monospace;
   font-size: 12px;
 }
+
+.repo-overview {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+.repo-overview-head,
+.repo-overview-head > div,
+.repo-inline-actions,
+.repo-selected-title,
+.repo-tracking,
+.repo-auth {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.repo-overview-head h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.repo-overview-head small {
+  font-size: 12px;
+  color: var(--muted-text);
+}
+.repo-inline-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.repo-table {
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+  margin-top: 14px;
+}
+.repo-table-heading,
+.repo-table-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) minmax(110px, 0.8fr);
+  gap: 12px;
+  padding: 12px;
+  align-items: center;
+  text-align: left;
+}
+.repo-table-heading {
+  background: var(--soft);
+  color: var(--muted-text);
+  font-size: 12px;
+}
+.repo-table-row {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: none;
+  font-size: 13px;
+  cursor: pointer;
+}
+.repo-table-row.selected {
+  background: var(--selection);
+}
+.repo-table-row:hover {
+  background: var(--soft);
+}
+.repo-table-row > strong,
+.repo-table-row > .repo-code {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.repo-table-row:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+.repo-code {
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  color: var(--muted-text);
+}
+.repo-selected {
+  margin-top: 16px;
+}
+.repo-selected-title strong {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.repo-tracking {
+  color: var(--muted-text);
+  font-size: 12px;
+  line-height: 1.7;
+  margin: 4px 0 12px;
+  flex-wrap: wrap;
+}
+.repo-tracking span {
+  overflow-wrap: anywhere;
+}
+.repo-status-warning {
+  color: var(--warning);
+}
+.repo-status-error {
+  color: var(--destructive);
+}
+.repo-status-success {
+  color: var(--success);
+}
+.repo-status-muted {
+  color: var(--muted-text);
+}
+.repo-context {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--soft);
+  font-size: 13px;
+}
+.repo-context > strong {
+  margin-right: 8px;
+}
+.repo-context .hint {
+  margin-bottom: 0;
+}
+.repo-dirty-list {
+  padding-left: 18px;
+  margin-top: 8px;
+  max-height: 130px;
+  overflow: auto;
+  font:
+    12px ui-monospace,
+    monospace;
+  overflow-wrap: anywhere;
+}
+.repo-settings-dialog {
+  max-width: 480px;
+}
+.repo-fields {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+}
+.repo-fields > span:nth-child(odd) {
+  color: var(--muted-text);
+}
+.repo-fields strong,
+.repo-url {
+  overflow-wrap: anywhere;
+}
+.repo-url {
+  font:
+    12px ui-monospace,
+    monospace;
+  line-height: 1.8;
+}
+.repo-auth {
+  font-size: 13px;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+.repo-fetch-row {
+  padding: 14px 0;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.repo-fetch-row > span {
+  margin-left: auto;
+}
+.repo-blocker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+}
+@media (max-width: 1050px) {
+  .repo-overview-head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .repo-table-heading,
+  .repo-table-row {
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(105px, 0.8fr);
+    gap: 8px;
+    padding: 10px;
+  }
+}
+
+/* Keep the file browser reachable when repository details grow on short windows. */
+.file-workspace {
+  overflow-y: auto;
+}
+.file-workspace > .repo-overview,
+.file-workspace > .path-toolbar,
+.file-workspace > .file-status {
+  flex-shrink: 0;
+}
+.file-workspace > .file-list {
+  flex: 1 0 240px;
+  min-height: 240px;
+}

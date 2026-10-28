@@ -1,6 +1,6 @@
 [package]
 name = "ccbridge"
-version = "0.12.6"
+version = "0.12.7"
 edition = "2024"
 license = "MIT"
 repository = "https://github.com/akaryc1b/CCBridge"

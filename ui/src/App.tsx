@@ -35,6 +35,8 @@ import { Confirm } from "@/components/common/Confirm";
 import { useOperation } from "@/lib/useOperation";
 import { time, elapsed, bytes, phaseText } from "@/lib/format";
 import { GitUpdate } from "@/components/GitUpdate";
+import { RepositoryOverview } from "@/components/RepositoryOverview";
+import { RepositoryFetch } from "@/components/RepositoryFetch";
 import {
   isConnecting,
   clearConnectionErrors,
@@ -285,6 +287,27 @@ export default function App() {
     localStorage.getItem("ccbridge-theme") || "system",
   );
   const [gitUpdateOpen, setGitUpdateVisible] = useState(false);
+  const [repoRefresh, setRepoRefresh] = useState(0);
+  const [repoFetch, setRepoFetch] = useState<{
+    path: string;
+    remote?: string;
+    id: string;
+    launch: boolean;
+    owner: string;
+    only?: string[];
+  } | null>(null);
+  const [repoFetchOpen, setRepoFetchOpen] = useState(false);
+  function openRepositoryFetch(path: string, remote?: string, id?: string) {
+    setRepoFetch({
+      path,
+      remote,
+      id: id || crypto.randomUUID(),
+      launch: !id,
+      owner: connection.connection_id || "",
+    });
+    setRepoFetchOpen(true);
+  }
+
   const [gitDialogPath, setGitDialogPath] = useState("");
   const [branchDialogPath, setBranchDialogPath] = useState("");
   const [gitCenterId, setGitCenterId] = useState<string>();
@@ -484,11 +507,13 @@ export default function App() {
   for (const op of taskCenter.operations) {
     const labels: Data = {
       git_update: "Git 更新",
+      git_fetch: "获取远端状态",
       clone_into_directory: "克隆仓库",
       branch_fetch: "获取分支",
       branch_change: "分支管理",
       install_runner: "安装服务端程序",
       git_access: "仓库访问检测",
+      git_remote_access: "远端访问检测",
       git_vps_auth_test: "服务器认证检测",
       git_vps_auth_install: "同步服务器认证",
       git_vps_auth_remove: "移除服务器认证",
@@ -556,6 +581,8 @@ export default function App() {
         }
         if (op.kind === "git_update") {
           setGitUpdateOpen(true, op.path, op.id);
+        } else if (op.kind === "git_fetch") {
+          openRepositoryFetch(op.path, op.remote || undefined, op.id);
         } else if (["branch_fetch", "branch_change"].includes(op.kind)) {
           setBranchesOpen(true, op.path, op.id);
         } else if (op.kind === "clone_into_directory") {
@@ -939,6 +966,7 @@ export default function App() {
       (p) => request("directory_list", { path: p, hidden: false }),
       (r) => {
         setListing(r);
+        setRepoRefresh((v) => v + 1);
         setPath(r.path);
         setPreview("");
       },
@@ -1545,22 +1573,6 @@ export default function App() {
             )}
             {page === "projects" && (
               <>
-                <Button
-                  variant="outline"
-                  disabled={!locationReady || connecting}
-                  onClick={() => setGitUpdateOpen(true)}
-                >
-                  <RefreshCw size={15} />
-                  Git 更新
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={!locationReady}
-                  onClick={() => setBranchesOpen(true)}
-                >
-                  <GitBranch size={15} />
-                  {listing.branch || "分支"}
-                </Button>
                 <Menu.Root>
                   <Menu.Trigger asChild>
                     <Button variant="outline" disabled={!locationReady}>
@@ -2079,6 +2091,32 @@ export default function App() {
                 </Button>
               </aside>
               <section className="file-workspace">
+                {connected &&
+                  (browsedProject ||
+                    listing.branch ||
+                    listing.entries?.some(
+                      (e: Data) => e.kind === "repository",
+                    )) && (
+                    <RepositoryOverview
+                      key={`repo:${connection.connection_id}:${browsedProject || listedPath}`}
+                      path={browsedProject || listedPath}
+                      connectionId={connection.connection_id || ""}
+                      refreshKey={repoRefresh}
+                      onUpdate={(p) => setGitUpdateOpen(true, p)}
+                      onBranches={(p) => setBranchesOpen(true, p)}
+                      onFetch={openRepositoryFetch}
+                      onBrowse={(p) => safe(browse(p))}
+                      onOpenTask={(id) => {
+                        setPage("chat");
+                        switchConversation(id);
+                      }}
+                      onAuth={(url) => {
+                        setAuthUrl(url);
+                        setAuthScope("remote");
+                        setAuthOpen(true);
+                      }}
+                    />
+                  )}
                 <div className="path-toolbar">
                   <Input
                     aria-label="远端目录"
@@ -3070,6 +3108,32 @@ export default function App() {
           )}
         </DialogContent>
       </Dialog>
+      {repoFetch &&
+        connected &&
+        repoFetch.owner === connection.connection_id && (
+          <RepositoryFetch
+            key={`${connection.connection_id}:${repoFetch.id}`}
+            request={repoFetch}
+            connectionId={connection.connection_id || ""}
+            open={repoFetchOpen}
+            onClose={() => setRepoFetchOpen(false)}
+            onChanged={() => setRepoRefresh((v) => v + 1)}
+            onRetry={(only) =>
+              setRepoFetch({
+                ...repoFetch,
+                id: crypto.randomUUID(),
+                launch: true,
+                only,
+              })
+            }
+            onAuth={(url) => {
+              setRepoFetchOpen(false);
+              setAuthUrl(url);
+              setAuthScope("remote");
+              setAuthOpen(true);
+            }}
+          />
+        )}
       <GitUpdate
         onOpenTask={(id) => {
           setGitUpdateOpen(false);
@@ -3083,6 +3147,7 @@ export default function App() {
         onOperation={setGitOperation}
         onClose={() => setGitUpdateOpen(false)}
         onUpdated={() => {
+          setRepoRefresh((v) => v + 1);
           if (
             locationRef.current.path === gitDialogPath &&
             locationRef.current.connection === connection.connection_id
@@ -3157,6 +3222,7 @@ export default function App() {
         operationId={branchCenterId}
         onOperation={setBranchOperation}
         onChanged={async () => {
+          setRepoRefresh((v) => v + 1);
           await browse(listedPath);
         }}
       />

@@ -30,13 +30,21 @@ export const phaseText: Record<string, string> = {
 };
 
 export function gitResultSummary(results: Record<string, any>[]) {
-  const counts = { updated: 0, unchanged: 0, ahead: 0, skipped: 0, failed: 0 };
+  const counts = {
+    fetched: 0,
+    updated: 0,
+    unchanged: 0,
+    ahead: 0,
+    skipped: 0,
+    failed: 0,
+  };
   for (const row of results) {
     if (row.blocked || ["dirty", "no_upstream"].includes(row.code))
       counts.skipped++;
     else if (row.state in counts) counts[row.state as keyof typeof counts]++;
   }
   const labels = {
+    fetched: "已获取",
     updated: "已更新",
     unchanged: "已是最新",
     ahead: "有未推送提交",

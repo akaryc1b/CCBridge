@@ -543,6 +543,61 @@ git_auth clone --progress -- {} "$dest"
         }
         crate::git_auth::load("remote", &self.profile).await
     }
+    pub async fn git_remote_access(
+        &self,
+        path: &str,
+        remote: &str,
+        expected_url: &str,
+    ) -> Result<Value> {
+        self.rpc(json!({"op":"branches","path":path})).await?;
+        if remote.is_empty() || remote.starts_with('-') || remote.contains(['\n', '\r', '\0']) {
+            bail!("远端名称无效")
+        }
+        let guard = crate::remote_fs::guard(&self.environment.home, path)?;
+        let (out, _, status) = self
+            .execute(
+                format!(
+                    "{guard}git -C \"$path\" remote get-url -- {}\n",
+                    shell_quote(remote)
+                ),
+                &[],
+            )
+            .await?;
+        if status != Some(0) {
+            bail!("远端不存在，请重新检查")
+        }
+        let url = String::from_utf8(out)?.trim().to_owned();
+        if crate::git_update::safe_remote_url(&url) != expected_url {
+            bail!("远端地址已变化，请重新检查")
+        }
+        if url::Url::parse(&url).is_ok_and(|u| {
+            u.password().is_some() || (u.scheme() == "https" && !u.username().is_empty())
+        }) {
+            bail!("远端地址含内嵌凭据，请先移除")
+        }
+        let host = url::Url::parse(&url)
+            .ok()
+            .and_then(|u| u.host_str().map(String::from))
+            .unwrap_or_default();
+        let credential = self.remote_git_credential(&url).await?;
+        let (mut cmd, input) = crate::git_auth::remote_prefix(&host, credential.as_ref());
+        cmd += &format!("git_auth ls-remote --heads -- {}\n", shell_quote(&url));
+        let (_, err, status) = self
+            .execute_for(cmd, &input, Duration::from_secs(120))
+            .await?;
+        if status != Some(0) {
+            let raw = String::from_utf8_lossy(&err).to_ascii_lowercase();
+            return Err(coded(
+                if crate::transfer::authentication_failure(&raw) {
+                    "auth"
+                } else {
+                    "network"
+                },
+                crate::transfer::remote_read_failure(&raw),
+            ));
+        }
+        Ok(json!({"accessible":true,"message":"仓库读取已验证"}))
+    }
     pub async fn git_fetch(&self, path: &str) -> Result<Value> {
         self.git_fetch_remote(path, "origin").await
     }
@@ -570,7 +625,9 @@ git_auth clone --progress -- {} "$dest"
         }
         let url = String::from_utf8(out)?.trim().to_string();
         if let Ok(parsed) = url::Url::parse(&url) {
-            if !parsed.username().is_empty() || parsed.password().is_some() {
+            if parsed.password().is_some()
+                || (["http", "https"].contains(&parsed.scheme()) && !parsed.username().is_empty())
+            {
                 bail!("仓库 URL 含内嵌认证，请先改为不含凭据的地址")
             }
         }

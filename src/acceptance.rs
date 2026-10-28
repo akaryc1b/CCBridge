@@ -428,6 +428,12 @@ async fn encrypted_ssh_runner_and_mcp_acceptance() -> Result<()> {
     let repeated = c.install().await?;
     assert_eq!(repeated["already_current"], true);
     let shared = Arc::new(backend::BackendState::new(Some(c)));
+    // New human configuration/fetch surfaces must not become implicit AI mutations.
+    for op in ["git_fetch", "git_remote_access"] {
+        let rejected =
+            backend::dispatch(shared.clone(), json!({"op":op,"path":remote_repo}), false).await;
+        assert!(rejected.is_err(), "{op} must remain App-only");
+    }
     let slow_path = remote_home.join("slow-directory");
     private_dir(&slow_path)?;
     let slow_state = shared.clone();

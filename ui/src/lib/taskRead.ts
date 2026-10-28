@@ -27,6 +27,7 @@ export function taskAction(kind?: string) {
     (
       {
         git_update: "查看更新结果",
+        git_fetch: "查看获取结果",
         branch_fetch: "查看分支",
         branch_change: "查看分支",
         clone_into_directory: "查看克隆进度",

@@ -32,3 +32,13 @@ it("separates skipped guards from failed updates without changing protocol state
     ]),
   ).toBe("已更新 1 · 已是最新 1 · 跳过 1 · 失败 1");
 });
+
+it("counts fetched repositories separately from failures", () => {
+  expect(
+    gitResultSummary([
+      { state: "fetched" },
+      { state: "fetched" },
+      { state: "failed", code: "network" },
+    ]),
+  ).toBe("已获取 2 · 失败 1");
+});
