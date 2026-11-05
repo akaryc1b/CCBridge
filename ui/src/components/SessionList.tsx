@@ -1,3 +1,5 @@
+import { isTaskRead, needsAction, type ReadTasks } from "../lib/taskRead";
+import { sessionReadTask, sessionStatus } from "../lib/sessionStatus";
 import { ProjectMenu } from "./ProjectMenu";
 import { searchHighlight } from "../lib/searchHighlight";
 import {
@@ -36,6 +38,8 @@ import { time } from "../lib/format";
 import type { useSessions } from "../lib/useSessions";
 export function SessionList({
   sessions,
+  read = {},
+  connected = true,
   projects,
   selected,
   selectedProject,
@@ -47,6 +51,8 @@ export function SessionList({
   removingProject,
 }: {
   sessions: ReturnType<typeof useSessions>;
+  read?: ReadTasks;
+  connected?: boolean;
   projects: Data[];
   selected: string;
   selectedProject: string;
@@ -81,250 +87,314 @@ export function SessionList({
   }
   return (
     <>
-      <div className="session-project-heading">
-        <strong>项目</strong>
-        <Menu.Root>
-          <Menu.Trigger asChild>
-            <Button variant="ghost" size="icon" aria-label="添加项目或会话">
-              <Plus size={16} />
-            </Button>
-          </Menu.Trigger>
-          <Menu.Portal>
-            <Menu.Content className="context-menu" align="end">
-              <Menu.Item disabled={sessions.offline} onSelect={onAddProject}>
-                <FolderPlus size={15} />
-                添加项目
-              </Menu.Item>
-              <Menu.Item onSelect={() => onNewSession("")}>
-                <MessagesSquare size={15} />
-                新建普通会话
-              </Menu.Item>
-            </Menu.Content>
-          </Menu.Portal>
-        </Menu.Root>
-      </div>
-      <div className="sessions-heading">
-        <div className="session-search">
-          <Search size={15} />
-          <Input
-            disabled={sessions.offline}
-            aria-label="搜索会话"
-            placeholder="搜索标题、输入或最终结果"
-            value={sessions.query}
-            onChange={(e) => sessions.setQuery(e.target.value)}
-            maxLength={200}
-          />
+      <div className="session-list-header">
+        <div className="session-project-heading">
+          <strong>会话</strong>
+          <Menu.Root>
+            <Menu.Trigger asChild>
+              <Button variant="ghost" size="icon" aria-label="添加项目或会话">
+                <Plus size={16} />
+              </Button>
+            </Menu.Trigger>
+            <Menu.Portal>
+              <Menu.Content className="context-menu" align="end">
+                <Menu.Item disabled={sessions.offline} onSelect={onAddProject}>
+                  <FolderPlus size={15} />
+                  添加项目
+                </Menu.Item>
+                <Menu.Item onSelect={() => onNewSession("")}>
+                  <MessagesSquare size={15} />
+                  新建普通会话
+                </Menu.Item>
+              </Menu.Content>
+            </Menu.Portal>
+          </Menu.Root>
         </div>
-        <Button
-          size="icon"
-          variant="ghost"
-          aria-label="刷新会话"
-          disabled={sessions.loading || sessions.offline}
-          onClick={() => sessions.load()}
-        >
-          <RefreshCw size={15} />
-        </Button>
-      </div>
-      <div className="session-tabs">
-        {[false, true].map((a) => (
+        <div className="sessions-heading">
+          <div className="session-search">
+            <Search size={15} />
+            <Input
+              disabled={sessions.offline}
+              aria-label="搜索会话"
+              placeholder="搜索会话…"
+              value={sessions.query}
+              onChange={(e) => sessions.setQuery(e.target.value)}
+              maxLength={200}
+            />
+          </div>
           <Button
-            key={String(a)}
-            variant={sessions.archive === a ? "secondary" : "ghost"}
-            disabled={sessions.offline}
-            onClick={() => sessions.setArchive(a)}
+            size="icon"
+            variant="ghost"
+            aria-label="刷新会话"
+            disabled={sessions.loading || sessions.offline}
+            onClick={() => sessions.load()}
           >
-            {a ? "已归档" : "最近"}
-          </Button>
-        ))}
-      </div>
-      <div className="px-3 pb-3">
-        <Select
-          disabled={sessions.offline}
-          value={sessions.project || "__all__"}
-          onValueChange={(v) => sessions.setProject(v === "__all__" ? "" : v)}
-        >
-          <SelectTrigger aria-label="筛选会话项目">
-            <SelectValue placeholder="全部项目" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__all__">全部项目</SelectItem>
-            {projects.map((p) => (
-              <SelectItem key={p.path} value={p.path}>
-                {p.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      {sessions.offline && <div className="notice">离线 · 上次加载的会话</div>}
-      {!sessions.supported ? (
-        <div className="empty">
-          更新服务端程序 后可搜索、命名和归档
-          <Button variant="outline" onClick={onUpdateRunner}>
-            更新服务端程序
+            <RefreshCw size={15} />
           </Button>
         </div>
-      ) : (
-        <>
-          {sessions.error && (
-            <div className="notice">
-              {sessions.error.replace(/^SEARCH_EXPIRED:\s*/, "")}
-              <Button variant="outline" onClick={() => sessions.load()}>
-                刷新
-              </Button>
-            </div>
-          )}
-          {!!sessions.incomplete && (
-            <div className="notice">
-              结果不完整 · {sessions.incomplete} 条记录无法读取
-              <Button variant="ghost" onClick={() => setDiagnosticsOpen(true)}>
-                查看原因
-              </Button>
-            </div>
-          )}
-          {projectSessionGroups(
-            sessions.items,
-            projects,
-            sessions.query,
-            sessions.archive,
-            sessions.project,
-          ).map((g) => (
-            <details className="session-project" key={g.path} open>
-              <summary
-                className={`session-group-label ${selectedProject === g.path ? "active-project" : ""}`}
-              >
-                <FolderGit2 size={14} />
-                <span className="session-group-name">{g.name}</span>
-                {g.registered && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`在${g.name}新建会话`}
-                    disabled={sessions.offline}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onNewSession(g.path);
-                    }}
-                  >
-                    <Plus size={14} />
-                  </Button>
-                )}
-                {g.registered && (
-                  <ProjectMenu
-                    project={{ path: g.path, name: g.name }}
-                    disabled={sessions.offline || removingProject}
-                    onRemove={onRemoveProject}
-                  />
-                )}
-              </summary>
-              {!g.sessions.length && (
-                <Button
-                  className="session-empty-add"
-                  variant="ghost"
-                  disabled={sessions.offline}
-                  onClick={() => onNewSession(g.path)}
-                >
-                  <Plus size={14} />
-                  新建会话
+        <div className="session-filters">
+          <Select
+            value={sessions.archive ? "archived" : "recent"}
+            disabled={sessions.offline}
+            onValueChange={(v) => sessions.setArchive(v === "archived")}
+          >
+            <SelectTrigger aria-label="会话范围">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="recent">最近</SelectItem>
+              <SelectItem value="archived">已归档</SelectItem>
+            </SelectContent>
+          </Select>
+          <Select
+            disabled={sessions.offline}
+            value={sessions.project || "__all__"}
+            onValueChange={(v) => sessions.setProject(v === "__all__" ? "" : v)}
+          >
+            <SelectTrigger aria-label="筛选会话项目">
+              <SelectValue placeholder="全部项目" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">全部项目</SelectItem>
+              {projects.map((p) => (
+                <SelectItem key={p.path} value={p.path}>
+                  {p.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="session-tree-scroll">
+        {sessions.offline && (
+          <div className="notice">离线 · 上次加载的会话</div>
+        )}
+        {!sessions.supported ? (
+          <div className="empty">
+            更新服务端程序 后可搜索、命名和归档
+            <Button variant="outline" onClick={onUpdateRunner}>
+              更新服务端程序
+            </Button>
+          </div>
+        ) : (
+          <>
+            {sessions.error && (
+              <div className="notice">
+                {sessions.error.replace(/^SEARCH_EXPIRED:\s*/, "")}
+                <Button variant="outline" onClick={() => sessions.load()}>
+                  刷新
                 </Button>
-              )}
-              {g.sessions.map((s) => (
-                <div
-                  className={`session-row ${selected === s.task_id ? "active" : ""}`}
-                  key={s.session_id}
+              </div>
+            )}
+            {!!sessions.incomplete && (
+              <div className="notice">
+                结果不完整 · {sessions.incomplete} 条记录无法读取
+                <Button
+                  variant="ghost"
+                  onClick={() => setDiagnosticsOpen(true)}
                 >
-                  <div className="session-select">
-                    <button onClick={() => onSelect(s.task_id)}>
-                      <strong>{s.title}</strong>
-                      <span>
-                        {s.access === "analysis" ? "分析 · " : ""}
-                        {time(s.updated_at || s.created_at)}
-                        {s.legacy ? " · 旧记录" : ""}
-                      </span>
-                    </button>
-                    {s.hits?.slice(0, 2).map((hit: Data, i: number) => (
-                      <button
-                        aria-label={`打开命中轮次 ${hit.field === "result" ? "最终结果" : hit.field === "prompt" ? "用户输入" : "标题"}`}
-                        className="session-hit"
-                        key={i}
+                  查看原因
+                </Button>
+              </div>
+            )}
+            {projectSessionGroups(
+              sessions.items,
+              projects,
+              sessions.query,
+              sessions.archive,
+              sessions.project,
+            ).map((g) => (
+              <details className="session-project" key={g.path} open>
+                <summary
+                  className={`session-group-label ${selectedProject === g.path ? "active-project" : ""}`}
+                >
+                  <FolderGit2 size={14} />
+                  <span className="session-group-name" title={g.name}>
+                    <span className="session-group-title">{g.name}</span>
+                    <span className="session-group-stats">
+                      {" "}
+                      {g.sessions.some((s) => s.state === "running") && (
+                        <small className="session-group-count">
+                          运行中{" "}
+                          {
+                            g.sessions.filter((s) => s.state === "running")
+                              .length
+                          }
+                        </small>
+                      )}
+                      {g.sessions.some(
+                        (s) =>
+                          !needsAction(sessionReadTask(s)) &&
+                          !isTaskRead(sessionReadTask(s), read),
+                      ) && (
+                        <small className="session-group-count">
+                          未读{" "}
+                          {
+                            g.sessions.filter(
+                              (s) =>
+                                !needsAction(sessionReadTask(s)) &&
+                                !isTaskRead(sessionReadTask(s), read),
+                            ).length
+                          }
+                        </small>
+                      )}
+                    </span>
+                  </span>
+                  <div className="session-project-actions">
+                    {g.registered && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label={`在${g.name}新建会话`}
+                        disabled={sessions.offline}
                         onClick={(e) => {
+                          e.preventDefault();
                           e.stopPropagation();
-                          onSelect(hit.task_id);
+                          onNewSession(g.path);
                         }}
                       >
-                        {hit.field === "result"
-                          ? "最终结果"
-                          : hit.field === "prompt"
-                            ? "用户输入"
-                            : "标题"}{" "}
-                        · {searchHighlight(hit.snippet, sessions.query)}
-                      </button>
-                    ))}
+                        <Plus size={14} />
+                      </Button>
+                    )}
+                    {g.registered && (
+                      <ProjectMenu
+                        project={{ path: g.path, name: g.name }}
+                        disabled={sessions.offline || removingProject}
+                        onRemove={onRemoveProject}
+                      />
+                    )}
                   </div>
-                  {!s.legacy && !sessions.offline && (
-                    <Menu.Root>
-                      <Menu.Trigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`管理会话 ${s.title}`}
+                </summary>
+                {!g.sessions.length && (
+                  <Button
+                    className="session-empty-add"
+                    variant="ghost"
+                    disabled={sessions.offline}
+                    onClick={() => onNewSession(g.path)}
+                  >
+                    <Plus size={14} />
+                    新建会话
+                  </Button>
+                )}
+                {g.sessions.map((s) => (
+                  <div
+                    className={`session-row ${selected === s.task_id ? "active" : ""}`}
+                    key={s.session_id}
+                  >
+                    <div className="session-select">
+                      <button onClick={() => onSelect(s.task_id)}>
+                        <strong
+                          className={
+                            !needsAction(sessionReadTask(s)) &&
+                            !isTaskRead(sessionReadTask(s), read)
+                              ? "session-unread"
+                              : ""
+                          }
                         >
-                          <MoreHorizontal size={15} />
-                        </Button>
-                      </Menu.Trigger>
-                      <Menu.Portal>
-                        <Menu.Content className="context-menu" align="end">
-                          <Menu.Item
-                            onSelect={() => {
-                              setRename(s);
-                              setName(s.title);
-                              setError("");
-                            }}
+                          {s.title}
+                        </strong>
+                        <span>
+                          <span className={`session-state state-${s.state}`}>
+                            {sessionStatus(s, connected)}
+                          </span>
+                          {!["running", "queued", "waiting_approval"].includes(
+                            s.state,
+                          ) && (
+                            <span>
+                              {" "}
+                              ·{" "}
+                              {isTaskRead(sessionReadTask(s), read)
+                                ? "已读"
+                                : "未读"}
+                            </span>
+                          )}
+                          <span> · {time(s.updated_at || s.created_at)}</span>
+                          {s.legacy ? " · 旧记录" : ""}
+                        </span>
+                      </button>
+                      {s.hits?.slice(0, 2).map((hit: Data, i: number) => (
+                        <button
+                          aria-label={`打开命中轮次 ${hit.field === "result" ? "最终结果" : hit.field === "prompt" ? "用户输入" : "标题"}`}
+                          className="session-hit"
+                          key={i}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onSelect(hit.task_id);
+                          }}
+                        >
+                          {hit.field === "result"
+                            ? "最终结果"
+                            : hit.field === "prompt"
+                              ? "用户输入"
+                              : "标题"}{" "}
+                          · {searchHighlight(hit.snippet, sessions.query)}
+                        </button>
+                      ))}
+                    </div>
+                    {!s.legacy && !sessions.offline && (
+                      <Menu.Root>
+                        <Menu.Trigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`管理会话 ${s.title}`}
                           >
-                            <Pencil size={14} />
-                            重命名
-                          </Menu.Item>
-                          <Menu.Item onSelect={() => archive(s)}>
-                            {s.archived ? (
-                              <ArchiveRestore size={14} />
-                            ) : (
-                              <Archive size={14} />
-                            )}
-                            {s.archived ? "恢复" : "归档"}
-                          </Menu.Item>
-                        </Menu.Content>
-                      </Menu.Portal>
-                    </Menu.Root>
-                  )}
-                </div>
-              ))}
-            </details>
-          ))}
-          {!sessions.items.length &&
-            !sessions.loading &&
-            !sessions.error &&
-            (!!sessions.query || sessions.archive || !projects.length) && (
-              <p className="empty">
-                {sessions.query
-                  ? "没有匹配的会话"
-                  : sessions.archive
-                    ? "没有已归档会话"
-                    : "还没有会话"}
-              </p>
+                            <MoreHorizontal size={15} />
+                          </Button>
+                        </Menu.Trigger>
+                        <Menu.Portal>
+                          <Menu.Content className="context-menu" align="end">
+                            <Menu.Item
+                              onSelect={() => {
+                                setRename(s);
+                                setName(s.title);
+                                setError("");
+                              }}
+                            >
+                              <Pencil size={14} />
+                              重命名
+                            </Menu.Item>
+                            <Menu.Item onSelect={() => archive(s)}>
+                              {s.archived ? (
+                                <ArchiveRestore size={14} />
+                              ) : (
+                                <Archive size={14} />
+                              )}
+                              {s.archived ? "恢复" : "归档"}
+                            </Menu.Item>
+                          </Menu.Content>
+                        </Menu.Portal>
+                      </Menu.Root>
+                    )}
+                  </div>
+                ))}
+              </details>
+            ))}
+            {!sessions.items.length &&
+              !sessions.loading &&
+              !sessions.error &&
+              (!!sessions.query || sessions.archive || !projects.length) && (
+                <p className="empty">
+                  {sessions.query
+                    ? "没有匹配的会话"
+                    : sessions.archive
+                      ? "没有已归档会话"
+                      : "还没有会话"}
+                </p>
+              )}
+            {sessions.loading && <p className="empty">加载会话…</p>}
+            {sessions.cursor && (
+              <Button
+                variant="ghost"
+                disabled={sessions.loading || sessions.offline}
+                onClick={() => sessions.load(sessions.cursor!)}
+              >
+                加载更多
+              </Button>
             )}
-          {sessions.loading && <p className="empty">加载会话…</p>}
-          {sessions.cursor && (
-            <Button
-              variant="ghost"
-              disabled={sessions.loading || sessions.offline}
-              onClick={() => sessions.load(sessions.cursor!)}
-            >
-              加载更多
-            </Button>
-          )}
-        </>
-      )}
+          </>
+        )}
+      </div>
       <Dialog open={diagnosticsOpen} onOpenChange={setDiagnosticsOpen}>
         <DialogContent>
           <DialogTitle>无法读取的会话</DialogTitle>

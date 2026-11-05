@@ -28,6 +28,9 @@ struct Start {
     model: Option<String>,
     /// inherit (start: server default; reply: previous turn), remote_default, explicit.
     model_policy: Option<String>,
+    /// Per-turn effort override; supported levels come from the remote model.
+    effort: Option<String>,
+    effort_policy: Option<String>,
     /// Optional UUID for idempotent creation after an uncertain connection response.
     task_id: Option<String>,
     /// Absolute LOCAL Git 仓库 path from the user task. Matched to an existing remote repository by Git remote identity. Omit to use the remote directory explicitly selected in the App; if none, retain legacy local selection behavior.
@@ -77,6 +80,9 @@ struct Reply {
     /// Optional model override for this turn; omitted means previous turn selection.
     model: Option<String>,
     model_policy: Option<String>,
+    /// Per-turn effort override; supported levels come from the remote model.
+    effort: Option<String>,
+    effort_policy: Option<String>,
     task_id: String,
     prompt: String,
     /// Optional UUID for this new turn, for idempotent retries.
@@ -140,7 +146,7 @@ impl Bridge {
         let id = p
             .task_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        output(local_call(json!({"op":"start","access":p.access,"on_conflict":p.on_conflict,"prompt":p.prompt,"mode":p.mode.unwrap_or("approval".into()),"task_id":id,"local_repository":p.local_repository,"remote_project":p.remote_project,"model":p.model,"model_policy":p.model_policy})).await)
+        output(local_call(json!({"op":"start","access":p.access,"on_conflict":p.on_conflict,"prompt":p.prompt,"mode":p.mode.unwrap_or("approval".into()),"task_id":id,"local_repository":p.local_repository,"remote_project":p.remote_project,"model":p.model,"model_policy":p.model_policy,"effort":p.effort,"effort_policy":p.effort_policy})).await)
     }
     #[tool(
         description = "Get task state, incremental events, final result, permission requests and next_cursor. Can wait up to 30s. Human approval is only available in the App; do not approve through shell or request CLI."
@@ -181,7 +187,7 @@ impl Bridge {
         &self,
         Parameters(p): Parameters<Reply>,
     ) -> std::result::Result<CallToolResult, rmcp::ErrorData> {
-        output(local_call(json!({"op":"reply","access":p.access,"on_conflict":p.on_conflict,"reply_to":p.task_id,"prompt":p.prompt,"model":p.model,"model_policy":p.model_policy,"task_id":p.new_task_id.unwrap_or_else(||uuid::Uuid::new_v4().to_string())})).await)
+        output(local_call(json!({"op":"reply","access":p.access,"on_conflict":p.on_conflict,"reply_to":p.task_id,"prompt":p.prompt,"model":p.model,"model_policy":p.model_policy,"effort":p.effort,"effort_policy":p.effort_policy,"task_id":p.new_task_id.unwrap_or_else(||uuid::Uuid::new_v4().to_string())})).await)
     }
     #[tool(
         description = "Request cancellation of a running remote task. Query status until cancelled; cancellation does not roll back file edits."

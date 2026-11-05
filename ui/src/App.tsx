@@ -1,3 +1,24 @@
+import { ClaudeUpdate } from "./components/ClaudeUpdate";
+import { useTaskRead } from "./lib/useTaskRead";
+import { sessionReadTask, sessionActive } from "./lib/sessionStatus";
+import { isTaskRead } from "./lib/taskRead";
+import { Navigation } from "./components/Navigation";
+import {
+  EffortSelect,
+  effortLabel,
+  effortLevels,
+} from "./components/EffortSelect";
+import { ConversationFiles } from "./components/ConversationFiles";
+import {
+  WorkspacePolicy,
+  workspaceProtected,
+} from "./components/WorkspacePolicy";
+import {
+  streamingText,
+  speedLabel,
+  referenceDraft,
+  toolSummary,
+} from "./lib/streaming";
 import { maintenanceLabel } from "./lib/runnerMaintenance";
 import { ProjectPolicy } from "./components/ProjectPolicy";
 import { TaskQueue } from "./components/TaskQueue";
@@ -59,7 +80,6 @@ import {
   conversationTurns,
   nextModelLabel,
   displayModel,
-  eventText,
   taskFailure,
   eventLabel,
 } from "@/lib/conversation";
@@ -77,9 +97,6 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   Activity,
-  Sun,
-  Moon,
-  Monitor,
   MoreHorizontal,
   GitBranch,
   Search,
@@ -223,6 +240,12 @@ function Markdown({ text }: { text: string }) {
   );
 }
 export default function App() {
+  const [sessionListOpen, setSessionListOpen] = useState(() => {
+    const saved = localStorage.getItem("ccbridge-session-list-open");
+    return saved === null ? window.innerWidth > 1150 : saved === "true";
+  });
+  const [effortChoice, setEffortChoice] = useState("");
+  const [conversationTab, setConversationTab] = useState("chat");
   const [page, setPage] = useState("overview"),
     [version, setVersion] = useState("0.5.0"),
     [architecture, setArchitecture] = useState("macOS");
@@ -406,7 +429,16 @@ export default function App() {
   const detailsRef = useRef(details);
   detailsRef.current = details;
 
+  const { read: sessionRead, markRead: markSessionRead } = useTaskRead(
+    `${profile.user}@${profile.host}:${profile.port}`,
+  );
+  const pendingRead = useRef<string>("");
   function switchConversation(id: string) {
+    const item =
+      sessionManager.items.find((s: Data) => s.task_id === id) ||
+      tasks.find((t) => t.task_id === id);
+    pendingRead.current = item && !sessionActive(item) ? id : "";
+    setConversationTab("chat");
     setAccessChoice("inherit");
     setErrors((old) => {
       const next = { ...old };
@@ -420,6 +452,7 @@ export default function App() {
       mode,
       modelPolicy,
       model,
+      effortChoice,
     };
     setDraft(drafts.current[id || "__new__"] || "");
     setSelected(id);
@@ -427,6 +460,7 @@ export default function App() {
     const stored = composerStates.current[id || "__new__"];
     setModelPolicy(stored?.modelPolicy || "inherit");
     setModel(stored?.model || "");
+    setEffortChoice(stored?.effortChoice || "");
     const previous = details[id] || tasks.find((t) => t.task_id === id);
     setMode(stored?.mode || previous?.mode || "automatic");
   }
@@ -439,6 +473,21 @@ export default function App() {
   const connected = connection.connected === true,
     task = details[selected] || tasks.find((t) => t.task_id === selected),
     runner = connection.probe || {};
+  useEffect(() => {
+    const detail = details[selected];
+    if (
+      page === "chat" &&
+      !newConversation &&
+      pendingRead.current === selected &&
+      detail &&
+      !detail.has_more &&
+      !sessionActive(detail) &&
+      !isTaskRead(sessionReadTask(detail), sessionRead)
+    ) {
+      pendingRead.current = "";
+      markSessionRead([sessionReadTask(detail)]);
+    }
+  }, [page, newConversation, selected, details, sessionRead, markSessionRead]);
   const claudeInfoSupported =
     connected && runner.capabilities?.includes("claude_info_v1");
   const claudeInfo = useClaudeInfo(
@@ -462,6 +511,19 @@ export default function App() {
     !claudeInfo.catalog.loading &&
     claudeInfo.catalog.models.length > 0 &&
     !claudeInfo.catalog.models.some((m) => m.value === selectedModelId);
+  const selectedEffort =
+    effortChoice || (!newConversation && task?.effort) || "remote_default";
+  const supportedEfforts = effortLevels(
+    claudeInfo.catalog.models,
+    selectedModelId,
+  );
+  const effortSupported =
+    connected && runner.capabilities?.includes("effort_v1");
+  const invalidEffort =
+    effortSupported &&
+    selectedEffort !== "remote_default" &&
+    !claudeInfo.catalog.loading &&
+    !supportedEfforts.includes(selectedEffort);
   const timeline = conversationTurns(task, details);
   const transcriptRevision = timeline
     .map((t) =>
@@ -488,6 +550,15 @@ export default function App() {
     connection.profile?.active_remote_workspace ||
     profile.active_remote_workspace ||
     "";
+  const conversationPath =
+    task && !newConversation
+      ? task.workspace
+      : draftProject || currentProject || connection.environment?.home || "";
+  const conversationProtected =
+    workspaceProtected(connection.policy, conversationPath) ||
+    (runner.capabilities?.includes("workspace_policy_v1") &&
+      typeof connection.policy?.read_only !== "boolean");
+
   const cloneOperation = useOperation(
     "clone_into_directory",
     cloneProgress.path || path,
@@ -512,6 +583,7 @@ export default function App() {
       branch_fetch: "获取分支",
       branch_change: "分支管理",
       install_runner: "安装服务端程序",
+      claude_update: "更新 Claude Code",
       git_access: "仓库访问检测",
       git_remote_access: "远端访问检测",
       git_vps_auth_test: "服务器认证检测",
@@ -1038,19 +1110,28 @@ export default function App() {
   async function fetchTask(id: string) {
     let currentId: string | undefined = id;
     const seen = new Set<string>();
+    const cursors = new Map<string, number>();
+    let pagesRead = 0;
     const account = connection.connection_id;
-    while (currentId && !seen.has(currentId) && seen.size < 20) {
-      seen.add(currentId);
+    while (
+      currentId &&
+      !seen.has(currentId) &&
+      seen.size < 20 &&
+      pagesRead++ < 8
+    ) {
       const r = await request(
         "task_status",
         {
           task_id: currentId,
-          cursor: detailsRef.current[currentId]?.next_cursor || 0,
+          cursor:
+            cursors.get(currentId) ??
+            detailsRef.current[currentId]?.next_cursor ??
+            0,
         },
         true,
       );
       if (!r || account !== connectionIdentity.current) break;
-      const key = currentId;
+      const key: string = currentId;
       setTasks((old) =>
         old.map((t) =>
           t.task_id === key
@@ -1071,9 +1152,18 @@ export default function App() {
         ...d,
         [key]: {
           ...r,
+          telemetry_received_at: Date.now(),
           events: [...(d[key]?.events || []), ...(r.events || [])],
         },
       }));
+      const previousCursor =
+        cursors.get(key) ?? detailsRef.current[key]?.next_cursor ?? 0;
+      cursors.set(key, r.next_cursor || 0);
+      if (r.has_more && r.next_cursor > previousCursor) {
+        currentId = key;
+        continue;
+      }
+      seen.add(key);
       currentId =
         r.reply_to && !detailsRef.current[r.reply_to] ? r.reply_to : undefined;
     }
@@ -1312,7 +1402,8 @@ export default function App() {
       (task && !newConversation && active(task)) ||
       (mode === "automatic" && !profile.allow_auto) ||
       (modelPolicy === "explicit" && !model.trim()) ||
-      invalidModel
+      invalidModel ||
+      invalidEffort
     )
       return;
     const continuing = task && !newConversation;
@@ -1322,7 +1413,7 @@ export default function App() {
       mode,
       ...(runner.capabilities?.includes("analysis_v1")
         ? {
-            access: connection.policy?.read_only
+            access: conversationProtected
               ? "analysis"
               : accessChoice === "inherit"
                 ? continuing
@@ -1333,6 +1424,11 @@ export default function App() {
         : {}),
       model_policy: modelPolicy,
     };
+    if (effortSupported && effortChoice) {
+      args.effort_policy =
+        effortChoice === "remote_default" ? "remote_default" : "explicit";
+      if (effortChoice !== "remote_default") args.effort = effortChoice;
+    }
     if (modelPolicy === "explicit") args.model = model.trim();
     if (continuing) args.reply_to = task.task_id;
     else if (
@@ -1427,65 +1523,19 @@ export default function App() {
   );
   return (
     <div
-      className={`app ${navigator.platform.toLowerCase().includes("mac") ? "mac-chrome" : ""}`}
+      className={`app ${page === "chat" ? "chat-shell" : ""} ${navigator.platform.toLowerCase().includes("mac") ? "mac-chrome" : ""}`}
     >
-      <aside className="sidebar">
-        <div className="window-drag-space" data-tauri-drag-region />
-        <div className="brand" data-tauri-drag-region>
-          <AppIcon />
-          <div>CCBridge</div>
-        </div>
-        <nav>
-          {pages.map(([id, label, Icon]) => (
-            <button
-              key={id}
-              className={page === id ? "selected" : ""}
-              onClick={() => setPage(id)}
-            >
-              <Icon size={18} />
-              {label}
-              {id === "chat" && tasks.some(active) && (
-                <span className="nav-dot" />
-              )}
-            </button>
-          ))}
-        </nav>
-        <div className="sidebar-bottom">
-          <div className="connection-mini">
-            <span className={connected ? "dot live" : "dot"} />
-            <span>
-              {connecting
-                ? "连接中…"
-                : connected
-                  ? `${connection.profile?.user}@${connection.profile?.host}`
-                  : "未连接"}
-            </span>
-          </div>
-          <div className="theme-switch">
-            <span>外观</span>
-            <div>
-              {(
-                [
-                  ["light", Sun, "亮色"],
-                  ["dark", Moon, "暗色"],
-                  ["system", Monitor, "跟随系统"],
-                ] as const
-              ).map(([v, Icon, label]) => (
-                <Button
-                  key={v}
-                  aria-label={label}
-                  title={label}
-                  variant="ghost"
-                  className={theme === v ? "chosen" : ""}
-                  onClick={() => setTheme(v)}
-                >
-                  <Icon size={14} />
-                </Button>
-              ))}
-            </div>
-          </div>
-        </div>
-      </aside>
+      <Navigation
+        pages={pages}
+        page={page}
+        onPage={setPage}
+        connected={connected}
+        connecting={connecting}
+        account={`${connection.profile?.user || ""}@${connection.profile?.host || ""}`}
+        theme={theme}
+        onTheme={setTheme}
+        activeTasks={tasks.some(active)}
+      />
       <main>
         <header data-tauri-drag-region>
           <h1 data-tauri-drag-region>
@@ -1947,17 +1997,13 @@ export default function App() {
                 {installOperation.snap?.state === "running" && (
                   <OperationBar operation={installOperation.snap} />
                 )}
-                <div className="environment-row compact-environment">
-                  <Label title={connection.resolved_paths?.claude || ""}>
-                    Claude Code
-                  </Label>
-                  <span className="grow" />
-                  <span className="muted">
-                    {runner.claude_version?.replace(" (Claude Code)", "") ||
-                      runner.claude_error ||
-                      "未检测到"}
-                  </span>
-                </div>
+                <ClaudeUpdate
+                  connection={connection}
+                  onRefresh={async () => {
+                    await refreshConnection();
+                    await claudeInfo.refreshModels();
+                  }}
+                />
                 <div className="environment-row compact-environment">
                   <Label>默认模型</Label>
                   <span className="grow" />
@@ -2273,31 +2319,56 @@ export default function App() {
             </div>
           )}
           {page === "chat" && (
-            <div className="chat-layout">
+            <div
+              className={`chat-layout ${sessionListOpen ? "session-list-open" : "session-list-closed"}`}
+            >
               <aside className="sessions">
-                <SessionList
-                  key={connection.connection_id || "offline"}
-                  sessions={sessionManager}
-                  projects={projects}
-                  selected={selected}
-                  selectedProject={
-                    !newConversation && task
-                      ? task.workspace
-                      : draftProject || currentProject
-                  }
-                  onSelect={(id) => switchConversation(id)}
-                  onUpdateRunner={() => setPage("servers")}
-                  onAddProject={() => openProject()}
-                  onRemoveProject={removeProject}
-                  removingProject={removingProject}
-                  onNewSession={(p) =>
-                    startDraft(p || connection.environment?.home || "")
-                  }
-                />
-                {!sessionManager.supported && groupSessionsFallback}
+                <div className="session-list-scroll">
+                  <SessionList
+                    key={connection.connection_id || "offline"}
+                    sessions={sessionManager}
+                    read={sessionRead}
+                    connected={connected}
+                    projects={projects}
+                    selected={selected}
+                    selectedProject={
+                      !newConversation && task
+                        ? task.workspace
+                        : draftProject || currentProject
+                    }
+                    onSelect={(id) => switchConversation(id)}
+                    onUpdateRunner={() => setPage("servers")}
+                    onAddProject={() => openProject()}
+                    onRemoveProject={removeProject}
+                    removingProject={removingProject}
+                    onNewSession={(p) =>
+                      startDraft(p || connection.environment?.home || "")
+                    }
+                  />
+                  {!sessionManager.supported && groupSessionsFallback}
+                </div>
               </aside>
               <section className="conversation">
                 <div className="conversation-heading">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label={
+                      sessionListOpen ? "收起会话列表" : "展开会话列表"
+                    }
+                    aria-expanded={sessionListOpen}
+                    onClick={() =>
+                      setSessionListOpen((open) => {
+                        localStorage.setItem(
+                          "ccbridge-session-list-open",
+                          String(!open),
+                        );
+                        return !open;
+                      })
+                    }
+                  >
+                    <MessagesSquare size={17} />
+                  </Button>
                   <div>
                     <strong>
                       {task && !newConversation
@@ -2317,6 +2388,12 @@ export default function App() {
                         : draftProject || currentProject || "选择项目"}
                     </small>
                   </div>
+                  <WorkspacePolicy
+                    key={`${connection.connection_id}:${conversationPath}`}
+                    connection={connection}
+                    path={conversationPath}
+                    refresh={refreshConnection}
+                  />
                   {task && !newConversation && (
                     <Badge variant="outline">
                       {task.access === "analysis" ? "分析" : "开发"}
@@ -2328,6 +2405,41 @@ export default function App() {
                     </Badge>
                   )}
                 </div>
+                <div className="conversation-tabs">
+                  <Button
+                    variant="ghost"
+                    aria-pressed={conversationTab === "chat"}
+                    onClick={() => setConversationTab("chat")}
+                  >
+                    对话
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    aria-pressed={conversationTab === "files"}
+                    onClick={() => setConversationTab("files")}
+                  >
+                    文件
+                  </Button>
+                </div>
+                {conversationTab === "files" && (
+                  <ConversationFiles
+                    root={conversationPath}
+                    connectionId={connection.connection_id || ""}
+                    connected={connected}
+                    revision={repoRefresh}
+                    onReference={(p) => {
+                      setDraft((old) => referenceDraft(old, p));
+                      setConversationTab("chat");
+                    }}
+                    onManage={(p) => {
+                      setPage("projects");
+                      safe(browse(p));
+                    }}
+                    onAction={(action, entry) =>
+                      openFileOperation({ action, entry })
+                    }
+                  />
+                )}
                 {task?.database_snapshot?.mappings?.length > 0 && (
                   <div className="px-5 py-2 text-sm text-muted-foreground">
                     本会话数据库：
@@ -2373,7 +2485,7 @@ export default function App() {
                   </div>
                 )}
                 <div
-                  className="messages"
+                  className={`messages ${conversationTab === "files" ? "conversation-hidden" : ""}`}
                   ref={messagesRef}
                   onScroll={(e) => {
                     const el = e.currentTarget;
@@ -2417,6 +2529,17 @@ export default function App() {
                               <span>
                                 {statusLabels[turn.state] || turn.state}
                               </span>
+                              {turn.effort && (
+                                <Badge variant="outline">
+                                  思考设置 · {effortLabel(turn.effort)}
+                                </Badge>
+                              )}
+                              {turn.state !== "running" &&
+                                speedLabel(turn, connected, tick) && (
+                                  <span className="stream-speed" role="status">
+                                    {speedLabel(turn, connected, tick)}
+                                  </span>
+                                )}
                             </div>
                             {turn.state === "queued" ||
                             turn.ownership_unknown ? (
@@ -2460,15 +2583,12 @@ export default function App() {
                                     : turn.result?.result || "无文本输出"
                                 }
                               />
-                            ) : (turn.events || []).some((e: Data) =>
-                                eventText(e),
-                              ) ? (
+                            ) : streamingText(turn.events || []).length ? (
                               <>
-                                {(turn.events || []).map(
-                                  (e: Data, i: number) =>
-                                    eventText(e) && (
-                                      <Markdown key={i} text={eventText(e)} />
-                                    ),
+                                {streamingText(turn.events || []).map(
+                                  (text, i) => (
+                                    <Markdown key={i} text={text} />
+                                  ),
                                 )}
                               </>
                             ) : (
@@ -2495,13 +2615,17 @@ export default function App() {
                               )}
                             {(turn.events || []).length > 0 && (
                               <details>
-                                <summary>{turn.events.length} 个步骤</summary>
-                                {turn.events.map((e: Data, i: number) => (
-                                  <details key={i}>
-                                    <summary>{eventLabel(e)}</summary>
-                                    <pre>{JSON.stringify(e, null, 2)}</pre>
-                                  </details>
-                                ))}
+                                <summary>{toolSummary(turn.events)}</summary>
+                                {turn.events
+                                  .filter(
+                                    (e: Data) => e.type !== "stream_event",
+                                  )
+                                  .map((e: Data, i: number) => (
+                                    <details key={i}>
+                                      <summary>{eventLabel(e)}</summary>
+                                      <pre>{JSON.stringify(e, null, 2)}</pre>
+                                    </details>
+                                  ))}
                               </details>
                             )}
                           </article>
@@ -2593,7 +2717,9 @@ export default function App() {
                       </div>
                     ))}
                 </div>
-                <div className="composer">
+                <div
+                  className={`composer ${task && active(task) ? "composer-running" : ""} ${conversationTab === "files" ? "conversation-hidden" : ""}`}
+                >
                   <div className="composer-options">
                     <Button
                       variant="outline"
@@ -2621,7 +2747,7 @@ export default function App() {
                       value={
                         !runner.capabilities?.includes("analysis_v1")
                           ? "write"
-                          : connection.policy?.read_only
+                          : conversationProtected
                             ? "analysis"
                             : accessChoice === "inherit"
                               ? !newConversation && task
@@ -2648,7 +2774,7 @@ export default function App() {
                         </SelectItem>
                         <SelectItem
                           value="write"
-                          disabled={connection.policy?.read_only === true}
+                          disabled={conversationProtected}
                         >
                           开发
                         </SelectItem>
@@ -2668,53 +2794,76 @@ export default function App() {
                         <SelectItem value="approval">审批</SelectItem>
                       </SelectContent>
                     </Select>
-                    <RemoteModelSelect
-                      label="下一轮模型"
-                      value={
-                        modelPolicy === "inherit"
-                          ? !newConversation && task
-                            ? "__inherit"
-                            : profile.model || "default"
-                          : modelPolicy === "remote_default"
-                            ? "default"
-                            : model
-                      }
-                      inheritLabel={
-                        !newConversation && task
-                          ? nextModelLabel(task, profile.model)
-                          : undefined
-                      }
-                      models={claudeInfo.catalog.models}
-                      loading={claudeInfo.catalog.loading}
-                      disabled={!connected}
-                      onChange={(v) => {
-                        if (v === "__inherit") {
-                          setModelPolicy("inherit");
-                          setModel("");
-                        } else if (v === "default") {
-                          setModelPolicy("remote_default");
-                          setModel("");
-                        } else {
-                          setModelPolicy("explicit");
-                          setModel(v);
+                    <div className="composer-model-controls">
+                      <RemoteModelSelect
+                        label="下一轮模型"
+                        value={
+                          modelPolicy === "inherit"
+                            ? !newConversation && task
+                              ? "__inherit"
+                              : profile.model || "default"
+                            : modelPolicy === "remote_default"
+                              ? "default"
+                              : model
                         }
-                      }}
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      aria-label="刷新模型列表"
-                      disabled={
-                        !claudeInfoSupported || claudeInfo.catalog.loading
-                      }
-                      onClick={() => void claudeInfo.refreshModels()}
-                    >
-                      <RefreshCw
-                        size={14}
-                        className={claudeInfo.catalog.loading ? "spin" : ""}
+                        inheritLabel={
+                          !newConversation && task
+                            ? nextModelLabel(task, profile.model)
+                            : undefined
+                        }
+                        models={claudeInfo.catalog.models}
+                        loading={claudeInfo.catalog.loading}
+                        disabled={!connected}
+                        onChange={(v) => {
+                          if (v === "__inherit") {
+                            setModelPolicy("inherit");
+                            setModel("");
+                          } else if (v === "default") {
+                            setModelPolicy("remote_default");
+                            setModel("");
+                          } else {
+                            setModelPolicy("explicit");
+                            setModel(v);
+                          }
+                        }}
                       />
-                    </Button>
+                      <EffortSelect
+                        value={selectedEffort}
+                        onChange={setEffortChoice}
+                        levels={supportedEfforts}
+                        disabled={
+                          !effortSupported || claudeInfo.catalog.loading
+                        }
+                      />
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        aria-label="刷新模型列表"
+                        disabled={
+                          !claudeInfoSupported || claudeInfo.catalog.loading
+                        }
+                        onClick={() => void claudeInfo.refreshModels()}
+                      >
+                        <RefreshCw
+                          size={14}
+                          className={claudeInfo.catalog.loading ? "spin" : ""}
+                        />
+                      </Button>
+                    </div>
                   </div>
+                  {invalidEffort && (
+                    <InlineAlert>
+                      当前模型未提供此思考强度，请重新选择或跟随远端默认。
+                    </InlineAlert>
+                  )}
+                  {task &&
+                    active(task) &&
+                    effortChoice &&
+                    (effortChoice === "remote_default"
+                      ? !!task.effort
+                      : effortChoice !== task.effort) && (
+                      <p className="hint">思考强度将在下一轮生效。</p>
+                    )}
                   {invalidModel && (
                     <InlineAlert>模型不在远端列表，请重新选择</InlineAlert>
                   )}
@@ -2729,7 +2878,11 @@ export default function App() {
                     }
                     aria-label="任务指令"
                     value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
+                    onChange={(e) => {
+                      setDraft(e.target.value);
+                      if (e.target.value.endsWith("@"))
+                        setConversationTab("files");
+                    }}
                     placeholder={
                       selectedSession?.archived && !newConversation
                         ? "恢复会话后继续追问"
@@ -2747,7 +2900,10 @@ export default function App() {
                     }}
                   />
                   <div className="composer-footer">
-                    <span></span>
+                    <span>
+                      {task?.state === "running" &&
+                        speedLabel(task, connected, tick)}
+                    </span>
                     <div>
                       {task && active(task) && task.state !== "queued" && (
                         <Button
@@ -2775,6 +2931,7 @@ export default function App() {
                           (!!task && active(task)) ||
                           (modelPolicy === "explicit" && !model.trim()) ||
                           invalidModel ||
+                          invalidEffort ||
                           (mode === "automatic" && !profile.allow_auto)
                         }
                         onClick={() => safe(send())}
@@ -3199,7 +3356,8 @@ export default function App() {
             operation={fileOperation}
             onClose={() => setFileOperation(null)}
             onDone={async () => {
-              await browse(listedPath);
+              setRepoRefresh((v) => v + 1);
+              if (listedPath) await browse(listedPath);
             }}
             home={connection.environment?.home || ""}
           />

@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { errorText } from "@/components/CodeupAuth";
-export type RemoteModel = { value: string; label: string; resolved?: string };
+export type RemoteModel = {
+  value: string;
+  label: string;
+  resolved?: string;
+  effort_levels?: string[];
+};
 type State = { models: RemoteModel[]; loading: boolean; error: string };
 export function useClaudeInfo(connectionId: string, supported: boolean) {
   const [catalog, setCatalog] = useState<State>({

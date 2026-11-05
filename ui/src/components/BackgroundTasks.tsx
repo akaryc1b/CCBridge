@@ -1,13 +1,12 @@
+import { useTaskRead } from "../lib/useTaskRead";
 import { TaskQueue } from "./TaskQueue";
 import { Dialog as Sheet } from "radix-ui";
 import { useEffect, useState } from "react";
 import {
   isTaskRead,
-  markTasksRead,
   needsAction,
   taskAction,
   taskState,
-  type ReadTasks,
 } from "../lib/taskRead";
 import {
   ArrowLeft,
@@ -104,36 +103,7 @@ export function BackgroundTasks({
       "interrupted",
       "waiting_approval",
     ].includes(state(t));
-  const storageKey = `ccbridge.task-read.v1:${account || "offline"}`;
-  const [readState, setReadState] = useState<{
-    key: string;
-    values: ReadTasks;
-  }>({ key: "", values: {} });
-  const read = readState.key === storageKey ? readState.values : {};
-  useEffect(() => {
-    let values: ReadTasks = {};
-    try {
-      const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
-      if (saved && typeof saved === "object" && !Array.isArray(saved))
-        values = Object.fromEntries(
-          Object.entries(saved).flatMap(([key, value]) =>
-            typeof value === "string" ? [[key, value] as const] : [],
-          ),
-        );
-    } catch {
-      /* A missing/unavailable local store leaves reminders unread. */
-    }
-    setReadState({ key: storageKey, values });
-  }, [storageKey]);
-  function markRead(items: BackgroundTask[]) {
-    const values = markTasksRead(items, read);
-    setReadState({ key: storageKey, values });
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(values));
-    } catch {
-      /* Session-only read state still works. */
-    }
-  }
+  const { read, markRead } = useTaskRead(account || "offline");
   const unreadEnded = tasks.filter(
     (t) => !needsAction(t) && !isTaskRead(t, read),
   );

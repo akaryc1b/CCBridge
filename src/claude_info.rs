@@ -153,7 +153,10 @@ pub fn usage(claude: &str, root: &Path) -> Result<Value> {
     }
 }
 fn account_or_history(account: Value, root: &Path) -> Result<Value> {
-    if account["state"] == "reported" {
+    if account["source"] == "claude_account"
+        || account["live"] == true
+        || account["state"] == "reported"
+    {
         return Ok(account);
     }
     let mut historical = usage_at(root)?;
@@ -179,7 +182,14 @@ fn sanitize_models(v: &Value) -> Result<Value> {
         let resolved = row["resolvedModel"]
             .as_str()
             .filter(|s| crate::models::validate(s).is_ok());
-        models.push(json!({"value":value,"label":label.chars().take(160).collect::<String>(),"resolved":resolved}));
+        let levels: Vec<&str> = row["supportedEffortLevels"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|s| ["low", "medium", "high", "xhigh", "max"].contains(s))
+            .collect();
+        models.push(json!({"value":value,"label":label.chars().take(160).collect::<String>(),"resolved":resolved,"effort_levels":levels}));
     }
     if models.is_empty() {
         bail!("Claude 未返回可选模型，请检查当前账号")
@@ -301,6 +311,18 @@ pub fn usage_at(root: &Path) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn live_missing_window_does_not_resurrect_old_five_hour_cache() {
+        let root = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        std::fs::create_dir(&root).unwrap();
+        let fresh =
+            sanitize_usage(&json!({"rate_limits_available":true,"rate_limits":{}})).unwrap();
+        let r = account_or_history(fresh, &root).unwrap();
+        assert_eq!(r["state"], "unavailable");
+        assert!(r["windows"].as_object().unwrap().is_empty());
+        assert_eq!(r["live"], true);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn prompt_free_handshake_reaps_child() {
         let fixture = format!("{}/tests/fake_claude.py", env!("CARGO_MANIFEST_DIR"));

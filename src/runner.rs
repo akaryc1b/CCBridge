@@ -26,6 +26,9 @@ pub struct Task {
     pub claude: String,
     #[serde(default)]
     pub model: String,
+    pub effort: Option<String>,
+    pub effort_requested: Option<String>,
+    pub effort_policy: Option<String>,
     #[serde(default)]
     pub model_requested: String,
     #[serde(default)]
@@ -133,7 +136,7 @@ pub fn dispatch(v: Value) -> Result<Value> {
                 .filter(|o| o.status.success())
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
             Ok(
-                json!({"runner_version":env!("CARGO_PKG_VERSION"),"protocol_version":1,"capabilities":["models_v1","projects_v1","session_identity_v1","claude_info_v1","vps_auth_v1","sessions_v1","project_remove_v1","task_queue_v1","lease_v1","analysis_v1","policy_v1"],"workspace":work,"claude_version":version,"claude_error":if version.is_none(){Some("当前账号未找到可运行的 Claude，请在高级设置填写绝对路径，或在远端安装并登录")}else{None},"account_home":home()?,"state_directory":runner_dir()?,"code_access":"remote_directory","warning":"工作目录不是 OS 沙箱；全自动模式拥有该 SSH 账号的文件与命令权限"}),
+                json!({"runner_version":env!("CARGO_PKG_VERSION"),"protocol_version":1,"capabilities":["models_v1","projects_v1","session_identity_v1","claude_info_v1","vps_auth_v1","sessions_v1","project_remove_v1","task_queue_v1","lease_v1","analysis_v1","policy_v1","workspace_policy_v1","stream_metrics_v1","effort_v1","claude_update_v1"],"workspace":work,"claude_version":version,"claude_error":if version.is_none(){Some("当前账号未找到可运行的 Claude，请在高级设置填写绝对路径，或在远端安装并登录")}else{None},"account_home":home()?,"state_directory":runner_dir()?,"code_access":"remote_directory","warning":"工作目录不是 OS 沙箱；全自动模式拥有该 SSH 账号的文件与命令权限"}),
             )
         }
         "diagnostic_workspace" => {
@@ -141,6 +144,8 @@ pub fn dispatch(v: Value) -> Result<Value> {
             private_dir(&p)?;
             Ok(json!({"path":p}))
         }
+        "claude_update_check" => crate::claude_update::check(field(&v, "claude")?),
+        "claude_update" => crate::claude_update::update(&v),
         "claude_models" => crate::claude_info::models(field(&v, "claude")?),
         "claude_usage" => {
             crate::claude_info::usage(v["claude"].as_str().unwrap_or(""), &runner_dir()?)
@@ -170,7 +175,7 @@ pub fn dispatch(v: Value) -> Result<Value> {
             }
             tasks.truncate(100);
             Ok(
-                json!({"tasks":tasks.into_iter().map(|t| json!({"access":t.access,"access_requested":t.access_requested,"policy_revision":t.policy_revision,"blocked_reason":t.blocked_reason,"phase":t.phase,"ownership_unknown":t.ownership_unknown,"queue":crate::scheduler::queue(&t).unwrap_or(Value::Null),"session_meta":crate::sessions::task_metadata(&t.session_id,first_prompts.get(&t.session_id).map(String::as_str).unwrap_or(&t.prompt)),"id":t.id,"session_id":t.session_id,"state":if t.ownership_unknown{"interrupted"}else{&t.state},"mode":t.mode,"workspace":t.workspace,"created_at":t.created_at,"updated_at":t.updated_at,"model_requested":t.model_requested,"model_resolved":t.model_resolved,"title":t.prompt.chars().take(64).collect::<String>(),"resume":t.resume,"reply_to":t.reply_to})).collect::<Vec<_>>()}),
+                json!({"tasks":tasks.into_iter().map(|t| json!({"access":t.access,"access_requested":t.access_requested,"policy_revision":t.policy_revision,"blocked_reason":t.blocked_reason,"phase":t.phase,"ownership_unknown":t.ownership_unknown,"queue":crate::scheduler::queue(&t).unwrap_or(Value::Null),"session_meta":crate::sessions::task_metadata(&t.session_id,first_prompts.get(&t.session_id).map(String::as_str).unwrap_or(&t.prompt)),"id":t.id,"session_id":t.session_id,"state":if t.ownership_unknown{"interrupted"}else{&t.state},"mode":t.mode,"workspace":t.workspace,"created_at":t.created_at,"updated_at":t.updated_at,"effort":t.effort,"model_requested":t.model_requested,"model_resolved":t.model_resolved,"title":t.prompt.chars().take(64).collect::<String>(),"resume":t.resume,"reply_to":t.reply_to})).collect::<Vec<_>>()}),
             )
         }
         "task_release" => {
@@ -261,7 +266,16 @@ fn start(v: Value) -> Result<Value> {
     // Caller-generated UUID makes an uncertain SSH response safely recoverable.
     if dir.exists() {
         let t: Task = read_json(&dir.join("task.json"))?;
-        if t.access_requested.as_deref() != v["access"].as_str().filter(|s| !s.is_empty())
+        if t.effort_requested.as_deref() != v["effort"].as_str()
+            || t.effort_policy.as_deref().unwrap_or("inherit")
+                != v["effort_policy"]
+                    .as_str()
+                    .unwrap_or(if v["effort"].is_string() {
+                        "explicit"
+                    } else {
+                        "inherit"
+                    })
+            || t.access_requested.as_deref() != v["access"].as_str().filter(|s| !s.is_empty())
             || t.diagnostic != (v["diagnostic"] == true)
             || t.model != v["model"].as_str().unwrap_or("")
             || t.reply_to.as_deref() != v["reply_to"].as_str()
@@ -290,6 +304,7 @@ fn start(v: Value) -> Result<Value> {
     let mut session_id = uuid::Uuid::new_v4().to_string();
     let mut resume = false;
     let mut parent_access = None;
+    let mut previous_effort = Value::Null;
     if let Some(parent) = v["reply_to"].as_str() {
         let old: Task = read_json(&task_dir(parent)?.join("task.json"))?;
         if old.workspace != workspace {
@@ -302,12 +317,19 @@ fn start(v: Value) -> Result<Value> {
             bail!("上一轮没有有效 CC 会话结果，无法保证续接")
         }
         valid_id(&old.session_id).context("旧记录缺少有效会话标识，请新建任务")?;
+        previous_effort = json!({"effort":old.effort});
         parent_access = Some(old.access.clone());
         session_id = old.session_id;
         resume = true;
     }
+    let effort = crate::effort::selection(&v, Some(&previous_effort))?;
     let policy = crate::policy::read()?;
-    let access = crate::policy::scope(&policy, v["access"].as_str(), parent_access.as_deref())?;
+    let access = crate::policy::workspace_scope(
+        &policy,
+        Path::new(&workspace),
+        v["access"].as_str(),
+        parent_access.as_deref(),
+    )?;
     let databases = if access == "analysis" {
         Vec::new()
     } else {
@@ -358,6 +380,18 @@ fn start(v: Value) -> Result<Value> {
         session_id,
         workspace,
         claude: field(&v, "claude")?.to_owned(),
+        effort,
+        effort_requested: v["effort"].as_str().map(str::to_owned),
+        effort_policy: Some(
+            v["effort_policy"]
+                .as_str()
+                .unwrap_or(if v["effort"].is_string() {
+                    "explicit"
+                } else {
+                    "inherit"
+                })
+                .into(),
+        ),
         model: v["model"].as_str().unwrap_or("").into(),
         model_requested: v["model"].as_str().unwrap_or("").into(),
         model_source: v["model_source"].as_str().unwrap_or("legacy").into(),
@@ -451,7 +485,10 @@ pub fn worker(id: &str) -> Result<()> {
             return Ok(());
         }
         let policy = crate::policy::read()?;
-        if t.access == "write" && policy.read_only && !t.diagnostic {
+        if t.access == "write"
+            && crate::policy::protected(&policy, Path::new(&t.workspace))
+            && !t.diagnostic
+        {
             if t.blocked_reason.as_deref() != Some("policy") {
                 t.blocked_reason = Some("policy".into());
                 t.updated_at = now();
@@ -540,6 +577,7 @@ fn run_cc(t: &mut Task, dir: &Path) -> Result<()> {
             "--output-format",
             "stream-json",
             "--verbose",
+            "--include-partial-messages",
             "--strict-mcp-config",
         ])
         .arg("--mcp-config")
@@ -559,6 +597,10 @@ fn run_cc(t: &mut Task, dir: &Path) -> Result<()> {
             "--permission-prompt-tool",
             "mcp__ccbridge_permissions__approve",
         ]);
+    }
+    if let Some(effort) = &t.effort {
+        cmd.args(["--effort", effort]);
+        cmd.env("CLAUDE_CODE_EFFORT_LEVEL", effort);
     }
     if !t.model.is_empty() {
         cmd.args(["--model", &t.model]);
@@ -592,9 +634,16 @@ fn run_cc(t: &mut Task, dir: &Path) -> Result<()> {
     drop(input);
     let stdout = child.stdout.take().unwrap();
     let event_path = dir.join("events.jsonl");
+    let telemetry_path = dir.join("telemetry.json");
     let reader = std::thread::spawn(move || -> Result<()> {
         let result = (|| -> Result<()> {
             let mut verified = !analysis;
+            let mut metrics = crate::telemetry::StreamMetrics::default();
+            let clock = std::time::Instant::now();
+            let epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis() as u64;
+            let mut last_metrics = 0;
             let mut out = OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -607,6 +656,12 @@ fn run_cc(t: &mut Task, dir: &Path) -> Result<()> {
                 // Timestamp only quota events at receipt, not when a later task ends.
                 // Other protocol frames remain byte-for-byte unchanged.
                 if let Ok(mut event) = serde_json::from_str::<Value>(&line) {
+                    let at = epoch + clock.elapsed().as_millis() as u64;
+                    metrics.accept(&event, at);
+                    if at.saturating_sub(last_metrics) >= 250 || event["type"] == "result" {
+                        write_json(&telemetry_path, &metrics.snapshot())?;
+                        last_metrics = at;
+                    }
                     if analysis
                         && event["type"] == "system"
                         && event["subtype"] == "init"
@@ -873,7 +928,18 @@ pub fn snapshot(id: &str, cursor: u64) -> Result<Value> {
     } else {
         &t.state
     };
+    let telemetry = read_json::<Value>(&dir.join("telemetry.json"))
+        .ok()
+        .map(|mut m| {
+            let current_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            m["age_ms"] =
+                json!(current_ms.saturating_sub(m["observed_at_ms"].as_u64().unwrap_or(0)));
+            m
+        });
     Ok(
-        json!({"access":t.access,"access_requested":t.access_requested,"policy_revision":t.policy_revision,"blocked_reason":t.blocked_reason,"phase":t.phase,"ownership_unknown":t.ownership_unknown,"queue":crate::scheduler::queue(&t)?,"database_snapshot":crate::databases::task_summary(&dir, &t.workspace)?,"model":t.model,"model_requested":t.model_requested,"model_source":t.model_source,"model_resolved":t.model_resolved,"model_status":t.model_status,"observed_session_id":t.observed_session_id,"task_id":t.id,"session_id":t.session_id,"prompt":t.prompt,"created_at":t.created_at,"resume":t.resume,"reply_to":t.reply_to,"has_more":events.len()>=80 || next.saturating_sub(cursor)>=512*1024,"state":display_state,"mode":t.mode,"workspace":t.workspace,"result":t.result,"error":t.error,"events":events,"next_cursor":next,"approvals":approvals,"updated_at":t.updated_at}),
+        json!({"effort":t.effort,"effort_policy":t.effort_policy,"telemetry":telemetry,"access":t.access,"access_requested":t.access_requested,"policy_revision":t.policy_revision,"blocked_reason":t.blocked_reason,"phase":t.phase,"ownership_unknown":t.ownership_unknown,"queue":crate::scheduler::queue(&t)?,"database_snapshot":crate::databases::task_summary(&dir, &t.workspace)?,"model":t.model,"model_requested":t.model_requested,"model_source":t.model_source,"model_resolved":t.model_resolved,"model_status":t.model_status,"observed_session_id":t.observed_session_id,"task_id":t.id,"session_id":t.session_id,"prompt":t.prompt,"created_at":t.created_at,"resume":t.resume,"reply_to":t.reply_to,"has_more":events.len()>=80 || next.saturating_sub(cursor)>=512*1024,"state":display_state,"mode":t.mode,"workspace":t.workspace,"result":t.result,"error":t.error,"events":events,"next_cursor":next,"approvals":approvals,"updated_at":t.updated_at}),
     )
 }

@@ -64,6 +64,10 @@ jobs:
         run: |
           python3 tests/queue-acceptance.py "$PWD/target/release/ccbridge"
           python3 tests/parallel-acceptance.py "$PWD/target/release/ccbridge"
+      - name: Streaming, per-turn effort and Claude maintenance acceptance
+        run: |
+          python3 tests/streaming-acceptance.py "$PWD/target/release/ccbridge"
+          python3 tests/claude-update-acceptance.py "$PWD/target/release/ccbridge"
       - name: Prepare Runner
         run: mkdir -p dist && cp target/release/ccbridge dist/ccbridge-linux-x86_64
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

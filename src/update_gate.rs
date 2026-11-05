@@ -91,6 +91,7 @@ fn operation_label(name: &str) -> &str {
         "branch_change" => "切换分支",
         "connect" => "SSH 连接",
         "disconnect" => "断开 SSH",
+        "claude_update" => "更新 Claude Code",
         "install_runner" => "安装 Runner",
         "db_test" | "db_protocol_test" => "数据库检测",
         "file_mutate" | "trash_restore" | "file_create" | "create_directory" => "文件操作",

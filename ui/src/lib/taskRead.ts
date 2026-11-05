@@ -32,6 +32,7 @@ export function taskAction(kind?: string) {
         branch_change: "查看分支",
         clone_into_directory: "查看克隆进度",
         install_runner: "查看服务端程序",
+        claude_update: "查看 Claude 更新",
       } as Record<string, string>
     )[kind || ""] || "查看详情"
   );

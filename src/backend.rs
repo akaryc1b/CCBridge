@@ -375,6 +375,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
         || [
             "start",
             "reply",
+            "claude_update",
             "db_test",
             "db_protocol_test",
             "session_meta_set",
@@ -397,6 +398,7 @@ pub async fn dispatch(state: Shared, v: Value, human: bool) -> Result<Value> {
         "git_fetch",
         "branch_change",
         "install_runner",
+        "claude_update",
         "git_access",
         "git_remote_access",
         "git_vps_auth_test",
@@ -876,6 +878,80 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         request["origin"] = json!("app");
         return c.rpc(request).await;
     }
+    if ["claude_update_check", "claude_update"].contains(&op.as_str()) {
+        if !human {
+            bail!("Claude 更新只能由用户在 App 操作")
+        }
+        if !c.probe["capabilities"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|v| v == "claude_update_v1"))
+        {
+            bail!("更新服务端程序后可检查和更新 Claude Code")
+        }
+        if op == "claude_update" {
+            if v["confirmed"] != true {
+                bail!("请先在 App 确认更新 Claude Code")
+            }
+            let operation = v["operation_id"]
+                .as_str()
+                .map(|id| crate::operations::Operation {
+                    store: state.operations.clone(),
+                    id: id.into(),
+                });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(900);
+            loop {
+                let current = state.connection.lock().await.clone();
+                if c.handle.is_closed()
+                    || current
+                        .as_ref()
+                        .is_none_or(|n| n.connection_id != c.connection_id)
+                {
+                    bail!("连接已变化，Claude 更新等待已取消；尚未派发更新")
+                }
+                let active = c.rpc(json!({"op":"active_tasks"})).await?;
+                let rows = active["tasks"]
+                    .as_array()
+                    .context("无法确认活动任务，未执行 Claude 更新")?;
+                if active["incomplete"] == true {
+                    bail!("活动任务状态不完整，未执行 Claude 更新")
+                }
+                let count = rows
+                    .iter()
+                    .filter(|t| {
+                        ["running", "queued", "waiting_approval"]
+                            .contains(&t["state"].as_str().unwrap_or(""))
+                            || t["ownership_unknown"] == true
+                    })
+                    .count();
+                if count == 0 {
+                    break;
+                }
+                if let Some(o) = operation.as_ref() {
+                    o.patch(json!({"phase":"等待活动任务结束","name":format!("{count} 个任务")}));
+                }
+                if std::time::Instant::now() >= deadline {
+                    bail!("等待活动任务超过 15 分钟，本次未执行 Claude 更新；可稍后重新发起")
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+            if let Some(o) = operation.as_ref() {
+                o.patch(json!({"phase":"更新 Claude Code","name":""}));
+            }
+        }
+        let result=c.rpc(json!({"op":op,"claude":c.claude_path,"origin":"app","confirmed":v["confirmed"],"expected_version":v["expected_version"]})).await?;
+        // Never overwrite a replacement connection after a long update finishes.
+        let mut current = state.connection.lock().await;
+        if let Some(active) = current
+            .as_mut()
+            .filter(|s| s.connection_id == c.connection_id)
+        {
+            active.probe["claude_version"] = json!(format!(
+                "{} (Claude Code)",
+                field(&result, "current_version")?
+            ));
+        }
+        return Ok(result);
+    }
     if ["claude_models", "claude_usage"].contains(&op.as_str()) {
         if !human {
             bail!("Claude 环境信息请在 App 查看")
@@ -967,6 +1043,15 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
                 } else {
                     "服务器当前未配置认证".into()
                 }
+            }
+            "claude_update" => {
+                let r = c
+                    .rpc(json!({"op":"claude_update_check","claude":c.claude_path}))
+                    .await?;
+                format!(
+                    "当前 Claude Code {}；原更新结果仍需核实",
+                    r["current_version"].as_str().unwrap_or("未返回")
+                )
             }
             "install_runner" => {
                 let r = c.rpc(json!({"op":"probe"})).await?;
@@ -1575,6 +1660,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             "需要更新服务端后才能使用分析任务",
         ));
     }
+    let mut previous_effort_task = None;
     match op.as_str() {
         "start" => {
             let mode = v["mode"].as_str().unwrap_or("approval");
@@ -1636,6 +1722,7 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
             request["mode"] = json!(mode);
             request["workspace"] = old["workspace"].clone();
             request["claude"] = json!(c.claude_path);
+            previous_effort_task = Some(old.clone());
             for (key, value) in crate::models::selection(&v, &c.profile.model, Some(&old))?
                 .as_object()
                 .unwrap()
@@ -1669,6 +1756,25 @@ async fn dispatch_inner(state: Shared, v: Value, human: bool) -> Result<Value> {
         _ => bail!("不支持该操作"),
     }
     if ["start", "reply"].contains(&op.as_str()) {
+        let effort = crate::effort::selection(&request, previous_effort_task.as_ref())?;
+        if effort.is_some() || request["effort_policy"] == "remote_default" {
+            if !c.probe["capabilities"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|x| x == "effort_v1"))
+            {
+                bail!("更新服务端后可调整思考强度")
+            }
+        }
+        if let Some(effort) = effort {
+            let catalog = c
+                .rpc(json!({"op":"claude_models","claude":c.claude_path}))
+                .await?;
+            crate::effort::validate_model(
+                &effort,
+                &catalog,
+                request["model"].as_str().unwrap_or(""),
+            )?;
+        }
         let capable = c.probe["capabilities"]
             .as_array()
             .is_some_and(|a| a.iter().any(|x| x == "task_queue_v1"));

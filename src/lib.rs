@@ -52,3 +52,9 @@ pub mod scheduler;
 
 pub mod analysis;
 pub mod policy;
+
+pub mod telemetry;
+
+pub mod effort;
+
+pub mod claude_update;

@@ -874,13 +874,14 @@ git_auth clone --progress -- {} "$dest"
     pub async fn rpc(&self, v: Value) -> Result<Value> {
         let bytes = serde_json::to_vec(&v)?;
         let (stdout, stderr, exit) = self
-            .execute(
+            .execute_for(
                 format!(
                     "env CCBRIDGE_RUNNER_HOME={} {} rpc",
                     shell_quote(&format!("{}/.local/state/ccbridge", self.environment.home)),
                     shell_quote(&self.runner_path)
                 ),
                 &bytes,
+                Duration::from_secs(if v["op"] == "claude_update" { 220 } else { 60 }),
             )
             .await?;
         if exit != Some(0) {

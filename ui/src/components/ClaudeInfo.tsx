@@ -136,66 +136,75 @@ export function ClaudeUsage({
           [
             "five_hour",
             "seven_day",
-            ...(
-              [
-                "seven_day_opus",
-                "seven_day_sonnet",
-                "seven_day_oauth_apps",
-              ] as const
-            ).filter((key) => windows[key]),
+            "seven_day_opus",
+            "seven_day_sonnet",
+            "seven_day_oauth_apps",
           ] as const
-        ).map((key) => {
-          const w = windows[key];
-          const reset = w ? quotaReset(w) : null;
-          const expired = reset !== null && reset <= Date.now() / 1000;
-          return (
-            <StatusRow
-              key={key}
-              label={
-                key === "five_hour"
-                  ? "5 小时"
-                  : key === "seven_day_opus"
-                    ? "每周 · Opus"
-                    : key === "seven_day_oauth_apps"
-                      ? "每周 · 第三方应用"
-                      : key === "seven_day_sonnet"
-                        ? "每周 · Sonnet"
-                        : "每周"
-              }
-            >
-              {!supported ? (
-                <span className="muted">更新服务端程序后获取</span>
-              ) : !w ? (
-                <span className="muted">
-                  {data.loading
-                    ? "读取中…"
-                    : data.error
-                      ? "读取失败"
-                      : data.state === "unrecognized"
-                        ? "无法识别额度数据"
-                        : data.state === "unavailable"
-                          ? "Claude 未返回额度"
-                          : "暂无额度数据"}
-                </span>
-              ) : expired ? (
-                <span className="muted">已过恢复时间，等待更新</span>
-              ) : (
-                <div className="quota-value">
-                  <span>
-                    {Math.round(w.used_percentage)}% 已用
-                    {reset !== null ? ` · ${time(reset)} 恢复` : ""}
+        )
+          .filter((key) => windows[key])
+          .map((key) => {
+            const w = windows[key];
+            const reset = w ? quotaReset(w) : null;
+            const expired = reset !== null && reset <= Date.now() / 1000;
+            return (
+              <StatusRow
+                key={key}
+                label={
+                  key === "five_hour"
+                    ? "5 小时"
+                    : key === "seven_day_opus"
+                      ? "每周 · Opus"
+                      : key === "seven_day_oauth_apps"
+                        ? "每周 · 第三方应用"
+                        : key === "seven_day_sonnet"
+                          ? "每周 · Sonnet"
+                          : "每周"
+                }
+              >
+                {!supported ? (
+                  <span className="muted">更新服务端程序后获取</span>
+                ) : !w ? (
+                  <span className="muted">
+                    {data.loading
+                      ? "读取中…"
+                      : data.error
+                        ? "读取失败"
+                        : data.state === "unrecognized"
+                          ? "无法识别额度数据"
+                          : data.state === "unavailable"
+                            ? "Claude 未返回额度"
+                            : "暂无额度数据"}
                   </span>
-                  <Progress value={w.used_percentage} />
-                  {data.live === false && w.observed_at && (
-                    <small className="muted">
-                      数据时间 {time(w.observed_at)}
-                    </small>
-                  )}
-                </div>
-              )}
-            </StatusRow>
-          );
-        })}
+                ) : expired ? (
+                  <span className="muted">已过恢复时间，等待更新</span>
+                ) : (
+                  <div className="quota-value">
+                    <span>
+                      {Math.round(w.used_percentage)}% 已用
+                      {reset !== null ? ` · ${time(reset)} 恢复` : ""}
+                    </span>
+                    <Progress value={w.used_percentage} />
+                    {data.live === false && w.observed_at && (
+                      <small className="muted">
+                        数据时间 {time(w.observed_at)}
+                      </small>
+                    )}
+                  </div>
+                )}
+              </StatusRow>
+            );
+          })}
+      {supported &&
+        data.state !== "not_applicable" &&
+        !Object.keys(windows).length && (
+          <p className="muted">
+            {data.loading
+              ? "读取中…"
+              : data.error
+                ? "读取失败"
+                : "Claude 未返回额度窗口"}
+          </p>
+        )}
       {supported && data.state !== "not_applicable" && (
         <p className="hint">
           {data.account_state === "not_applicable"

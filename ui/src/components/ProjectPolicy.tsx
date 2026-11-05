@@ -48,7 +48,9 @@ export function ProjectPolicy({
       <div className="switch-row policy-switch-row">
         <div>
           <strong>禁止 AI 修改项目文件</strong>
-          <p className="muted">Claude 仅分析；仍可通过 Codex 更新仓库。</p>
+          <p className="muted">
+            默认仅分析，已开放的工作区除外；仍可更新仓库。
+          </p>
         </div>
         <Switch
           aria-label="禁止 AI 修改项目文件"
